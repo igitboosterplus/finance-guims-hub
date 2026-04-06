@@ -22,11 +22,3 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
-
-# Capacitor native builds
-android/.gradle
-android/app/build
-android/build
-android/capacitor-cordova-android-plugins/build
-ios/App/Pods
-ios/DerivedData

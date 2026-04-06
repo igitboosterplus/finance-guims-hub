@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { TrendingUp, ArrowUpRight, ArrowDownRight, Receipt, Download, Upload, Wallet, Smartphone, Building2, Banknote, FileDown } from "lucide-react";
+import { TrendingUp, ArrowUpRight, ArrowDownRight, Receipt, Download, Upload, Wallet, Smartphone, Building2, Banknote, FileDown, Cloud, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatsCard } from "@/components/StatsCard";
 import { DepartmentCard } from "@/components/DepartmentCard";
@@ -9,6 +9,8 @@ import { departments, getGlobalStats, getTransactions, getStatsByPaymentMethod, 
 import { getCurrentUser, hasPermission, hasDepartmentAccess } from "@/lib/auth";
 import { toast } from "sonner";
 import { downloadDashboardReport } from "@/lib/reports";
+import { pushAllToSupabase, pullAllFromSupabase } from "@/lib/sync";
+import { isSupabaseConfigured } from "@/lib/firebase";
 import logoGuimsGroup from "@/assets/logo-guims-group.jpg";
 
 export default function Dashboard() {
@@ -16,6 +18,7 @@ export default function Dashboard() {
   const [transactions, setTransactions] = useState(getTransactions());
   const [paymentStats, setPaymentStats] = useState(getStatsByPaymentMethod());
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [syncing, setSyncing] = useState(false);
 
   const refresh = () => {
     setStats(getGlobalStats());
@@ -56,6 +59,29 @@ export default function Dashboard() {
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
+  const handleCloudSync = async () => {
+    setSyncing(true);
+    try {
+      // Push local → Supabase, puis Pull Supabase → local
+      const pushResult = await pushAllToSupabase();
+      if (!pushResult.success) {
+        toast.error("Erreur envoi cloud: " + pushResult.error);
+        setSyncing(false);
+        return;
+      }
+      const pullResult = await pullAllFromSupabase();
+      if (pullResult.success) {
+        refresh();
+        toast.success("Synchronisation cloud réussie !");
+      } else {
+        toast.error("Erreur réception cloud: " + pullResult.error);
+      }
+    } catch (err) {
+      toast.error("Erreur de synchronisation");
+    }
+    setSyncing(false);
+  };
+
   return (
     <div className="space-y-8">
       {/* Hero header */}
@@ -66,6 +92,12 @@ export default function Dashboard() {
           <p className="text-muted-foreground text-sm">Vue globale des finances de Guims Group</p>
         </div>
         <div className="flex gap-2">
+          {isSupabaseConfigured() && (
+            <Button variant="outline" size="sm" className="gap-2" onClick={handleCloudSync} disabled={syncing}>
+              {syncing ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Cloud className="h-4 w-4" />}
+              <span className="hidden sm:inline">{syncing ? "Sync..." : "Sync Cloud"}</span>
+            </Button>
+          )}
           <Button variant="outline" size="sm" className="gap-2" onClick={() => { downloadDashboardReport(); toast.success('Rapport PDF téléchargé'); }}>
             <FileDown className="h-4 w-4" />
             <span className="hidden sm:inline">Rapport PDF</span>

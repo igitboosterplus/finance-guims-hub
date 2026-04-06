@@ -8,7 +8,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 // 4. Dans SQL Editor, exécute le script SQL ci-dessous pour créer les tables
 
 const SUPABASE_URL = "https://xhbxhgymcwbixixipoxx.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_DhW4XKqLrMyfYMizqwwTOw_UDMzQAoc";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhoYnhoZ3ltY3diaXhpeGlwb3h4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU0MjE0MzAsImV4cCI6MjA5MDk5NzQzMH0.QL-KtjgfEiJwJlF5xgaqI4kPwxKws2LbS5hiL8EbJU8";
 
 let supabase: SupabaseClient | null = null;
 
