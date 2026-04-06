@@ -70,6 +70,17 @@ async function pushArrayToSupabase(tableName: TableName, items: { id: string }[]
   if (error) throw error;
 }
 
+async function replaceCollection(tableName: TableName, items: { id: string }[]) {
+  const sb = getSupabase();
+  if (!sb) return;
+  // Supprimer toutes les lignes existantes puis réinsérer
+  const { error: delError } = await sb.from(tableName).delete().neq("id", "___none___");
+  if (delError) throw delError;
+  if (items.length > 0) {
+    await pushArrayToSupabase(tableName, items);
+  }
+}
+
 export async function pushAllToSupabase(): Promise<{ success: boolean; error?: string }> {
   if (!isSupabaseConfigured()) return { success: false, error: "Supabase non configuré" };
   const sb = getSupabase();
@@ -86,11 +97,9 @@ export async function pushAllToSupabase(): Promise<{ success: boolean; error?: s
 
     for (const [tableName, storageKey] of pairs) {
       const data = localStorage.getItem(storageKey);
-      if (data) {
-        const items = JSON.parse(data);
-        if (Array.isArray(items) && items.length > 0) {
-          await pushArrayToSupabase(tableName, items);
-        }
+      const items = data ? JSON.parse(data) : [];
+      if (Array.isArray(items)) {
+        await replaceCollection(tableName, items);
       }
     }
     console.log("[Sync] Push complet vers Supabase.");
@@ -125,10 +134,10 @@ export function syncFullCollection(tableName: TableName, storageKey: string) {
   const sb = getSupabase();
   if (!sb) return;
   const data = localStorage.getItem(storageKey);
-  if (!data) return;
-  const items = JSON.parse(data);
+  const items = data ? JSON.parse(data) : [];
   if (!Array.isArray(items)) return;
-  pushArrayToSupabase(tableName, items).catch(err =>
+  // Remplacer entièrement : supprimer tout dans la table puis réinsérer
+  replaceCollection(tableName, items).catch(err =>
     console.error(`[Sync] Erreur sync collection ${tableName}:`, err)
   );
 }
