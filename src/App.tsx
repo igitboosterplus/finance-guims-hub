@@ -15,16 +15,21 @@ import ProfilePage from "@/pages/ProfilePage";
 import GabaStockPage from "@/pages/GabaStockPage";
 import NotFound from "./pages/NotFound.tsx";
 import { initSupabase, isSupabaseConfigured } from "@/lib/firebase";
-import { pullAllFromSupabase } from "@/lib/sync";
+import { pushAllToSupabase, pullAllFromSupabase } from "@/lib/sync";
 
-// Initialize Supabase on app load
+// Initialize Supabase on app load — push local data first, then pull cloud data
 if (isSupabaseConfigured()) {
   const sb = initSupabase();
   if (sb) {
-    pullAllFromSupabase().then(result => {
-      if (result.success) console.log("[App] Données synchronisées depuis Supabase");
-      else console.warn("[App] Sync échouée:", result.error);
-    });
+    // Push d'abord les données locales (si elles existent) pour ne rien perdre
+    pushAllToSupabase().then(pushResult => {
+      if (pushResult.success) console.log("[App] Push local → Supabase OK");
+      // Puis pull depuis Supabase pour récupérer les données des autres appareils
+      return pullAllFromSupabase();
+    }).then(pullResult => {
+      if (pullResult?.success) console.log("[App] Pull Supabase → local OK");
+      else console.warn("[App] Sync pull échouée:", pullResult?.error);
+    }).catch(err => console.error("[App] Erreur sync:", err));
   }
 }
 
