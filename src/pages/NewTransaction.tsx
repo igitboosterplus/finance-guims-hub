@@ -1,0 +1,301 @@
+import { useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { departments, addTransaction, PAYMENT_METHODS, type DepartmentId, type PaymentMethod } from "@/lib/data";
+import { addAuditEntry, getCurrentUser, hasPermission, hasDepartmentAccess } from "@/lib/auth";
+import { getStockItems, getStockByCategory, addStockMovement, type StockItem } from "@/lib/stock";
+import { toast } from "sonner";
+import { ArrowLeft, ShieldAlert, Package } from "lucide-react";
+
+export default function NewTransaction() {
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const preselectedDept = searchParams.get('dept') || '';
+  const currentUser = getCurrentUser();
+  const canCreate = hasPermission(currentUser, 'canCreateTransaction');
+  const accessibleDepts = departments.filter(d => hasDepartmentAccess(currentUser, d.id));
+
+  const [departmentId, setDepartmentId] = useState<string>(preselectedDept);
+  const [type, setType] = useState<'income' | 'expense'>('income');
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('especes');
+  const [category, setCategory] = useState('');
+  const [description, setDescription] = useState('');
+  const [amount, setAmount] = useState('');
+  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  const [quantity, setQuantity] = useState('');
+  const [stockItemId, setStockItemId] = useState('');
+
+  const selectedDept = departments.find(d => d.id === departmentId);
+  const categories = selectedDept
+    ? type === 'income' ? selectedDept.incomeCategories : selectedDept.expenseCategories
+    : [];
+
+  // GABA categories that involve stock movements
+  const STOCK_CATEGORIES_MAP: Record<string, 'entry' | 'exit'> = {
+    'Achat composants intrants': 'entry',
+    'Achat géniteurs': 'entry',
+    'Vente intrants': 'exit',
+    'Vente géniteurs': 'exit',
+  };
+  const isStockCategory = departmentId === 'gaba' && category in STOCK_CATEGORIES_MAP;
+  const stockDirection = isStockCategory ? STOCK_CATEGORIES_MAP[category] : null;
+  const availableStockItems: StockItem[] = isStockCategory ? getStockItems() : [];
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!departmentId || !category || !amount || !date) {
+      toast.error("Veuillez remplir tous les champs obligatoires");
+      return;
+    }
+
+    const parsedAmount = parseInt(amount, 10);
+    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      toast.error("Le montant doit être un nombre positif");
+      return;
+    }
+
+    // Stock validation for GABA stock categories
+    let parsedQty = 0;
+    if (isStockCategory) {
+      parsedQty = parseInt(quantity, 10);
+      if (isNaN(parsedQty) || parsedQty <= 0) {
+        toast.error("La quantité doit être un nombre positif");
+        return;
+      }
+      if (!stockItemId) {
+        toast.error("Veuillez sélectionner un article du stock");
+        return;
+      }
+    }
+
+    // If stock-linked, create the stock movement first
+    if (isStockCategory && stockDirection && stockItemId && parsedQty > 0) {
+      const reason = category;
+      const unitPrice = Math.round(parsedAmount / parsedQty);
+      const result = addStockMovement(
+        stockItemId,
+        stockDirection,
+        parsedQty,
+        unitPrice,
+        reason,
+        date,
+        currentUser?.displayName ?? 'Inconnu',
+      );
+      if (!result.success) {
+        toast.error(result.error ?? "Erreur lors de la mise à jour du stock");
+        return;
+      }
+    }
+
+    addTransaction({
+      departmentId: departmentId as DepartmentId,
+      type,
+      paymentMethod,
+      category,
+      description,
+      amount: parsedAmount,
+      date,
+      ...(isStockCategory && parsedQty > 0 ? { quantity: parsedQty, stockItemId } : {}),
+    });
+
+    const currentUser = getCurrentUser();
+    if (currentUser) {
+      addAuditEntry({
+        userId: currentUser.id,
+        username: currentUser.username,
+        action: 'create',
+        entityType: 'transaction',
+        entityId: '',
+        details: `Création: ${category} - ${parsedAmount} FCFA (${departmentId})`,
+        previousData: '',
+        newData: JSON.stringify({ departmentId, type, paymentMethod, category, description, amount: parsedAmount, date }),
+      });
+    }
+
+    toast.success("Transaction ajoutée avec succès");
+    navigate(departmentId ? `/department/${departmentId}` : '/');
+  };
+
+  return (
+    <div className="max-w-2xl mx-auto space-y-6">
+      <Button variant="ghost" onClick={() => navigate(-1)} className="gap-2">
+        <ArrowLeft className="h-4 w-4" />
+        Retour
+      </Button>
+
+      <Card className="border-0 shadow-lg">
+        <CardHeader className="pb-2">
+          {selectedDept && (
+            <div className="flex items-center gap-3 mb-3">
+              <img src={selectedDept.logo} alt={selectedDept.name} className="h-10 w-10 rounded-xl object-cover shadow-sm" />
+              <span className="text-sm font-medium text-muted-foreground">{selectedDept.name}</span>
+            </div>
+          )}
+          <CardTitle className="text-xl">Nouvelle transaction</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {!canCreate ? (
+            <div className="text-center py-8 space-y-3">
+              <ShieldAlert className="h-10 w-10 mx-auto text-muted-foreground" />
+              <p className="text-muted-foreground">Vous n'avez pas le droit de créer des transactions.</p>
+              <p className="text-xs text-muted-foreground">Contactez le Super Admin pour obtenir cette permission.</p>
+            </div>
+          ) : (
+          <form onSubmit={handleSubmit} className="space-y-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Département *</Label>
+                <Select value={departmentId} onValueChange={(v) => { setDepartmentId(v); setCategory(''); setStockItemId(''); setQuantity(''); }}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Choisir un département" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {accessibleDepts.map((d) => (
+                      <SelectItem key={d.id} value={d.id}>
+                        <div className="flex items-center gap-2">
+                          <img src={d.logo} alt={d.name} className="h-4 w-4 rounded object-cover" />
+                          {d.name}
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Type *</Label>
+                <Select value={type} onValueChange={(v) => { setType(v as 'income' | 'expense'); setCategory(''); setStockItemId(''); setQuantity(''); }}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="income">Entrée (Revenu)</SelectItem>
+                    <SelectItem value="expense">Sortie (Dépense)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Caisse *</Label>
+                <Select value={paymentMethod} onValueChange={(v) => setPaymentMethod(v as PaymentMethod)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Choisir une caisse" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {PAYMENT_METHODS.map((m) => (
+                      <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Catégorie *</Label>
+                <Select value={category} onValueChange={(v) => { setCategory(v); setStockItemId(''); setQuantity(''); }} disabled={!departmentId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Choisir une catégorie" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {categories.map((c) => (
+                      <SelectItem key={c} value={c}>{c}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Date *</Label>
+                <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Montant (FCFA) *</Label>
+              <Input
+                type="number"
+                step="1"
+                placeholder="Ex: 50000"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                min="1"
+              />
+            </div>
+
+            {/* Stock fields for GABA stock categories */}
+            {isStockCategory && (
+              <div className="rounded-lg border border-dashed border-primary/40 bg-primary/5 p-4 space-y-4">
+                <div className="flex items-center gap-2 text-sm font-medium text-primary">
+                  <Package className="h-4 w-4" />
+                  {stockDirection === 'entry' ? 'Entrée en stock (achat)' : 'Sortie de stock (vente)'}
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Article du stock *</Label>
+                    <Select value={stockItemId} onValueChange={setStockItemId}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Sélectionner un article" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {availableStockItems.map((item) => (
+                          <SelectItem key={item.id} value={item.id}>
+                            {item.name} ({item.currentQuantity} {item.unit})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {availableStockItems.length === 0 && (
+                      <p className="text-xs text-muted-foreground">Aucun article en stock. Créez-en d'abord dans la gestion des stocks.</p>
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Quantité *</Label>
+                    <Input
+                      type="number"
+                      min="1"
+                      placeholder="Nombre d'unités"
+                      value={quantity}
+                      onChange={(e) => setQuantity(e.target.value)}
+                    />
+                    {stockItemId && quantity && parseInt(quantity) > 0 && (
+                      <p className="text-xs text-muted-foreground">
+                        Prix unitaire ≈ {amount && parseInt(amount) > 0
+                          ? new Intl.NumberFormat('fr-FR').format(Math.round(parseInt(amount) / parseInt(quantity))) + ' FCFA'
+                          : '—'}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <Label>Description</Label>
+              <Textarea
+                placeholder="Description de la transaction..."
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                maxLength={500}
+              />
+            </div>
+
+            <div className="flex gap-3 justify-end">
+              <Button type="button" variant="outline" onClick={() => navigate(-1)}>
+                Annuler
+              </Button>
+              <Button type="submit">
+                Ajouter la transaction
+              </Button>
+            </div>
+          </form>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
