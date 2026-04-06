@@ -10,15 +10,22 @@ import { getStockItems, getStockMovements, getCategoryLabel, getStockStats } fro
 // ==================== HELPERS ====================
 
 function setupDoc(title: string): jsPDF {
-  const doc = new jsPDF();
+  const doc = new jsPDF({ orientation: "landscape" });
+  // En-tête
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(18);
-  doc.text("Guims Group — Finance Hub", 14, 20);
-  doc.setFontSize(12);
+  doc.setFontSize(20);
+  doc.setTextColor(34, 87, 122);
+  doc.text("Guims Group — Finance Hub", 14, 18);
+  doc.setDrawColor(34, 87, 122);
+  doc.setLineWidth(0.5);
+  doc.line(14, 22, 283, 22);
+  // Sous-titre
+  doc.setFontSize(13);
   doc.setFont("helvetica", "normal");
-  doc.setTextColor(100);
-  doc.text(title, 14, 28);
-  doc.text(`Généré le ${new Date().toLocaleDateString("fr-FR")} à ${new Date().toLocaleTimeString("fr-FR")}`, 14, 35);
+  doc.setTextColor(80);
+  doc.text(title, 14, 30);
+  doc.setFontSize(9);
+  doc.text(`Généré le ${new Date().toLocaleDateString("fr-FR")} à ${new Date().toLocaleTimeString("fr-FR")}`, 14, 36);
   doc.setTextColor(0);
   return doc;
 }
@@ -41,42 +48,37 @@ function fmtAmount(n: number): string {
 export function downloadDashboardReport() {
   const doc = setupDoc("Rapport global — Tableau de bord");
   const stats = getGlobalStats();
-  let y = 45;
+  const txs = getTransactions().sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  let y = 44;
 
-  // Global stats table
+  // Global stats
   y = addSectionTitle(doc, "Statistiques globales", y);
   autoTable(doc, {
     startY: y,
-    head: [["Indicateur", "Valeur"]],
-    body: [
-      ["Total revenus", fmtAmount(stats.income)],
-      ["Total dépenses", fmtAmount(stats.expenses)],
-      ["Solde global", fmtAmount(stats.balance)],
-      ["Nombre de transactions", String(stats.count)],
-    ],
+    head: [["Total revenus", "Total dépenses", "Solde global", "Nb transactions"]],
+    body: [[fmtAmount(stats.income), fmtAmount(stats.expenses), fmtAmount(stats.balance), String(stats.count)]],
     theme: "grid",
-    headStyles: { fillColor: [34, 87, 122] },
+    headStyles: { fillColor: [34, 87, 122], fontSize: 9 },
+    bodyStyles: { fontSize: 10, fontStyle: "bold" },
     margin: { left: 14 },
   });
+  y = (doc as any).lastAutoTable.finalY + 10;
 
-  y = (doc as any).lastAutoTable.finalY + 12;
-
-  // Per-department stats
+  // Per-department summary
   y = addSectionTitle(doc, "Résumé par département", y);
-  const deptRows = departments.map(dept => {
-    const s = getDepartmentStats(dept.id);
-    return [dept.name, fmtAmount(s.income), fmtAmount(s.expenses), fmtAmount(s.balance), String(s.count)];
-  });
   autoTable(doc, {
     startY: y,
     head: [["Département", "Revenus", "Dépenses", "Solde", "Transactions"]],
-    body: deptRows,
+    body: departments.map(dept => {
+      const s = getDepartmentStats(dept.id);
+      return [dept.name, fmtAmount(s.income), fmtAmount(s.expenses), fmtAmount(s.balance), String(s.count)];
+    }),
     theme: "grid",
-    headStyles: { fillColor: [34, 87, 122] },
+    headStyles: { fillColor: [34, 87, 122], fontSize: 9 },
     margin: { left: 14 },
+    styles: { fontSize: 9 },
   });
-
-  y = (doc as any).lastAutoTable.finalY + 12;
+  y = (doc as any).lastAutoTable.finalY + 10;
 
   // Per payment method
   const payStats = getStatsByPaymentMethod();
@@ -87,8 +89,42 @@ export function downloadDashboardReport() {
       head: [["Caisse", "Revenus", "Dépenses", "Solde"]],
       body: payStats.map(s => [s.label, fmtAmount(s.income), fmtAmount(s.expenses), fmtAmount(s.balance)]),
       theme: "grid",
-      headStyles: { fillColor: [34, 87, 122] },
+      headStyles: { fillColor: [34, 87, 122], fontSize: 9 },
       margin: { left: 14 },
+      styles: { fontSize: 9 },
+    });
+    y = (doc as any).lastAutoTable.finalY + 10;
+  }
+
+  // Full transaction details
+  if (txs.length > 0) {
+    y = addSectionTitle(doc, `Détail des transactions (${txs.length})`, y);
+    autoTable(doc, {
+      startY: y,
+      head: [["N°", "Date", "Département", "Type", "Catégorie", "Motif / Description", "Caisse", "Montant"]],
+      body: txs.map((tx, i) => {
+        const dept = getDepartment(tx.departmentId);
+        return [
+          String(i + 1),
+          new Date(tx.date).toLocaleDateString("fr-FR"),
+          dept.name,
+          tx.type === "income" ? "Revenu" : "Dépense",
+          tx.category,
+          tx.description || "—",
+          getPaymentMethodLabel(tx.paymentMethod || "especes"),
+          tx.type === "income" ? "+" + fmtAmount(tx.amount) : "-" + fmtAmount(tx.amount),
+        ];
+      }),
+      theme: "striped",
+      headStyles: { fillColor: [34, 87, 122], fontSize: 8 },
+      margin: { left: 14 },
+      styles: { fontSize: 8 },
+      columnStyles: {
+        0: { cellWidth: 12 },
+        5: { cellWidth: 65 },
+        7: { halign: "right", fontStyle: "bold" },
+      },
+      alternateRowStyles: { fillColor: [245, 247, 250] },
     });
   }
 
@@ -101,26 +137,21 @@ export function downloadDepartmentReport(deptId: DepartmentId) {
   const dept = getDepartment(deptId);
   const doc = setupDoc(`Rapport — ${dept.name}`);
   const stats = getDepartmentStats(deptId);
-  const txs = getTransactionsByDepartment(deptId);
-  let y = 45;
+  const txs = getTransactionsByDepartment(deptId).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  let y = 44;
 
   // Department stats
   y = addSectionTitle(doc, `Statistiques — ${dept.name}`, y);
   autoTable(doc, {
     startY: y,
-    head: [["Indicateur", "Valeur"]],
-    body: [
-      ["Revenus", fmtAmount(stats.income)],
-      ["Dépenses", fmtAmount(stats.expenses)],
-      ["Solde", fmtAmount(stats.balance)],
-      ["Transactions", String(stats.count)],
-    ],
+    head: [["Revenus", "Dépenses", "Solde", "Nb transactions"]],
+    body: [[fmtAmount(stats.income), fmtAmount(stats.expenses), fmtAmount(stats.balance), String(stats.count)]],
     theme: "grid",
-    headStyles: { fillColor: [34, 87, 122] },
+    headStyles: { fillColor: [34, 87, 122], fontSize: 9 },
+    bodyStyles: { fontSize: 10, fontStyle: "bold" },
     margin: { left: 14 },
   });
-
-  y = (doc as any).lastAutoTable.finalY + 12;
+  y = (doc as any).lastAutoTable.finalY + 10;
 
   // Payment method breakdown
   const payStats = getStatsByPaymentMethod(txs);
@@ -131,33 +162,38 @@ export function downloadDepartmentReport(deptId: DepartmentId) {
       head: [["Caisse", "Revenus", "Dépenses", "Solde"]],
       body: payStats.map(s => [s.label, fmtAmount(s.income), fmtAmount(s.expenses), fmtAmount(s.balance)]),
       theme: "grid",
-      headStyles: { fillColor: [34, 87, 122] },
+      headStyles: { fillColor: [34, 87, 122], fontSize: 9 },
       margin: { left: 14 },
+      styles: { fontSize: 9 },
     });
-    y = (doc as any).lastAutoTable.finalY + 12;
+    y = (doc as any).lastAutoTable.finalY + 10;
   }
 
-  // Transaction list
+  // Full transaction details
   if (txs.length > 0) {
-    y = addSectionTitle(doc, "Liste des transactions", y);
-    const txRows = txs
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-      .map(tx => [
-        new Date(tx.date).toLocaleDateString("fr-FR"),
-        tx.type === "income" ? "Revenu" : "Dépense",
-        getPaymentMethodLabel(tx.paymentMethod || "especes"),
-        tx.category,
-        tx.description.slice(0, 40),
-        tx.type === "income" ? fmtAmount(tx.amount) : "-" + fmtAmount(tx.amount),
-      ]);
+    y = addSectionTitle(doc, `Détail des transactions (${txs.length})`, y);
     autoTable(doc, {
       startY: y,
-      head: [["Date", "Type", "Caisse", "Catégorie", "Description", "Montant"]],
-      body: txRows,
+      head: [["N°", "Date", "Type", "Catégorie", "Motif / Description", "Caisse", "Montant"]],
+      body: txs.map((tx, i) => [
+        String(i + 1),
+        new Date(tx.date).toLocaleDateString("fr-FR"),
+        tx.type === "income" ? "Revenu" : "Dépense",
+        tx.category,
+        tx.description || "—",
+        getPaymentMethodLabel(tx.paymentMethod || "especes"),
+        tx.type === "income" ? "+" + fmtAmount(tx.amount) : "-" + fmtAmount(tx.amount),
+      ]),
       theme: "striped",
-      headStyles: { fillColor: [34, 87, 122] },
+      headStyles: { fillColor: [34, 87, 122], fontSize: 8 },
       margin: { left: 14 },
       styles: { fontSize: 8 },
+      columnStyles: {
+        0: { cellWidth: 12 },
+        4: { cellWidth: 70 },
+        6: { halign: "right", fontStyle: "bold" },
+      },
+      alternateRowStyles: { fillColor: [245, 247, 250] },
     });
   }
 
@@ -171,7 +207,7 @@ export function downloadStockReport() {
   const stats = getStockStats();
   const items = getStockItems();
   const movements = getStockMovements();
-  let y = 45;
+  let y = 44;
 
   // Stats
   y = addSectionTitle(doc, "Résumé du stock", y);
@@ -252,30 +288,37 @@ export function downloadStockReport() {
 export function downloadTransactionsReport() {
   const doc = setupDoc("Rapport de toutes les transactions");
   const txs = getTransactions().sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  let y = 45;
+  let y = 44;
 
   y = addSectionTitle(doc, `Total : ${txs.length} transactions`, y);
 
   if (txs.length > 0) {
     autoTable(doc, {
       startY: y,
-      head: [["Date", "Département", "Type", "Caisse", "Catégorie", "Description", "Montant"]],
-      body: txs.map(tx => {
+      head: [["N°", "Date", "Département", "Type", "Catégorie", "Motif / Description", "Caisse", "Montant"]],
+      body: txs.map((tx, i) => {
         const dept = getDepartment(tx.departmentId);
         return [
+          String(i + 1),
           new Date(tx.date).toLocaleDateString("fr-FR"),
           dept.name,
           tx.type === "income" ? "Revenu" : "Dépense",
-          getPaymentMethodLabel(tx.paymentMethod || "especes"),
           tx.category,
-          tx.description.slice(0, 35),
-          tx.type === "income" ? fmtAmount(tx.amount) : "-" + fmtAmount(tx.amount),
+          tx.description || "—",
+          getPaymentMethodLabel(tx.paymentMethod || "especes"),
+          tx.type === "income" ? "+" + fmtAmount(tx.amount) : "-" + fmtAmount(tx.amount),
         ];
       }),
       theme: "striped",
-      headStyles: { fillColor: [34, 87, 122] },
+      headStyles: { fillColor: [34, 87, 122], fontSize: 8 },
       margin: { left: 14 },
-      styles: { fontSize: 7 },
+      styles: { fontSize: 8 },
+      columnStyles: {
+        0: { cellWidth: 12 },
+        5: { cellWidth: 60 },
+        7: { halign: "right", fontStyle: "bold" },
+      },
+      alternateRowStyles: { fillColor: [245, 247, 250] },
     });
   }
 

@@ -1,24 +1,20 @@
-import { useState, useEffect, useRef } from "react";
-import { TrendingUp, ArrowUpRight, ArrowDownRight, Receipt, Download, Upload, Wallet, Smartphone, Building2, Banknote, FileDown, Cloud, RefreshCw } from "lucide-react";
+import { useState, useEffect } from "react";
+import { TrendingUp, ArrowUpRight, ArrowDownRight, Receipt, Wallet, Smartphone, Building2, Banknote, FileDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatsCard } from "@/components/StatsCard";
 import { DepartmentCard } from "@/components/DepartmentCard";
 import { TransactionList } from "@/components/TransactionList";
 import { FinanceChart } from "@/components/FinanceChart";
-import { departments, getGlobalStats, getTransactions, getStatsByPaymentMethod, exportDataJSON, importDataJSON } from "@/lib/data";
+import { departments, getGlobalStats, getTransactions, getStatsByPaymentMethod } from "@/lib/data";
 import { getCurrentUser, hasPermission, hasDepartmentAccess } from "@/lib/auth";
 import { toast } from "sonner";
 import { downloadDashboardReport } from "@/lib/reports";
-import { pushAllToSupabase, pullAllFromSupabase } from "@/lib/sync";
-import { isSupabaseConfigured } from "@/lib/firebase";
 import logoGuimsGroup from "@/assets/logo-guims-group.jpg";
 
 export default function Dashboard() {
   const [stats, setStats] = useState(getGlobalStats());
   const [transactions, setTransactions] = useState(getTransactions());
   const [paymentStats, setPaymentStats] = useState(getStatsByPaymentMethod());
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [syncing, setSyncing] = useState(false);
 
   const refresh = () => {
     setStats(getGlobalStats());
@@ -30,58 +26,6 @@ export default function Dashboard() {
     refresh();
   }, []);
 
-  const handleExportJSON = () => {
-    const json = exportDataJSON();
-    const blob = new Blob([json], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `guims-finance-backup_${new Date().toISOString().split("T")[0]}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-    toast.success("Sauvegarde téléchargée");
-  };
-
-  const handleImportJSON = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      const result = importDataJSON(ev.target?.result as string);
-      if (result.success) {
-        toast.success(`${result.count} transactions restaurées`);
-        refresh();
-      } else {
-        toast.error(result.error || "Erreur d'importation");
-      }
-    };
-    reader.readAsText(file);
-    if (fileInputRef.current) fileInputRef.current.value = "";
-  };
-
-  const handleCloudSync = async () => {
-    setSyncing(true);
-    try {
-      // Push local → Supabase, puis Pull Supabase → local
-      const pushResult = await pushAllToSupabase();
-      if (!pushResult.success) {
-        toast.error("Erreur envoi cloud: " + pushResult.error);
-        setSyncing(false);
-        return;
-      }
-      const pullResult = await pullAllFromSupabase();
-      if (pullResult.success) {
-        refresh();
-        toast.success("Synchronisation cloud réussie !");
-      } else {
-        toast.error("Erreur réception cloud: " + pullResult.error);
-      }
-    } catch (err) {
-      toast.error("Erreur de synchronisation");
-    }
-    setSyncing(false);
-  };
-
   return (
     <div className="space-y-8">
       {/* Hero header */}
@@ -92,31 +36,10 @@ export default function Dashboard() {
           <p className="text-muted-foreground text-sm">Vue globale des finances de Guims Group</p>
         </div>
         <div className="flex gap-2">
-          {isSupabaseConfigured() && (
-            <Button variant="outline" size="sm" className="gap-2" onClick={handleCloudSync} disabled={syncing}>
-              {syncing ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Cloud className="h-4 w-4" />}
-              <span className="hidden sm:inline">{syncing ? "Sync..." : "Sync Cloud"}</span>
-            </Button>
-          )}
           <Button variant="outline" size="sm" className="gap-2" onClick={() => { downloadDashboardReport(); toast.success('Rapport PDF téléchargé'); }}>
             <FileDown className="h-4 w-4" />
             <span className="hidden sm:inline">Rapport PDF</span>
           </Button>
-          {hasPermission(getCurrentUser(), 'canExportData') && (
-            <Button variant="outline" size="sm" className="gap-2" onClick={handleExportJSON}>
-              <Download className="h-4 w-4" />
-              <span className="hidden sm:inline">Sauvegarder</span>
-            </Button>
-          )}
-          {hasPermission(getCurrentUser(), 'canImportData') && (
-            <>
-              <Button variant="outline" size="sm" className="gap-2" onClick={() => fileInputRef.current?.click()}>
-                <Upload className="h-4 w-4" />
-                <span className="hidden sm:inline">Restaurer</span>
-              </Button>
-              <input ref={fileInputRef} type="file" accept=".json" className="hidden" onChange={handleImportJSON} />
-            </>
-          )}
         </div>
       </div>
 
