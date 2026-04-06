@@ -41,6 +41,7 @@ export const TABLES = {
   users: "users",
   stockItems: "stock_items",
   stockMovements: "stock_movements",
+  trainings: "trainings",
   auditLog: "audit_log",
 } as const;
 

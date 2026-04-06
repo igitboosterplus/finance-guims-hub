@@ -5,9 +5,11 @@ import { Button } from "@/components/ui/button";
 import { StatsCard } from "@/components/StatsCard";
 import { TransactionList } from "@/components/TransactionList";
 import { FinanceChart } from "@/components/FinanceChart";
+import { ReportDialog } from "@/components/ReportDialog";
 import { getDepartment, getDepartmentStats, getTransactionsByDepartment, type DepartmentId } from "@/lib/data";
 import { getCurrentUser, hasDepartmentAccess, hasPermission } from "@/lib/auth";
 import { downloadDepartmentReport } from "@/lib/reports";
+import type { ReportOptions } from "@/lib/reports";
 import { toast } from "sonner";
 
 export default function DepartmentPage() {
@@ -17,6 +19,7 @@ export default function DepartmentPage() {
 
   const [stats, setStats] = useState(getDepartmentStats(id as DepartmentId));
   const [transactions, setTransactions] = useState(getTransactionsByDepartment(id as DepartmentId));
+  const [reportOpen, setReportOpen] = useState(false);
 
   const refresh = () => {
     setStats(getDepartmentStats(id as DepartmentId));
@@ -64,12 +67,19 @@ export default function DepartmentPage() {
               Gestion des stocks
             </Button>
           )}
-          <Button variant="outline" onClick={() => { downloadDepartmentReport(dept.id); toast.success('Rapport PDF téléchargé'); }} className="shadow-md">
+          <Button variant="outline" onClick={() => setReportOpen(true)} className="shadow-md">
             <FileDown className="h-4 w-4 mr-2" />
             Rapport PDF
           </Button>
         </div>
       </div>
+
+      <ReportDialog
+        open={reportOpen}
+        onOpenChange={setReportOpen}
+        title={`Rapport — ${dept.name}`}
+        onGenerate={(opts) => { downloadDepartmentReport(dept.id, opts); toast.success('Rapport PDF téléchargé'); }}
+      />
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatsCard title="Revenus" value={stats.income} icon={ArrowUpRight} colorClass="text-success" />

@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import {
   Package, Plus, ArrowDownToLine, ArrowUpFromLine, BarChart3, AlertTriangle,
   Pencil, Trash2, History, Search, Download, SlidersHorizontal, ArrowLeft,
-  Box, Layers, FileDown,
+  Box, Layers, FileDown, GraduationCap, Gift,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,10 +28,13 @@ import { toast } from "sonner";
 import { getCurrentUser, hasDepartmentAccess } from "@/lib/auth";
 import { formatCurrency } from "@/lib/data";
 import { downloadStockReport } from "@/lib/reports";
+import type { ReportOptions } from "@/lib/reports";
+import { ReportDialog } from "@/components/ReportDialog";
 import {
   STOCK_CATEGORIES, getStockItems, addStockItem, updateStockItem, deleteStockItem,
   addStockMovement, getStockMovements, getStockStats, getCategoryLabel,
-  exportStockCSV, type StockItem, type StockMovement, type MovementType,
+  exportStockCSV, getTrainings, addTraining, deleteTraining, getMovementTypeLabel,
+  type StockItem, type StockMovement, type MovementType, type Training,
 } from "@/lib/stock";
 import logoGaba from "@/assets/logo-gaba.png";
 
@@ -39,6 +42,8 @@ const UNITS = ['pièce', 'kg', 'sac', 'litre', 'carton', 'boîte', 'dose', 'lot'
 
 const ENTRY_REASONS = ['Achat', 'Don reçu', 'Production', 'Retour', 'Autre'];
 const EXIT_REASONS = ['Vente', 'Utilisation', 'Perte/Mortalité', 'Don', 'Autre'];
+const TRAINING_REASONS = ['Usage formation', 'Substrat formation', 'Démonstration', 'Autre'];
+const GIFT_REASONS = ['Don au formé', 'Kit de démarrage', 'Échantillon', 'Autre'];
 
 export default function GabaStockPage() {
   const navigate = useNavigate();
@@ -57,11 +62,13 @@ export default function GabaStockPage() {
   // --- Data ---
   const [items, setItems] = useState<StockItem[]>(getStockItems);
   const [movements, setMovements] = useState<StockMovement[]>(getStockMovements);
+  const [trainings, setTrainings] = useState<Training[]>(getTrainings);
   const stats = useMemo(() => getStockStats(), [items, movements]);
 
   const refresh = () => {
     setItems(getStockItems());
     setMovements(getStockMovements());
+    setTrainings(getTrainings());
   };
 
   // --- Filters ---
@@ -72,19 +79,32 @@ export default function GabaStockPage() {
   // --- Item dialog ---
   const [itemDialog, setItemDialog] = useState(false);
   const [editItem, setEditItem] = useState<StockItem | null>(null);
-  const [itemForm, setItemForm] = useState({ name: '', categoryId: 'geniteurs', unit: 'pièce', alertThreshold: '5', unitPrice: '0' });
+  const [itemForm, setItemForm] = useState({ name: '', categoryId: 'geniteurs', unit: 'pièce', alertThreshold: '5', purchasePrice: '0', sellingPrice: '0' });
 
   // --- Movement dialog ---
   const [moveDialog, setMoveDialog] = useState(false);
   const [moveType, setMoveType] = useState<MovementType>('entry');
   const [moveItemId, setMoveItemId] = useState('');
-  const [moveForm, setMoveForm] = useState({ quantity: '', unitPrice: '', reason: '', date: new Date().toISOString().slice(0, 10) });
+  const [moveForm, setMoveForm] = useState({ quantity: '', unitPrice: '', reason: '', date: new Date().toISOString().slice(0, 10), parkName: '', traineeName: '' });
+
+  // --- Training dialog ---
+  const [trainingDialog, setTrainingDialog] = useState(false);
+  const [trainingForm, setTrainingForm] = useState({
+    parkName: '', date: new Date().toISOString().slice(0, 10), description: '',
+    trainees: '' as string, // comma-separated
+    materials: [] as { itemId: string; quantity: string }[],
+    gifts: [] as { traineeName: string; itemId: string; quantity: string }[],
+  });
 
   // --- Delete dialog ---
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [deleteTrainingId, setDeleteTrainingId] = useState<string | null>(null);
 
   // --- Item history dialog ---
   const [historyItem, setHistoryItem] = useState<StockItem | null>(null);
+
+  // --- Stock report dialog ---
+  const [stockReportOpen, setStockReportOpen] = useState(false);
 
   // ==================== FILTERED DATA ====================
 
@@ -114,7 +134,7 @@ export default function GabaStockPage() {
 
   const openNewItem = () => {
     setEditItem(null);
-    setItemForm({ name: '', categoryId: 'geniteurs', unit: 'pièce', alertThreshold: '5', unitPrice: '0' });
+    setItemForm({ name: '', categoryId: 'geniteurs', unit: 'pièce', alertThreshold: '5', purchasePrice: '0', sellingPrice: '0' });
     setItemDialog(true);
   };
 
@@ -125,7 +145,8 @@ export default function GabaStockPage() {
       categoryId: item.categoryId,
       unit: item.unit,
       alertThreshold: String(item.alertThreshold),
-      unitPrice: String(item.unitPrice),
+      purchasePrice: String(item.purchasePrice),
+      sellingPrice: String(item.sellingPrice),
     });
     setItemDialog(true);
   };
@@ -133,9 +154,11 @@ export default function GabaStockPage() {
   const handleSaveItem = () => {
     if (!itemForm.name.trim()) { toast.error('Nom de l\'article requis'); return; }
     const threshold = parseInt(itemForm.alertThreshold, 10);
-    const price = parseInt(itemForm.unitPrice, 10);
+    const pPrice = parseInt(itemForm.purchasePrice, 10);
+    const sPrice = parseInt(itemForm.sellingPrice, 10);
     if (isNaN(threshold) || threshold < 0) { toast.error('Seuil d\'alerte invalide'); return; }
-    if (isNaN(price) || price < 0) { toast.error('Prix unitaire invalide'); return; }
+    if (isNaN(pPrice) || pPrice < 0) { toast.error('Prix d\'achat invalide'); return; }
+    if (isNaN(sPrice) || sPrice < 0) { toast.error('Prix de vente invalide'); return; }
 
     if (editItem) {
       updateStockItem(editItem.id, {
@@ -143,7 +166,8 @@ export default function GabaStockPage() {
         categoryId: itemForm.categoryId,
         unit: itemForm.unit,
         alertThreshold: threshold,
-        unitPrice: price,
+        purchasePrice: pPrice,
+        sellingPrice: sPrice,
       });
       toast.success('Article modifié');
     } else {
@@ -152,7 +176,8 @@ export default function GabaStockPage() {
         categoryId: itemForm.categoryId,
         unit: itemForm.unit,
         alertThreshold: threshold,
-        unitPrice: price,
+        purchasePrice: pPrice,
+        sellingPrice: sPrice,
       });
       toast.success('Article ajouté au stock');
     }
@@ -171,15 +196,18 @@ export default function GabaStockPage() {
   const openMovement = (type: MovementType, itemId?: string) => {
     setMoveType(type);
     setMoveItemId(itemId ?? (items.length > 0 ? items[0].id : ''));
-    setMoveForm({ quantity: '', unitPrice: '', reason: type === 'entry' ? ENTRY_REASONS[0] : EXIT_REASONS[0], date: new Date().toISOString().slice(0, 10) });
+    const defaultReason = type === 'entry' ? ENTRY_REASONS[0] : type === 'training' ? TRAINING_REASONS[0] : type === 'gift' ? GIFT_REASONS[0] : EXIT_REASONS[0];
+    setMoveForm({ quantity: '', unitPrice: '', reason: defaultReason, date: new Date().toISOString().slice(0, 10), parkName: '', traineeName: '' });
     setMoveDialog(true);
   };
 
   const handleSaveMovement = () => {
     const qty = parseInt(moveForm.quantity, 10);
     if (isNaN(qty) || qty <= 0) { toast.error('Quantité invalide'); return; }
-    const price = parseInt(moveForm.unitPrice, 10) || 0;
+    const price = (moveType === 'training' || moveType === 'gift') ? 0 : (parseInt(moveForm.unitPrice, 10) || 0);
     if (!moveForm.reason.trim()) { toast.error('Motif requis'); return; }
+    if ((moveType === 'training' || moveType === 'gift') && !moveForm.parkName.trim()) { toast.error('Nom du parc requis'); return; }
+    if (moveType === 'gift' && !moveForm.traineeName.trim()) { toast.error('Nom du formé requis'); return; }
 
     const result = addStockMovement(
       moveItemId,
@@ -189,6 +217,8 @@ export default function GabaStockPage() {
       moveForm.reason.trim(),
       moveForm.date,
       user?.displayName ?? 'Inconnu',
+      moveForm.parkName.trim() || undefined,
+      moveForm.traineeName.trim() || undefined,
     );
 
     if (!result.success) {
@@ -196,8 +226,73 @@ export default function GabaStockPage() {
       return;
     }
 
-    toast.success(moveType === 'entry' ? 'Entrée enregistrée' : moveType === 'exit' ? 'Sortie enregistrée' : 'Ajustement enregistré');
+    const labels: Record<MovementType, string> = { entry: 'Entrée enregistrée', exit: 'Sortie enregistrée', adjustment: 'Ajustement enregistré', training: 'Usage formation enregistré', gift: 'Don au formé enregistré' };
+    toast.success(labels[moveType]);
     setMoveDialog(false);
+    refresh();
+  };
+
+  // --- Training session handler ---
+  const openTrainingDialog = () => {
+    setTrainingForm({
+      parkName: '', date: new Date().toISOString().slice(0, 10), description: '',
+      trainees: '', materials: [{ itemId: items[0]?.id ?? '', quantity: '' }],
+      gifts: [],
+    });
+    setTrainingDialog(true);
+  };
+
+  const handleSaveTraining = () => {
+    if (!trainingForm.parkName.trim()) { toast.error('Nom du parc requis'); return; }
+    const traineeList = trainingForm.trainees.split(',').map(t => t.trim()).filter(Boolean);
+    if (traineeList.length === 0) { toast.error('Au moins un formé requis'); return; }
+
+    const userName = user?.displayName ?? 'Inconnu';
+    const errors: string[] = [];
+
+    // Record material usage movements
+    for (const mat of trainingForm.materials) {
+      const qty = parseInt(mat.quantity, 10);
+      if (!mat.itemId || isNaN(qty) || qty <= 0) continue;
+      const item = items.find(i => i.id === mat.itemId);
+      const result = addStockMovement(mat.itemId, 'training', qty, 0, 'Usage formation', trainingForm.date, userName, trainingForm.parkName.trim());
+      if (!result.success) errors.push(`${item?.name}: ${result.error}`);
+    }
+
+    // Record gifts movements
+    for (const gift of trainingForm.gifts) {
+      const qty = parseInt(gift.quantity, 10);
+      if (!gift.itemId || isNaN(qty) || qty <= 0 || !gift.traineeName.trim()) continue;
+      const item = items.find(i => i.id === gift.itemId);
+      const result = addStockMovement(gift.itemId, 'gift', qty, 0, `Don à ${gift.traineeName.trim()}`, trainingForm.date, userName, trainingForm.parkName.trim(), gift.traineeName.trim());
+      if (!result.success) errors.push(`${item?.name} → ${gift.traineeName}: ${result.error}`);
+    }
+
+    // Save training record
+    addTraining({
+      parkName: trainingForm.parkName.trim(),
+      date: trainingForm.date,
+      description: trainingForm.description.trim(),
+      trainees: traineeList,
+      materialsUsed: trainingForm.materials.filter(m => m.itemId && parseInt(m.quantity, 10) > 0).map(m => ({ itemId: m.itemId, quantity: parseInt(m.quantity, 10) })),
+      giftsGiven: trainingForm.gifts.filter(g => g.itemId && parseInt(g.quantity, 10) > 0 && g.traineeName.trim()).map(g => ({ traineeName: g.traineeName.trim(), itemId: g.itemId, quantity: parseInt(g.quantity, 10) })),
+      createdBy: userName,
+    });
+
+    if (errors.length > 0) {
+      toast.error(`Formation enregistrée avec ${errors.length} erreur(s): ${errors[0]}`);
+    } else {
+      toast.success('Formation enregistrée avec succès');
+    }
+    setTrainingDialog(false);
+    refresh();
+  };
+
+  const handleDeleteTraining = () => {
+    if (!deleteTrainingId) return;
+    deleteTraining(deleteTrainingId);
+    toast.success('Formation supprimée');
+    setDeleteTrainingId(null);
     refresh();
   };
 
@@ -249,10 +344,13 @@ export default function GabaStockPage() {
             <Button size="sm" variant="outline" className="gap-2" onClick={() => openMovement('exit')}>
               <ArrowUpFromLine className="h-4 w-4" /> Sortie
             </Button>
+            <Button size="sm" variant="outline" className="gap-2 border-amber-500/50 text-amber-700 dark:text-amber-400" onClick={openTrainingDialog}>
+              <GraduationCap className="h-4 w-4" /> Formation
+            </Button>
             <Button size="sm" variant="ghost" className="gap-2" onClick={handleExportCSV}>
               <Download className="h-4 w-4" /> CSV
             </Button>
-            <Button size="sm" variant="ghost" className="gap-2" onClick={() => { downloadStockReport(); toast.success('Rapport PDF téléchargé'); }}>
+            <Button size="sm" variant="ghost" className="gap-2" onClick={() => setStockReportOpen(true)}>
               <FileDown className="h-4 w-4" /> PDF
             </Button>
           </div>
@@ -299,6 +397,7 @@ export default function GabaStockPage() {
           <TabsList>
             <TabsTrigger value="items" className="gap-2"><Layers className="h-4 w-4" /> Articles</TabsTrigger>
             <TabsTrigger value="movements" className="gap-2"><History className="h-4 w-4" /> Mouvements</TabsTrigger>
+            <TabsTrigger value="trainings" className="gap-2"><GraduationCap className="h-4 w-4" /> Formations</TabsTrigger>
           </TabsList>
           <div className="flex items-center gap-2">
             <div className="relative">
@@ -341,7 +440,8 @@ export default function GabaStockPage() {
                     <TableHead>Catégorie</TableHead>
                     <TableHead className="text-right">Quantité</TableHead>
                     <TableHead>Unité</TableHead>
-                    <TableHead className="text-right">Prix unit.</TableHead>
+                    <TableHead className="text-right">Prix achat</TableHead>
+                    <TableHead className="text-right">Prix vente</TableHead>
                     <TableHead className="text-right">Valeur</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
@@ -364,8 +464,9 @@ export default function GabaStockPage() {
                       </TableCell>
                       <TableCell className="text-right font-semibold">{item.currentQuantity}</TableCell>
                       <TableCell>{item.unit}</TableCell>
-                      <TableCell className="text-right">{formatCurrency(item.unitPrice)}</TableCell>
-                      <TableCell className="text-right">{formatCurrency(item.currentQuantity * item.unitPrice)}</TableCell>
+                      <TableCell className="text-right">{formatCurrency(item.purchasePrice)}</TableCell>
+                      <TableCell className="text-right">{formatCurrency(item.sellingPrice)}</TableCell>
+                      <TableCell className="text-right">{formatCurrency(item.currentQuantity * item.purchasePrice)}</TableCell>
                       <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-1">
                           <Button variant="ghost" size="icon" className="h-8 w-8" title="Entrée" onClick={() => openMovement('entry', item.id)}>
@@ -430,10 +531,12 @@ export default function GabaStockPage() {
                           {mv.type === 'entry' && <Badge className="bg-success/15 text-success border-success/30">Entrée</Badge>}
                           {mv.type === 'exit' && <Badge variant="destructive">Sortie</Badge>}
                           {mv.type === 'adjustment' && <Badge variant="secondary">Ajustement</Badge>}
+                          {mv.type === 'training' && <Badge className="bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-900/30 dark:text-amber-400">Formation</Badge>}
+                          {mv.type === 'gift' && <Badge className="bg-purple-100 text-purple-700 border-purple-300 dark:bg-purple-900/30 dark:text-purple-400">Don formé</Badge>}
                         </TableCell>
-                        <TableCell>{mv.reason}</TableCell>
+                        <TableCell>{mv.reason}{mv.parkName ? ` (${mv.parkName})` : ''}{mv.traineeName ? ` → ${mv.traineeName}` : ''}</TableCell>
                         <TableCell className="text-right font-semibold">
-                          {mv.type === 'entry' ? '+' : mv.type === 'exit' ? '-' : '='}{mv.quantity}
+                          {mv.type === 'entry' ? '+' : (mv.type === 'exit' || mv.type === 'training' || mv.type === 'gift') ? '-' : '='}{mv.quantity}
                         </TableCell>
                         <TableCell className="text-right text-muted-foreground">{mv.previousQuantity}</TableCell>
                         <TableCell className="text-right font-semibold">{mv.newQuantity}</TableCell>
@@ -444,6 +547,71 @@ export default function GabaStockPage() {
                   })}
                 </TableBody>
               </Table>
+            </div>
+          )}
+        </TabsContent>
+
+        {/* ==================== FORMATIONS TAB ==================== */}
+        <TabsContent value="trainings" className="mt-4">
+          {trainings.length === 0 ? (
+            <Card>
+              <CardContent className="py-12 text-center text-muted-foreground">
+                <GraduationCap className="h-12 w-12 mx-auto mb-4 opacity-40" />
+                <p className="text-lg font-medium">Aucune formation enregistrée</p>
+                <p className="text-sm">Cliquez sur "Formation" pour enregistrer une session</p>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="space-y-4">
+              {[...trainings].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map(tr => (
+                <Card key={tr.id}>
+                  <CardHeader className="pb-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="h-10 w-10 rounded-lg bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center">
+                          <GraduationCap className="h-5 w-5 text-amber-700 dark:text-amber-400" />
+                        </div>
+                        <div>
+                          <CardTitle className="text-base">{tr.parkName}</CardTitle>
+                          <p className="text-sm text-muted-foreground">{new Date(tr.date).toLocaleDateString('fr-FR')} · {tr.trainees.length} formé(s) · Par {tr.createdBy}</p>
+                        </div>
+                      </div>
+                      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setDeleteTrainingId(tr.id)}>
+                        <Trash2 className="h-4 w-4 text-destructive" />
+                      </Button>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-2 text-sm">
+                    {tr.description && <p className="text-muted-foreground">{tr.description}</p>}
+                    <div className="flex flex-wrap gap-1">
+                      <span className="font-medium">Formés :</span>
+                      {tr.trainees.map((t, i) => <Badge key={i} variant="secondary">{t}</Badge>)}
+                    </div>
+                    {tr.materialsUsed.length > 0 && (
+                      <div>
+                        <span className="font-medium">Matériels utilisés :</span>
+                        <ul className="list-disc list-inside text-muted-foreground">
+                          {tr.materialsUsed.map((m, i) => {
+                            const item = items.find(it => it.id === m.itemId);
+                            return <li key={i}>{item?.name ?? '—'} × {m.quantity}</li>;
+                          })}
+                        </ul>
+                      </div>
+                    )}
+                    {tr.giftsGiven.length > 0 && (
+                      <div>
+                        <span className="font-medium">Éléments offerts :</span>
+                        <ul className="list-disc list-inside text-muted-foreground">
+                          {tr.giftsGiven.map((g, i) => {
+                            const item = items.find(it => it.id === g.itemId);
+                            return <li key={i}>{item?.name ?? '—'} × {g.quantity} → {g.traineeName}</li>;
+                          })}
+                        </ul>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              ))}
             </div>
           )}
         </TabsContent>
@@ -491,9 +659,13 @@ export default function GabaStockPage() {
                 <Input type="number" min="0" value={itemForm.alertThreshold} onChange={e => setItemForm(f => ({ ...f, alertThreshold: e.target.value }))} />
               </div>
               <div className="space-y-2">
-                <Label>Prix unitaire (FCFA)</Label>
-                <Input type="number" min="0" value={itemForm.unitPrice} onChange={e => setItemForm(f => ({ ...f, unitPrice: e.target.value }))} />
+                <Label>Prix d'achat (FCFA)</Label>
+                <Input type="number" min="0" value={itemForm.purchasePrice} onChange={e => setItemForm(f => ({ ...f, purchasePrice: e.target.value }))} />
               </div>
+            </div>
+            <div className="space-y-2">
+              <Label>Prix de vente (FCFA)</Label>
+              <Input type="number" min="0" value={itemForm.sellingPrice} onChange={e => setItemForm(f => ({ ...f, sellingPrice: e.target.value }))} />
             </div>
           </div>
           <DialogFooter>
@@ -503,15 +675,15 @@ export default function GabaStockPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Movement dialog (entry / exit) */}
+      {/* Movement dialog (entry / exit / training / gift) */}
       <Dialog open={moveDialog} onOpenChange={setMoveDialog}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {moveType === 'entry' ? 'Entrée de stock' : moveType === 'exit' ? 'Sortie de stock' : 'Ajustement'}
+              {moveType === 'entry' ? 'Entrée de stock' : moveType === 'exit' ? 'Sortie de stock' : moveType === 'training' ? 'Usage formation' : moveType === 'gift' ? 'Don au formé' : 'Ajustement'}
             </DialogTitle>
             <DialogDescription>
-              {moveType === 'entry' ? 'Enregistrez un achat ou une réception de marchandise.' : moveType === 'exit' ? 'Enregistrez une vente, utilisation ou perte.' : 'Corrigez la quantité en stock.'}
+              {moveType === 'entry' ? 'Enregistrez un achat ou une réception de marchandise.' : moveType === 'exit' ? 'Enregistrez une vente, utilisation ou perte.' : moveType === 'training' ? 'Matériel utilisé lors d\'une formation (sans valeur monétaire).' : moveType === 'gift' ? 'Élément offert à un formé (sans valeur monétaire).' : 'Corrigez la quantité en stock.'}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
@@ -533,17 +705,31 @@ export default function GabaStockPage() {
                 <Label>Quantité</Label>
                 <Input type="number" min="1" placeholder="0" value={moveForm.quantity} onChange={e => setMoveForm(f => ({ ...f, quantity: e.target.value }))} />
               </div>
-              <div className="space-y-2">
-                <Label>Prix unitaire (FCFA)</Label>
-                <Input type="number" min="0" placeholder="0" value={moveForm.unitPrice} onChange={e => setMoveForm(f => ({ ...f, unitPrice: e.target.value }))} />
-              </div>
+              {moveType !== 'training' && moveType !== 'gift' && (
+                <div className="space-y-2">
+                  <Label>Prix unitaire (FCFA)</Label>
+                  <Input type="number" min="0" placeholder="0" value={moveForm.unitPrice} onChange={e => setMoveForm(f => ({ ...f, unitPrice: e.target.value }))} />
+                </div>
+              )}
             </div>
+            {(moveType === 'training' || moveType === 'gift') && (
+              <div className="space-y-2">
+                <Label>Parc de formation</Label>
+                <Input placeholder="Ex: Parc Central, Parc Nord..." value={moveForm.parkName} onChange={e => setMoveForm(f => ({ ...f, parkName: e.target.value }))} />
+              </div>
+            )}
+            {moveType === 'gift' && (
+              <div className="space-y-2">
+                <Label>Nom du formé</Label>
+                <Input placeholder="Nom du bénéficiaire" value={moveForm.traineeName} onChange={e => setMoveForm(f => ({ ...f, traineeName: e.target.value }))} />
+              </div>
+            )}
             <div className="space-y-2">
               <Label>Motif</Label>
               <Select value={moveForm.reason} onValueChange={v => setMoveForm(f => ({ ...f, reason: v }))}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {(moveType === 'entry' ? ENTRY_REASONS : EXIT_REASONS).map(r => (
+                  {(moveType === 'entry' ? ENTRY_REASONS : moveType === 'training' ? TRAINING_REASONS : moveType === 'gift' ? GIFT_REASONS : EXIT_REASONS).map(r => (
                     <SelectItem key={r} value={r}>{r}</SelectItem>
                   ))}
                 </SelectContent>
@@ -553,6 +739,11 @@ export default function GabaStockPage() {
               <Label>Date</Label>
               <Input type="date" value={moveForm.date} onChange={e => setMoveForm(f => ({ ...f, date: e.target.value }))} />
             </div>
+            {(moveType === 'training' || moveType === 'gift') && (
+              <div className="bg-amber-50 dark:bg-amber-900/20 rounded-lg p-3 text-sm text-amber-700 dark:text-amber-400">
+                💡 Les sorties formation/don sont enregistrées sans valeur monétaire.
+              </div>
+            )}
             {moveItemId && (
               <div className="bg-muted/50 rounded-lg p-3 text-sm">
                 <p className="text-muted-foreground">
@@ -564,7 +755,7 @@ export default function GabaStockPage() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setMoveDialog(false)}>Annuler</Button>
             <Button onClick={handleSaveMovement}>
-              {moveType === 'entry' ? 'Enregistrer l\'entrée' : moveType === 'exit' ? 'Enregistrer la sortie' : 'Ajuster'}
+              {moveType === 'entry' ? 'Enregistrer l\'entrée' : moveType === 'exit' ? 'Enregistrer la sortie' : moveType === 'training' ? 'Enregistrer l\'usage' : moveType === 'gift' ? 'Enregistrer le don' : 'Ajuster'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -621,10 +812,12 @@ export default function GabaStockPage() {
                         {mv.type === 'entry' && <Badge className="bg-success/15 text-success border-success/30">Entrée</Badge>}
                         {mv.type === 'exit' && <Badge variant="destructive">Sortie</Badge>}
                         {mv.type === 'adjustment' && <Badge variant="secondary">Ajustement</Badge>}
+                        {mv.type === 'training' && <Badge className="bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-900/30 dark:text-amber-400">Formation</Badge>}
+                        {mv.type === 'gift' && <Badge className="bg-purple-100 text-purple-700 border-purple-300 dark:bg-purple-900/30 dark:text-purple-400">Don formé</Badge>}
                       </TableCell>
-                      <TableCell>{mv.reason}</TableCell>
+                      <TableCell>{mv.reason}{mv.parkName ? ` (${mv.parkName})` : ''}{mv.traineeName ? ` → ${mv.traineeName}` : ''}</TableCell>
                       <TableCell className="text-right font-semibold">
-                        {mv.type === 'entry' ? '+' : mv.type === 'exit' ? '-' : '='}{mv.quantity}
+                        {mv.type === 'entry' ? '+' : (mv.type === 'exit' || mv.type === 'training' || mv.type === 'gift') ? '-' : '='}{mv.quantity}
                       </TableCell>
                       <TableCell className="text-right text-muted-foreground">{mv.previousQuantity}</TableCell>
                       <TableCell className="text-right font-semibold">{mv.newQuantity}</TableCell>
@@ -637,6 +830,123 @@ export default function GabaStockPage() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Training session dialog */}
+      <Dialog open={trainingDialog} onOpenChange={setTrainingDialog}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Enregistrer une formation</DialogTitle>
+            <DialogDescription>
+              Enregistrez une session de formation avec les matériels utilisés et les éléments offerts aux formés.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Parc de formation</Label>
+                <Input placeholder="Ex: Parc Central..." value={trainingForm.parkName} onChange={e => setTrainingForm(f => ({ ...f, parkName: e.target.value }))} />
+              </div>
+              <div className="space-y-2">
+                <Label>Date</Label>
+                <Input type="date" value={trainingForm.date} onChange={e => setTrainingForm(f => ({ ...f, date: e.target.value }))} />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label>Description / notes</Label>
+              <Input placeholder="Description de la formation..." value={trainingForm.description} onChange={e => setTrainingForm(f => ({ ...f, description: e.target.value }))} />
+            </div>
+            <div className="space-y-2">
+              <Label>Formés (séparer par des virgules)</Label>
+              <Input placeholder="Jean Dupont, Marie Kamga, ..." value={trainingForm.trainees} onChange={e => setTrainingForm(f => ({ ...f, trainees: e.target.value }))} />
+            </div>
+
+            {/* Materials used */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label className="text-base font-semibold">Matériels utilisés (sorties sans prix)</Label>
+                <Button type="button" variant="outline" size="sm" onClick={() => setTrainingForm(f => ({ ...f, materials: [...f.materials, { itemId: items[0]?.id ?? '', quantity: '' }] }))}>
+                  <Plus className="h-3 w-3 mr-1" /> Ajouter
+                </Button>
+              </div>
+              {trainingForm.materials.map((mat, idx) => (
+                <div key={idx} className="flex gap-2 items-end">
+                  <div className="flex-1">
+                    <Select value={mat.itemId} onValueChange={v => { const m = [...trainingForm.materials]; m[idx].itemId = v; setTrainingForm(f => ({ ...f, materials: m })); }}>
+                      <SelectTrigger><SelectValue placeholder="Article" /></SelectTrigger>
+                      <SelectContent>
+                        {items.map(i => <SelectItem key={i.id} value={i.id}>{i.name} ({i.currentQuantity} {i.unit})</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Input className="w-20" type="number" min="1" placeholder="Qté" value={mat.quantity} onChange={e => { const m = [...trainingForm.materials]; m[idx].quantity = e.target.value; setTrainingForm(f => ({ ...f, materials: m })); }} />
+                  <Button type="button" variant="ghost" size="icon" className="h-9 w-9" onClick={() => setTrainingForm(f => ({ ...f, materials: f.materials.filter((_, i) => i !== idx) }))}>
+                    <Trash2 className="h-4 w-4 text-destructive" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+
+            {/* Gifts given */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label className="text-base font-semibold">Éléments offerts aux formés</Label>
+                <Button type="button" variant="outline" size="sm" onClick={() => setTrainingForm(f => ({ ...f, gifts: [...f.gifts, { traineeName: '', itemId: items[0]?.id ?? '', quantity: '' }] }))}>
+                  <Gift className="h-3 w-3 mr-1" /> Ajouter
+                </Button>
+              </div>
+              {trainingForm.gifts.map((gift, idx) => (
+                <div key={idx} className="flex gap-2 items-end">
+                  <Input className="w-36" placeholder="Nom du formé" value={gift.traineeName} onChange={e => { const g = [...trainingForm.gifts]; g[idx].traineeName = e.target.value; setTrainingForm(f => ({ ...f, gifts: g })); }} />
+                  <div className="flex-1">
+                    <Select value={gift.itemId} onValueChange={v => { const g = [...trainingForm.gifts]; g[idx].itemId = v; setTrainingForm(f => ({ ...f, gifts: g })); }}>
+                      <SelectTrigger><SelectValue placeholder="Article" /></SelectTrigger>
+                      <SelectContent>
+                        {items.map(i => <SelectItem key={i.id} value={i.id}>{i.name} ({i.currentQuantity} {i.unit})</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Input className="w-20" type="number" min="1" placeholder="Qté" value={gift.quantity} onChange={e => { const g = [...trainingForm.gifts]; g[idx].quantity = e.target.value; setTrainingForm(f => ({ ...f, gifts: g })); }} />
+                  <Button type="button" variant="ghost" size="icon" className="h-9 w-9" onClick={() => setTrainingForm(f => ({ ...f, gifts: f.gifts.filter((_, i) => i !== idx) }))}>
+                    <Trash2 className="h-4 w-4 text-destructive" />
+                  </Button>
+                </div>
+              ))}
+              {trainingForm.gifts.length === 0 && (
+                <p className="text-sm text-muted-foreground">Aucun élément offert. Cliquez "Ajouter" si des formés repartent avec des éléments.</p>
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTrainingDialog(false)}>Annuler</Button>
+            <Button onClick={handleSaveTraining}>Enregistrer la formation</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete training confirmation */}
+      <AlertDialog open={!!deleteTrainingId} onOpenChange={open => !open && setDeleteTrainingId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Supprimer cette formation ?</AlertDialogTitle>
+            <AlertDialogDescription>
+              L'enregistrement de la formation sera supprimé. Les mouvements de stock associés resteront dans l'historique.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Annuler</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDeleteTraining} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              Supprimer
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <ReportDialog
+        open={stockReportOpen}
+        onOpenChange={setStockReportOpen}
+        title="Rapport de stock — GABA"
+        onGenerate={(opts) => { downloadStockReport(opts); toast.success('Rapport PDF téléchargé'); }}
+      />
     </div>
   );
 }

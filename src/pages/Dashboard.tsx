@@ -5,16 +5,19 @@ import { StatsCard } from "@/components/StatsCard";
 import { DepartmentCard } from "@/components/DepartmentCard";
 import { TransactionList } from "@/components/TransactionList";
 import { FinanceChart } from "@/components/FinanceChart";
+import { ReportDialog } from "@/components/ReportDialog";
 import { departments, getGlobalStats, getTransactions, getStatsByPaymentMethod } from "@/lib/data";
 import { getCurrentUser, hasPermission, hasDepartmentAccess } from "@/lib/auth";
 import { toast } from "sonner";
 import { downloadDashboardReport } from "@/lib/reports";
+import type { ReportOptions } from "@/lib/reports";
 import logoGuimsGroup from "@/assets/logo-guims-group.jpg";
 
 export default function Dashboard() {
   const [stats, setStats] = useState(getGlobalStats());
   const [transactions, setTransactions] = useState(getTransactions());
   const [paymentStats, setPaymentStats] = useState(getStatsByPaymentMethod());
+  const [reportOpen, setReportOpen] = useState(false);
 
   const refresh = () => {
     setStats(getGlobalStats());
@@ -36,12 +39,19 @@ export default function Dashboard() {
           <p className="text-muted-foreground text-sm">Vue globale des finances de Guims Group</p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" className="gap-2" onClick={() => { downloadDashboardReport(); toast.success('Rapport PDF téléchargé'); }}>
+          <Button variant="outline" size="sm" className="gap-2" onClick={() => setReportOpen(true)}>
             <FileDown className="h-4 w-4" />
             <span className="hidden sm:inline">Rapport PDF</span>
           </Button>
         </div>
       </div>
+
+      <ReportDialog
+        open={reportOpen}
+        onOpenChange={setReportOpen}
+        title="Rapport global"
+        onGenerate={(opts) => { downloadDashboardReport(opts); toast.success('Rapport PDF téléchargé'); }}
+      />
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatsCard title="Revenus totaux" value={stats.income} icon={ArrowUpRight} colorClass="text-success" />

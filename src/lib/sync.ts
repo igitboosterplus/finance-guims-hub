@@ -50,6 +50,7 @@ export async function pullAllFromSupabase(): Promise<{ success: boolean; error?:
       pullTable(TABLES.auditLog, "finance-audit-log"),
       pullTable(TABLES.stockItems, "gaba-stock-items"),
       pullTable(TABLES.stockMovements, "gaba-stock-movements"),
+      pullTable(TABLES.trainings, "gaba-trainings"),
     ]);
     console.log("[Sync] Pull complet depuis Supabase.");
     return { success: true };
@@ -93,6 +94,7 @@ export async function pushAllToSupabase(): Promise<{ success: boolean; error?: s
       [TABLES.auditLog, "finance-audit-log"],
       [TABLES.stockItems, "gaba-stock-items"],
       [TABLES.stockMovements, "gaba-stock-movements"],
+      [TABLES.trainings, "gaba-trainings"],
     ];
 
     for (const [tableName, storageKey] of pairs) {

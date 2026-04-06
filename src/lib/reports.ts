@@ -3,13 +3,32 @@ import autoTable from "jspdf-autotable";
 import {
   departments, getTransactions, getGlobalStats, getDepartmentStats,
   getTransactionsByDepartment, getDepartment, formatCurrency,
-  getPaymentMethodLabel, getStatsByPaymentMethod, type DepartmentId,
+  getPaymentMethodLabel, getStatsByPaymentMethod, type DepartmentId, type Transaction,
 } from "./data";
-import { getStockItems, getStockMovements, getCategoryLabel, getStockStats } from "./stock";
+import { getStockItems, getStockMovements, getCategoryLabel, getStockStats, getTrainings, getMovementTypeLabel } from "./stock";
 
 // ==================== HELPERS ====================
 
-function setupDoc(title: string): jsPDF {
+export interface ReportOptions {
+  startDate?: string;
+  endDate?: string;
+}
+
+function filterByPeriod<T extends { date: string }>(items: T[], opts?: ReportOptions): T[] {
+  let result = items;
+  if (opts?.startDate) result = result.filter(i => i.date >= opts.startDate!);
+  if (opts?.endDate) result = result.filter(i => i.date <= opts.endDate!);
+  return result;
+}
+
+function periodLabel(opts?: ReportOptions): string {
+  if (opts?.startDate && opts?.endDate) return `Du ${new Date(opts.startDate).toLocaleDateString("fr-FR")} au ${new Date(opts.endDate).toLocaleDateString("fr-FR")}`;
+  if (opts?.startDate) return `À partir du ${new Date(opts.startDate).toLocaleDateString("fr-FR")}`;
+  if (opts?.endDate) return `Jusqu'au ${new Date(opts.endDate).toLocaleDateString("fr-FR")}`;
+  return "Toutes les dates";
+}
+
+function setupDoc(title: string, opts?: ReportOptions): jsPDF {
   const doc = new jsPDF({ orientation: "landscape" });
   // En-tête
   doc.setFont("helvetica", "bold");
@@ -25,7 +44,9 @@ function setupDoc(title: string): jsPDF {
   doc.setTextColor(80);
   doc.text(title, 14, 30);
   doc.setFontSize(9);
-  doc.text(`Généré le ${new Date().toLocaleDateString("fr-FR")} à ${new Date().toLocaleTimeString("fr-FR")}`, 14, 36);
+  const dateInfo = `Généré le ${new Date().toLocaleDateString("fr-FR")} à ${new Date().toLocaleTimeString("fr-FR")}`;
+  const pLabel = opts?.startDate || opts?.endDate ? ` · Période : ${periodLabel(opts)}` : '';
+  doc.text(dateInfo + pLabel, 14, 36);
   doc.setTextColor(0);
   return doc;
 }
@@ -40,15 +61,25 @@ function addSectionTitle(doc: jsPDF, title: string, y: number): number {
 }
 
 function fmtAmount(n: number): string {
-  return new Intl.NumberFormat("fr-FR").format(n) + " FCFA";
+  const sign = n < 0 ? "-" : "";
+  const abs = Math.abs(Math.round(n));
+  const formatted = abs.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  return sign + formatted + " FCFA";
 }
 
 // ==================== DASHBOARD REPORT ====================
 
-export function downloadDashboardReport() {
-  const doc = setupDoc("Rapport global — Tableau de bord");
-  const stats = getGlobalStats();
-  const txs = getTransactions().sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+function computeStats(txs: Transaction[]) {
+  const income = txs.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
+  const expenses = txs.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
+  return { income, expenses, balance: income - expenses, count: txs.length };
+}
+
+export function downloadDashboardReport(opts?: ReportOptions) {
+  const doc = setupDoc("Rapport global — Tableau de bord", opts);
+  const allTxs = filterByPeriod(getTransactions(), opts);
+  const stats = computeStats(allTxs);
+  const txs = allTxs.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   let y = 44;
 
   // Global stats
@@ -70,7 +101,8 @@ export function downloadDashboardReport() {
     startY: y,
     head: [["Département", "Revenus", "Dépenses", "Solde", "Transactions"]],
     body: departments.map(dept => {
-      const s = getDepartmentStats(dept.id);
+      const deptTxs = allTxs.filter(t => t.departmentId === dept.id);
+      const s = computeStats(deptTxs);
       return [dept.name, fmtAmount(s.income), fmtAmount(s.expenses), fmtAmount(s.balance), String(s.count)];
     }),
     theme: "grid",
@@ -81,7 +113,7 @@ export function downloadDashboardReport() {
   y = (doc as any).lastAutoTable.finalY + 10;
 
   // Per payment method
-  const payStats = getStatsByPaymentMethod();
+  const payStats = getStatsByPaymentMethod(allTxs);
   if (payStats.length > 0) {
     y = addSectionTitle(doc, "Soldes par caisse", y);
     autoTable(doc, {
@@ -133,11 +165,12 @@ export function downloadDashboardReport() {
 
 // ==================== DEPARTMENT REPORT ====================
 
-export function downloadDepartmentReport(deptId: DepartmentId) {
+export function downloadDepartmentReport(deptId: DepartmentId, opts?: ReportOptions) {
   const dept = getDepartment(deptId);
-  const doc = setupDoc(`Rapport — ${dept.name}`);
-  const stats = getDepartmentStats(deptId);
-  const txs = getTransactionsByDepartment(deptId).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  const doc = setupDoc(`Rapport — ${dept.name}`, opts);
+  const allTxs = filterByPeriod(getTransactionsByDepartment(deptId), opts);
+  const stats = computeStats(allTxs);
+  const txs = allTxs.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   let y = 44;
 
   // Department stats
@@ -202,37 +235,37 @@ export function downloadDepartmentReport(deptId: DepartmentId) {
 
 // ==================== GABA STOCK REPORT ====================
 
-export function downloadStockReport() {
-  const doc = setupDoc("Rapport de stock — GABA");
+export function downloadStockReport(opts?: ReportOptions) {
+  const doc = setupDoc("Rapport de stock — GABA", opts);
   const stats = getStockStats();
   const items = getStockItems();
-  const movements = getStockMovements();
+  const allMovements = getStockMovements();
+  const movements = filterByPeriod(allMovements, opts);
+  const trainingsAll = getTrainings();
+  const trainings = opts?.startDate || opts?.endDate
+    ? trainingsAll.filter(t => (!opts.startDate || t.date >= opts.startDate) && (!opts.endDate || t.date <= opts.endDate))
+    : trainingsAll;
   let y = 44;
 
   // Stats
   y = addSectionTitle(doc, "Résumé du stock", y);
   autoTable(doc, {
     startY: y,
-    head: [["Indicateur", "Valeur"]],
-    body: [
-      ["Articles en stock", String(stats.totalItems)],
-      ["Alertes stock bas", String(stats.lowStock)],
-      ["Valeur totale", fmtAmount(stats.totalValue)],
-      ["Mouvements enregistrés", String(stats.totalMovements)],
-    ],
+    head: [["Articles", "Stock bas", "Valeur totale (achat)", "Mouvements"]],
+    body: [[String(stats.totalItems), String(stats.lowStock), fmtAmount(stats.totalValue), String(movements.length)]],
     theme: "grid",
-    headStyles: { fillColor: [76, 140, 43] },
+    headStyles: { fillColor: [76, 140, 43], fontSize: 9 },
+    bodyStyles: { fontSize: 10, fontStyle: "bold" },
     margin: { left: 14 },
   });
+  y = (doc as any).lastAutoTable.finalY + 10;
 
-  y = (doc as any).lastAutoTable.finalY + 12;
-
-  // Items
+  // Items with purchase/selling prices
   if (items.length > 0) {
-    y = addSectionTitle(doc, "Articles", y);
+    y = addSectionTitle(doc, "Articles en stock", y);
     autoTable(doc, {
       startY: y,
-      head: [["Article", "Catégorie", "Quantité", "Unité", "Prix unit.", "Valeur"]],
+      head: [["Article", "Catégorie", "Qté", "Unité", "Prix achat", "Prix vente", "Valeur stock"]],
       body: items
         .sort((a, b) => a.categoryId.localeCompare(b.categoryId))
         .map(i => [
@@ -240,43 +273,72 @@ export function downloadStockReport() {
           getCategoryLabel(i.categoryId),
           String(i.currentQuantity),
           i.unit,
-          fmtAmount(i.unitPrice),
-          fmtAmount(i.currentQuantity * i.unitPrice),
+          fmtAmount(i.purchasePrice),
+          fmtAmount(i.sellingPrice),
+          fmtAmount(i.currentQuantity * i.purchasePrice),
         ]),
       theme: "striped",
-      headStyles: { fillColor: [76, 140, 43] },
+      headStyles: { fillColor: [76, 140, 43], fontSize: 8 },
       margin: { left: 14 },
-      styles: { fontSize: 9 },
+      styles: { fontSize: 8 },
+      alternateRowStyles: { fillColor: [245, 250, 240] },
     });
-    y = (doc as any).lastAutoTable.finalY + 12;
+    y = (doc as any).lastAutoTable.finalY + 10;
   }
 
-  // Last 50 movements
-  const recentMvs = [...movements]
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-    .slice(0, 50);
-  if (recentMvs.length > 0) {
-    y = addSectionTitle(doc, "Derniers mouvements (50 max)", y);
+  // Training summary
+  if (trainings.length > 0) {
+    y = addSectionTitle(doc, `Formations (${trainings.length})`, y);
     autoTable(doc, {
       startY: y,
-      head: [["Date", "Article", "Type", "Motif", "Qté", "Avant", "Après", "Par"]],
+      head: [["Date", "Parc", "Formés", "Matériels utilisés", "Éléments offerts"]],
+      body: trainings
+        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+        .map(t => [
+          new Date(t.date).toLocaleDateString("fr-FR"),
+          t.parkName,
+          t.trainees.join(", "),
+          t.materialsUsed.map(m => { const it = items.find(i => i.id === m.itemId); return `${it?.name ?? '?'} ×${m.quantity}`; }).join(", ") || "—",
+          t.giftsGiven.map(g => { const it = items.find(i => i.id === g.itemId); return `${it?.name ?? '?'} ×${g.quantity} → ${g.traineeName}`; }).join(", ") || "—",
+        ]),
+      theme: "striped",
+      headStyles: { fillColor: [180, 130, 30], fontSize: 8 },
+      margin: { left: 14 },
+      styles: { fontSize: 8 },
+      columnStyles: { 2: { cellWidth: 50 }, 3: { cellWidth: 55 }, 4: { cellWidth: 55 } },
+    });
+    y = (doc as any).lastAutoTable.finalY + 10;
+  }
+
+  // Movements
+  const recentMvs = [...movements]
+    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+    .slice(0, 100);
+  if (recentMvs.length > 0) {
+    y = addSectionTitle(doc, `Mouvements (${recentMvs.length}${movements.length > 100 ? ' sur ' + movements.length : ''})`, y);
+    autoTable(doc, {
+      startY: y,
+      head: [["Date", "Article", "Type", "Motif", "Parc/Formé", "Qté", "Avant", "Après", "Prix", "Par"]],
       body: recentMvs.map(mv => {
         const item = items.find(i => i.id === mv.itemId);
+        const extra = [mv.parkName, mv.traineeName].filter(Boolean).join(" → ");
         return [
           new Date(mv.date).toLocaleDateString("fr-FR"),
           item?.name ?? "—",
-          mv.type === "entry" ? "Entrée" : mv.type === "exit" ? "Sortie" : "Ajust.",
+          getMovementTypeLabel(mv.type),
           mv.reason,
+          extra || "—",
           String(mv.quantity),
           String(mv.previousQuantity),
           String(mv.newQuantity),
+          mv.unitPrice > 0 ? fmtAmount(mv.unitPrice) : "—",
           mv.createdBy,
         ];
       }),
       theme: "striped",
-      headStyles: { fillColor: [76, 140, 43] },
+      headStyles: { fillColor: [76, 140, 43], fontSize: 7 },
       margin: { left: 14 },
-      styles: { fontSize: 8 },
+      styles: { fontSize: 7 },
     });
   }
 
@@ -285,9 +347,9 @@ export function downloadStockReport() {
 
 // ==================== FULL TRANSACTIONS REPORT ====================
 
-export function downloadTransactionsReport() {
-  const doc = setupDoc("Rapport de toutes les transactions");
-  const txs = getTransactions().sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+export function downloadTransactionsReport(opts?: ReportOptions) {
+  const doc = setupDoc("Rapport de toutes les transactions", opts);
+  const txs = filterByPeriod(getTransactions(), opts).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   let y = 44;
 
   y = addSectionTitle(doc, `Total : ${txs.length} transactions`, y);
