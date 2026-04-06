@@ -49,6 +49,8 @@ export interface StockMovement {
 
 // ==================== TRAINING / FORMATION ====================
 
+export type TrainingType = 'gaba' | 'guims-academy';
+
 export interface TrainingMaterial {
   itemId: string;
   quantity: number;
@@ -60,14 +62,26 @@ export interface TrainingGift {
   quantity: number;
 }
 
+export interface TraineeKit {
+  traineeName: string;
+  starterKitHannetons: number; // Nombre de hannetons du kit de démarrage
+  hasBook: boolean;            // A-t-il droit à un livre ?
+  otherItems: TrainingGift[];  // Autres éléments offerts
+}
+
 export interface Training {
   id: string;
-  parkName: string;
+  trainingType: TrainingType;  // GABA ou Guims Academy
+  parkName: string;            // Parc de formation (GABA) ou lieu (Academy)
   date: string;
+  enrollmentDate: string;      // Date d'inscription (automatique)
   description: string;
   trainees: string[];          // noms des formés
+  traineeKits: TraineeKit[];   // kits par formé (GABA)
   materialsUsed: TrainingMaterial[];
   giftsGiven: TrainingGift[];
+  // Guims Academy specifics
+  tranche?: string;            // Tranche en cours (Tranche 1, 2, 3, Complet)
   createdAt: string;
   createdBy: string;
 }
@@ -260,11 +274,12 @@ function saveTrainings(trainings: Training[]) {
   syncFullCollection(TABLES.trainings, TRAININGS_KEY);
 }
 
-export function addTraining(training: Omit<Training, 'id' | 'createdAt'>): Training {
+export function addTraining(training: Omit<Training, 'id' | 'createdAt' | 'enrollmentDate'>): Training {
   const trainings = getTrainings();
   const newTraining: Training = {
     ...training,
     id: crypto.randomUUID(),
+    enrollmentDate: new Date().toISOString(),
     createdAt: new Date().toISOString(),
   };
   trainings.push(newTraining);

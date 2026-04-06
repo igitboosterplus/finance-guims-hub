@@ -38,12 +38,16 @@ export interface Transaction {
   type: 'income' | 'expense';
   paymentMethod: PaymentMethod;
   category: string;
+  personName: string;       // Nom de la personne (client, fournisseur, formé, etc.)
   description: string;
   amount: number;
   date: string;
   createdAt: string;
   quantity?: number;
   stockItemId?: string;
+  // Champs spécifiques formations
+  enrollmentDate?: string;  // Date d'inscription (auto)
+  tranche?: string;         // Numéro de tranche (Guims Academy)
 }
 
 export const departments: Department[] = [
@@ -134,7 +138,7 @@ export const deleteTransaction = (id: string) => {
 
 export const exportTransactionsCSV = (): string => {
   const txs = getTransactions();
-  const headers = ['Date', 'Département', 'Type', 'Caisse', 'Catégorie', 'Description', 'Montant (FCFA)'];
+  const headers = ['Date', 'Département', 'Type', 'Caisse', 'Nom', 'Catégorie', 'Description', 'Montant (FCFA)'];
   const rows = txs
     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
     .map(tx => {
@@ -144,6 +148,7 @@ export const exportTransactionsCSV = (): string => {
         dept.name,
         tx.type === 'income' ? 'Revenu' : 'Dépense',
         getPaymentMethodLabel(tx.paymentMethod || 'especes'),
+        `"${(tx.personName || '').replace(/"/g, '""')}"`,
         tx.category,
         `"${tx.description.replace(/"/g, '""')}"`,
         tx.type === 'income' ? tx.amount : -tx.amount,
@@ -207,3 +212,16 @@ export const getStatsByPaymentMethod = (txs?: Transaction[]) => {
 export const formatCurrency = (amount: number) => {
   return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'XAF', minimumFractionDigits: 0 }).format(amount);
 };
+
+// Catégories qui nécessitent un nom de personne
+export const ENROLLMENT_CATEGORIES = [
+  'Inscriptions formation', 'Frais de formation',
+  'Inscription élève/étudiant', 'Frais de cours à domicile', 'Frais cours en ligne', 'Prépas concours', 'Coaching scolaire', 'Autres formations',
+  'Inscription étudiant', 'Frais de formation - Tranche 1', 'Frais de formation - Tranche 2', 'Frais de formation - Tranche 3', 'Frais de formation - Complet',
+];
+
+export const isEnrollmentCategory = (category: string): boolean =>
+  ENROLLMENT_CATEGORIES.includes(category);
+
+export const isTranche = (category: string): boolean =>
+  category.startsWith('Frais de formation - Tranche');

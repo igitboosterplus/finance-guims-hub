@@ -34,7 +34,7 @@ import {
   STOCK_CATEGORIES, getStockItems, addStockItem, updateStockItem, deleteStockItem,
   addStockMovement, getStockMovements, getStockStats, getCategoryLabel,
   exportStockCSV, getTrainings, addTraining, deleteTraining, getMovementTypeLabel,
-  type StockItem, type StockMovement, type MovementType, type Training,
+  type StockItem, type StockMovement, type MovementType, type Training, type TrainingType, type TraineeKit,
 } from "@/lib/stock";
 import logoGaba from "@/assets/logo-gaba.png";
 
@@ -90,10 +90,13 @@ export default function GabaStockPage() {
   // --- Training dialog ---
   const [trainingDialog, setTrainingDialog] = useState(false);
   const [trainingForm, setTrainingForm] = useState({
+    trainingType: 'gaba' as TrainingType,
     parkName: '', date: new Date().toISOString().slice(0, 10), description: '',
     trainees: '' as string, // comma-separated
+    tranche: '' as string, // Guims Academy
     materials: [] as { itemId: string; quantity: string }[],
     gifts: [] as { traineeName: string; itemId: string; quantity: string }[],
+    traineeKits: [] as { traineeName: string; starterKitHannetons: string; hasBook: boolean; }[],
   });
 
   // --- Delete dialog ---
@@ -235,47 +238,70 @@ export default function GabaStockPage() {
   // --- Training session handler ---
   const openTrainingDialog = () => {
     setTrainingForm({
+      trainingType: 'gaba',
       parkName: '', date: new Date().toISOString().slice(0, 10), description: '',
-      trainees: '', materials: [{ itemId: items[0]?.id ?? '', quantity: '' }],
+      trainees: '', tranche: '',
+      materials: [{ itemId: items[0]?.id ?? '', quantity: '' }],
       gifts: [],
+      traineeKits: [],
     });
     setTrainingDialog(true);
   };
 
   const handleSaveTraining = () => {
-    if (!trainingForm.parkName.trim()) { toast.error('Nom du parc requis'); return; }
+    if (!trainingForm.parkName.trim()) { toast.error('Nom du parc / lieu requis'); return; }
     const traineeList = trainingForm.trainees.split(',').map(t => t.trim()).filter(Boolean);
     if (traineeList.length === 0) { toast.error('Au moins un formé requis'); return; }
+    if (trainingForm.trainingType === 'guims-academy' && !trainingForm.tranche) { toast.error('Veuillez sélectionner une tranche'); return; }
 
     const userName = user?.displayName ?? 'Inconnu';
     const errors: string[] = [];
 
-    // Record material usage movements
-    for (const mat of trainingForm.materials) {
-      const qty = parseInt(mat.quantity, 10);
-      if (!mat.itemId || isNaN(qty) || qty <= 0) continue;
-      const item = items.find(i => i.id === mat.itemId);
-      const result = addStockMovement(mat.itemId, 'training', qty, 0, 'Usage formation', trainingForm.date, userName, trainingForm.parkName.trim());
-      if (!result.success) errors.push(`${item?.name}: ${result.error}`);
+    // Record material usage movements (GABA only)
+    if (trainingForm.trainingType === 'gaba') {
+      for (const mat of trainingForm.materials) {
+        const qty = parseInt(mat.quantity, 10);
+        if (!mat.itemId || isNaN(qty) || qty <= 0) continue;
+        const item = items.find(i => i.id === mat.itemId);
+        const result = addStockMovement(mat.itemId, 'training', qty, 0, 'Usage formation', trainingForm.date, userName, trainingForm.parkName.trim());
+        if (!result.success) errors.push(`${item?.name}: ${result.error}`);
+      }
+
+      // Record gifts movements
+      for (const gift of trainingForm.gifts) {
+        const qty = parseInt(gift.quantity, 10);
+        if (!gift.itemId || isNaN(qty) || qty <= 0 || !gift.traineeName.trim()) continue;
+        const item = items.find(i => i.id === gift.itemId);
+        const result = addStockMovement(gift.itemId, 'gift', qty, 0, `Don à ${gift.traineeName.trim()}`, trainingForm.date, userName, trainingForm.parkName.trim(), gift.traineeName.trim());
+        if (!result.success) errors.push(`${item?.name} → ${gift.traineeName}: ${result.error}`);
+      }
     }
 
-    // Record gifts movements
-    for (const gift of trainingForm.gifts) {
-      const qty = parseInt(gift.quantity, 10);
-      if (!gift.itemId || isNaN(qty) || qty <= 0 || !gift.traineeName.trim()) continue;
-      const item = items.find(i => i.id === gift.itemId);
-      const result = addStockMovement(gift.itemId, 'gift', qty, 0, `Don à ${gift.traineeName.trim()}`, trainingForm.date, userName, trainingForm.parkName.trim(), gift.traineeName.trim());
-      if (!result.success) errors.push(`${item?.name} → ${gift.traineeName}: ${result.error}`);
-    }
+    // Build trainee kits
+    const traineeKits: TraineeKit[] = trainingForm.traineeKits
+      .filter(k => k.traineeName.trim())
+      .map(k => ({
+        traineeName: k.traineeName.trim(),
+        starterKitHannetons: parseInt(k.starterKitHannetons, 10) || 0,
+        hasBook: k.hasBook,
+        otherItems: trainingForm.gifts.filter(g => g.traineeName.trim() === k.traineeName.trim()).map(g => ({
+          traineeName: g.traineeName.trim(),
+          itemId: g.itemId,
+          quantity: parseInt(g.quantity, 10) || 0,
+        })),
+      }));
 
     // Save training record
     addTraining({
+      trainingType: trainingForm.trainingType,
       parkName: trainingForm.parkName.trim(),
       date: trainingForm.date,
       description: trainingForm.description.trim(),
       trainees: traineeList,
+      traineeKits,
       materialsUsed: trainingForm.materials.filter(m => m.itemId && parseInt(m.quantity, 10) > 0).map(m => ({ itemId: m.itemId, quantity: parseInt(m.quantity, 10) })),
       giftsGiven: trainingForm.gifts.filter(g => g.itemId && parseInt(g.quantity, 10) > 0 && g.traineeName.trim()).map(g => ({ traineeName: g.traineeName.trim(), itemId: g.itemId, quantity: parseInt(g.quantity, 10) })),
+      ...(trainingForm.trainingType === 'guims-academy' ? { tranche: trainingForm.tranche } : {}),
       createdBy: userName,
     });
 
@@ -568,12 +594,21 @@ export default function GabaStockPage() {
                   <CardHeader className="pb-3">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
-                        <div className="h-10 w-10 rounded-lg bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center">
-                          <GraduationCap className="h-5 w-5 text-amber-700 dark:text-amber-400" />
+                        <div className={`h-10 w-10 rounded-lg flex items-center justify-center ${tr.trainingType === 'guims-academy' ? 'bg-blue-100 dark:bg-blue-900/30' : 'bg-amber-100 dark:bg-amber-900/30'}`}>
+                          <GraduationCap className={`h-5 w-5 ${tr.trainingType === 'guims-academy' ? 'text-blue-700 dark:text-blue-400' : 'text-amber-700 dark:text-amber-400'}`} />
                         </div>
                         <div>
-                          <CardTitle className="text-base">{tr.parkName}</CardTitle>
-                          <p className="text-sm text-muted-foreground">{new Date(tr.date).toLocaleDateString('fr-FR')} · {tr.trainees.length} formé(s) · Par {tr.createdBy}</p>
+                          <CardTitle className="text-base flex items-center gap-2">
+                            {tr.parkName}
+                            <Badge variant="outline" className={tr.trainingType === 'guims-academy' ? 'border-blue-300 text-blue-700 dark:text-blue-400' : 'border-amber-300 text-amber-700 dark:text-amber-400'}>
+                              {tr.trainingType === 'guims-academy' ? 'Guims Academy' : 'GABA'}
+                            </Badge>
+                            {tr.tranche && <Badge variant="secondary">{tr.tranche}</Badge>}
+                          </CardTitle>
+                          <p className="text-sm text-muted-foreground">
+                            {new Date(tr.date).toLocaleDateString('fr-FR')} · {tr.trainees.length} formé(s) · Par {tr.createdBy}
+                            {tr.enrollmentDate && <> · Inscrit le {new Date(tr.enrollmentDate).toLocaleDateString('fr-FR')}</>}
+                          </p>
                         </div>
                       </div>
                       <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setDeleteTrainingId(tr.id)}>
@@ -587,6 +622,22 @@ export default function GabaStockPage() {
                       <span className="font-medium">Formés :</span>
                       {tr.trainees.map((t, i) => <Badge key={i} variant="secondary">{t}</Badge>)}
                     </div>
+                    {/* Trainee kits */}
+                    {tr.traineeKits && tr.traineeKits.length > 0 && (
+                      <div>
+                        <span className="font-medium">Kits de démarrage :</span>
+                        <ul className="list-disc list-inside text-muted-foreground">
+                          {tr.traineeKits.map((kit, i) => (
+                            <li key={i}>
+                              <span className="font-medium text-foreground">{kit.traineeName}</span>
+                              {kit.starterKitHannetons > 0 && ` — ${kit.starterKitHannetons} hanneton(s)`}
+                              {kit.hasBook && ' — Livre ✓'}
+                              {kit.otherItems?.length > 0 && ` — ${kit.otherItems.map(oi => { const it = items.find(x => x.id === oi.itemId); return `${it?.name ?? '?'} ×${oi.quantity}`; }).join(', ')}`}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
                     {tr.materialsUsed.length > 0 && (
                       <div>
                         <span className="font-medium">Matériels utilisés :</span>
@@ -837,84 +888,168 @@ export default function GabaStockPage() {
           <DialogHeader>
             <DialogTitle>Enregistrer une formation</DialogTitle>
             <DialogDescription>
-              Enregistrez une session de formation avec les matériels utilisés et les éléments offerts aux formés.
+              Enregistrez une session de formation. La date d'inscription est capturée automatiquement par le système.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
+            {/* Training type */}
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Parc de formation</Label>
-                <Input placeholder="Ex: Parc Central..." value={trainingForm.parkName} onChange={e => setTrainingForm(f => ({ ...f, parkName: e.target.value }))} />
+                <Label>Type de formation *</Label>
+                <Select value={trainingForm.trainingType} onValueChange={(v: string) => setTrainingForm(f => ({ ...f, trainingType: v as TrainingType, tranche: '' }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="gaba">GABA (Élevage)</SelectItem>
+                    <SelectItem value="guims-academy">Guims Academy</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
               <div className="space-y-2">
-                <Label>Date</Label>
-                <Input type="date" value={trainingForm.date} onChange={e => setTrainingForm(f => ({ ...f, date: e.target.value }))} />
+                <Label>{trainingForm.trainingType === 'gaba' ? 'Parc de formation *' : 'Lieu de formation *'}</Label>
+                <Input placeholder={trainingForm.trainingType === 'gaba' ? 'Ex: Parc Central, Parc Nord...' : 'Ex: Salle A, Campus...'} value={trainingForm.parkName} onChange={e => setTrainingForm(f => ({ ...f, parkName: e.target.value }))} />
               </div>
             </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Date de formation</Label>
+                <Input type="date" value={trainingForm.date} onChange={e => setTrainingForm(f => ({ ...f, date: e.target.value }))} />
+              </div>
+              {trainingForm.trainingType === 'guims-academy' && (
+                <div className="space-y-2">
+                  <Label>Tranche *</Label>
+                  <Select value={trainingForm.tranche} onValueChange={v => setTrainingForm(f => ({ ...f, tranche: v }))}>
+                    <SelectTrigger><SelectValue placeholder="Sélectionner la tranche" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Tranche 1">Tranche 1</SelectItem>
+                      <SelectItem value="Tranche 2">Tranche 2</SelectItem>
+                      <SelectItem value="Tranche 3">Tranche 3</SelectItem>
+                      <SelectItem value="Complet">Paiement Complet</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+            </div>
+
             <div className="space-y-2">
               <Label>Description / notes</Label>
               <Input placeholder="Description de la formation..." value={trainingForm.description} onChange={e => setTrainingForm(f => ({ ...f, description: e.target.value }))} />
             </div>
             <div className="space-y-2">
-              <Label>Formés (séparer par des virgules)</Label>
-              <Input placeholder="Jean Dupont, Marie Kamga, ..." value={trainingForm.trainees} onChange={e => setTrainingForm(f => ({ ...f, trainees: e.target.value }))} />
-            </div>
-
-            {/* Materials used */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label className="text-base font-semibold">Matériels utilisés (sorties sans prix)</Label>
-                <Button type="button" variant="outline" size="sm" onClick={() => setTrainingForm(f => ({ ...f, materials: [...f.materials, { itemId: items[0]?.id ?? '', quantity: '' }] }))}>
-                  <Plus className="h-3 w-3 mr-1" /> Ajouter
+              <Label>Formés (séparer par des virgules) *</Label>
+              <Input placeholder="Jean Dupont, Marie Kamga, ..." value={trainingForm.trainees} onChange={e => {
+                const names = e.target.value;
+                setTrainingForm(f => ({ ...f, trainees: names }));
+              }} />
+              {trainingForm.trainees && (
+                <Button type="button" variant="outline" size="sm" className="mt-1" onClick={() => {
+                  const nameList = trainingForm.trainees.split(',').map(n => n.trim()).filter(Boolean);
+                  setTrainingForm(f => ({
+                    ...f,
+                    traineeKits: nameList.map(name => {
+                      const existing = f.traineeKits.find(k => k.traineeName === name);
+                      return existing ?? { traineeName: name, starterKitHannetons: '0', hasBook: false };
+                    }),
+                  }));
+                }}>
+                  Générer les kits pour chaque formé
                 </Button>
-              </div>
-              {trainingForm.materials.map((mat, idx) => (
-                <div key={idx} className="flex gap-2 items-end">
-                  <div className="flex-1">
-                    <Select value={mat.itemId} onValueChange={v => { const m = [...trainingForm.materials]; m[idx].itemId = v; setTrainingForm(f => ({ ...f, materials: m })); }}>
-                      <SelectTrigger><SelectValue placeholder="Article" /></SelectTrigger>
-                      <SelectContent>
-                        {items.map(i => <SelectItem key={i.id} value={i.id}>{i.name} ({i.currentQuantity} {i.unit})</SelectItem>)}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <Input className="w-20" type="number" min="1" placeholder="Qté" value={mat.quantity} onChange={e => { const m = [...trainingForm.materials]; m[idx].quantity = e.target.value; setTrainingForm(f => ({ ...f, materials: m })); }} />
-                  <Button type="button" variant="ghost" size="icon" className="h-9 w-9" onClick={() => setTrainingForm(f => ({ ...f, materials: f.materials.filter((_, i) => i !== idx) }))}>
-                    <Trash2 className="h-4 w-4 text-destructive" />
-                  </Button>
-                </div>
-              ))}
-            </div>
-
-            {/* Gifts given */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label className="text-base font-semibold">Éléments offerts aux formés</Label>
-                <Button type="button" variant="outline" size="sm" onClick={() => setTrainingForm(f => ({ ...f, gifts: [...f.gifts, { traineeName: '', itemId: items[0]?.id ?? '', quantity: '' }] }))}>
-                  <Gift className="h-3 w-3 mr-1" /> Ajouter
-                </Button>
-              </div>
-              {trainingForm.gifts.map((gift, idx) => (
-                <div key={idx} className="flex gap-2 items-end">
-                  <Input className="w-36" placeholder="Nom du formé" value={gift.traineeName} onChange={e => { const g = [...trainingForm.gifts]; g[idx].traineeName = e.target.value; setTrainingForm(f => ({ ...f, gifts: g })); }} />
-                  <div className="flex-1">
-                    <Select value={gift.itemId} onValueChange={v => { const g = [...trainingForm.gifts]; g[idx].itemId = v; setTrainingForm(f => ({ ...f, gifts: g })); }}>
-                      <SelectTrigger><SelectValue placeholder="Article" /></SelectTrigger>
-                      <SelectContent>
-                        {items.map(i => <SelectItem key={i.id} value={i.id}>{i.name} ({i.currentQuantity} {i.unit})</SelectItem>)}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <Input className="w-20" type="number" min="1" placeholder="Qté" value={gift.quantity} onChange={e => { const g = [...trainingForm.gifts]; g[idx].quantity = e.target.value; setTrainingForm(f => ({ ...f, gifts: g })); }} />
-                  <Button type="button" variant="ghost" size="icon" className="h-9 w-9" onClick={() => setTrainingForm(f => ({ ...f, gifts: f.gifts.filter((_, i) => i !== idx) }))}>
-                    <Trash2 className="h-4 w-4 text-destructive" />
-                  </Button>
-                </div>
-              ))}
-              {trainingForm.gifts.length === 0 && (
-                <p className="text-sm text-muted-foreground">Aucun élément offert. Cliquez "Ajouter" si des formés repartent avec des éléments.</p>
               )}
             </div>
+
+            <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-3 text-sm text-blue-700 dark:text-blue-400">
+              📋 La date d'inscription sera enregistrée automatiquement ({new Date().toLocaleDateString('fr-FR')}).
+            </div>
+
+            {/* Trainee kits (GABA) */}
+            {trainingForm.trainingType === 'gaba' && trainingForm.traineeKits.length > 0 && (
+              <div className="space-y-2">
+                <Label className="text-base font-semibold">Kits de démarrage par formé</Label>
+                <div className="rounded-lg border p-3 space-y-3">
+                  {trainingForm.traineeKits.map((kit, idx) => (
+                    <div key={idx} className="flex items-center gap-3 flex-wrap">
+                      <span className="font-medium min-w-[120px]">{kit.traineeName}</span>
+                      <div className="flex items-center gap-1">
+                        <Label className="text-xs whitespace-nowrap">Hannetons :</Label>
+                        <Input className="w-20" type="number" min="0" value={kit.starterKitHannetons} onChange={e => {
+                          const kits = [...trainingForm.traineeKits];
+                          kits[idx].starterKitHannetons = e.target.value;
+                          setTrainingForm(f => ({ ...f, traineeKits: kits }));
+                        }} />
+                      </div>
+                      <label className="flex items-center gap-1.5 text-sm cursor-pointer">
+                        <input type="checkbox" checked={kit.hasBook} onChange={e => {
+                          const kits = [...trainingForm.traineeKits];
+                          kits[idx].hasBook = e.target.checked;
+                          setTrainingForm(f => ({ ...f, traineeKits: kits }));
+                        }} className="rounded" />
+                        Livre
+                      </label>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Materials used (GABA only) */}
+            {trainingForm.trainingType === 'gaba' && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label className="text-base font-semibold">Matériels utilisés (sorties sans prix)</Label>
+                  <Button type="button" variant="outline" size="sm" onClick={() => setTrainingForm(f => ({ ...f, materials: [...f.materials, { itemId: items[0]?.id ?? '', quantity: '' }] }))}>
+                    <Plus className="h-3 w-3 mr-1" /> Ajouter
+                  </Button>
+                </div>
+                {trainingForm.materials.map((mat, idx) => (
+                  <div key={idx} className="flex gap-2 items-end">
+                    <div className="flex-1">
+                      <Select value={mat.itemId} onValueChange={v => { const m = [...trainingForm.materials]; m[idx].itemId = v; setTrainingForm(f => ({ ...f, materials: m })); }}>
+                        <SelectTrigger><SelectValue placeholder="Article" /></SelectTrigger>
+                        <SelectContent>
+                          {items.map(i => <SelectItem key={i.id} value={i.id}>{i.name} ({i.currentQuantity} {i.unit})</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <Input className="w-20" type="number" min="1" placeholder="Qté" value={mat.quantity} onChange={e => { const m = [...trainingForm.materials]; m[idx].quantity = e.target.value; setTrainingForm(f => ({ ...f, materials: m })); }} />
+                    <Button type="button" variant="ghost" size="icon" className="h-9 w-9" onClick={() => setTrainingForm(f => ({ ...f, materials: f.materials.filter((_, i) => i !== idx) }))}>
+                      <Trash2 className="h-4 w-4 text-destructive" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Gifts given (GABA only) */}
+            {trainingForm.trainingType === 'gaba' && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label className="text-base font-semibold">Autres éléments offerts aux formés</Label>
+                  <Button type="button" variant="outline" size="sm" onClick={() => setTrainingForm(f => ({ ...f, gifts: [...f.gifts, { traineeName: '', itemId: items[0]?.id ?? '', quantity: '' }] }))}>
+                    <Gift className="h-3 w-3 mr-1" /> Ajouter
+                  </Button>
+                </div>
+                {trainingForm.gifts.map((gift, idx) => (
+                  <div key={idx} className="flex gap-2 items-end">
+                    <Input className="w-36" placeholder="Nom du formé" value={gift.traineeName} onChange={e => { const g = [...trainingForm.gifts]; g[idx].traineeName = e.target.value; setTrainingForm(f => ({ ...f, gifts: g })); }} />
+                    <div className="flex-1">
+                      <Select value={gift.itemId} onValueChange={v => { const g = [...trainingForm.gifts]; g[idx].itemId = v; setTrainingForm(f => ({ ...f, gifts: g })); }}>
+                        <SelectTrigger><SelectValue placeholder="Article" /></SelectTrigger>
+                        <SelectContent>
+                          {items.map(i => <SelectItem key={i.id} value={i.id}>{i.name} ({i.currentQuantity} {i.unit})</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <Input className="w-20" type="number" min="1" placeholder="Qté" value={gift.quantity} onChange={e => { const g = [...trainingForm.gifts]; g[idx].quantity = e.target.value; setTrainingForm(f => ({ ...f, gifts: g })); }} />
+                    <Button type="button" variant="ghost" size="icon" className="h-9 w-9" onClick={() => setTrainingForm(f => ({ ...f, gifts: f.gifts.filter((_, i) => i !== idx) }))}>
+                      <Trash2 className="h-4 w-4 text-destructive" />
+                    </Button>
+                  </div>
+                ))}
+                {trainingForm.gifts.length === 0 && (
+                  <p className="text-sm text-muted-foreground">Aucun élément offert. Cliquez "Ajouter" si des formés repartent avec des éléments.</p>
+                )}
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setTrainingDialog(false)}>Annuler</Button>

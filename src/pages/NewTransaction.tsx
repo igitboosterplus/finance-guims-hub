@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { departments, addTransaction, PAYMENT_METHODS, type DepartmentId, type PaymentMethod } from "@/lib/data";
+import { departments, addTransaction, PAYMENT_METHODS, isEnrollmentCategory, isTranche, type DepartmentId, type PaymentMethod } from "@/lib/data";
 import { addAuditEntry, getCurrentUser, hasPermission, hasDepartmentAccess } from "@/lib/auth";
 import { getStockItems, getStockByCategory, addStockMovement, type StockItem } from "@/lib/stock";
 import { toast } from "sonner";
@@ -24,6 +24,7 @@ export default function NewTransaction() {
   const [type, setType] = useState<'income' | 'expense'>('income');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('especes');
   const [category, setCategory] = useState('');
+  const [personName, setPersonName] = useState('');
   const [description, setDescription] = useState('');
   const [amount, setAmount] = useState('');
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
@@ -50,6 +51,11 @@ export default function NewTransaction() {
     e.preventDefault();
     if (!departmentId || !category || !amount || !date) {
       toast.error("Veuillez remplir tous les champs obligatoires");
+      return;
+    }
+
+    if (!personName.trim()) {
+      toast.error("Veuillez saisir le nom de la personne");
       return;
     }
 
@@ -97,10 +103,13 @@ export default function NewTransaction() {
       type,
       paymentMethod,
       category,
+      personName: personName.trim(),
       description,
       amount: parsedAmount,
       date,
       ...(isStockCategory && parsedQty > 0 ? { quantity: parsedQty, stockItemId } : {}),
+      ...(isEnrollmentCategory(category) ? { enrollmentDate: new Date().toISOString() } : {}),
+      ...(isTranche(category) ? { tranche: category.replace('Frais de formation - ', '') } : {}),
     });
 
     const currentUser = getCurrentUser();
@@ -111,9 +120,9 @@ export default function NewTransaction() {
         action: 'create',
         entityType: 'transaction',
         entityId: '',
-        details: `Création: ${category} - ${parsedAmount} FCFA (${departmentId})`,
+        details: `Création: ${category} - ${personName.trim()} - ${parsedAmount} FCFA (${departmentId})`,
         previousData: '',
-        newData: JSON.stringify({ departmentId, type, paymentMethod, category, description, amount: parsedAmount, date }),
+        newData: JSON.stringify({ departmentId, type, paymentMethod, category, personName: personName.trim(), description, amount: parsedAmount, date }),
       });
     }
 
@@ -271,6 +280,27 @@ export default function NewTransaction() {
                     )}
                   </div>
                 </div>
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <Label>Nom de la personne *</Label>
+              <Input
+                placeholder="Ex: Jean Dupont, Marie Kamga..."
+                value={personName}
+                onChange={(e) => setPersonName(e.target.value)}
+                maxLength={100}
+              />
+              <p className="text-xs text-muted-foreground">Client, fournisseur, formé, élève, etc.</p>
+            </div>
+
+            {isEnrollmentCategory(category) && (
+              <div className="rounded-lg border border-dashed border-blue-400/40 bg-blue-50 dark:bg-blue-900/20 p-4 space-y-2">
+                <p className="text-sm font-medium text-blue-700 dark:text-blue-400">📋 Inscription / Formation</p>
+                <p className="text-xs text-muted-foreground">La date d'inscription sera enregistrée automatiquement par le système.</p>
+                {isTranche(category) && (
+                  <p className="text-xs text-blue-600 dark:text-blue-400">Tranche : <span className="font-semibold">{category.replace('Frais de formation - ', '')}</span></p>
+                )}
               </div>
             )}
 

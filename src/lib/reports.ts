@@ -133,13 +133,14 @@ export function downloadDashboardReport(opts?: ReportOptions) {
     y = addSectionTitle(doc, `Détail des transactions (${txs.length})`, y);
     autoTable(doc, {
       startY: y,
-      head: [["N°", "Date", "Département", "Type", "Catégorie", "Motif / Description", "Caisse", "Montant"]],
+      head: [["N°", "Date", "Département", "Nom", "Type", "Catégorie", "Description", "Caisse", "Montant"]],
       body: txs.map((tx, i) => {
         const dept = getDepartment(tx.departmentId);
         return [
           String(i + 1),
           new Date(tx.date).toLocaleDateString("fr-FR"),
           dept.name,
+          tx.personName || "—",
           tx.type === "income" ? "Revenu" : "Dépense",
           tx.category,
           tx.description || "—",
@@ -153,8 +154,8 @@ export function downloadDashboardReport(opts?: ReportOptions) {
       styles: { fontSize: 8 },
       columnStyles: {
         0: { cellWidth: 12 },
-        5: { cellWidth: 65 },
-        7: { halign: "right", fontStyle: "bold" },
+        6: { cellWidth: 55 },
+        8: { halign: "right", fontStyle: "bold" },
       },
       alternateRowStyles: { fillColor: [245, 247, 250] },
     });
@@ -207,10 +208,11 @@ export function downloadDepartmentReport(deptId: DepartmentId, opts?: ReportOpti
     y = addSectionTitle(doc, `Détail des transactions (${txs.length})`, y);
     autoTable(doc, {
       startY: y,
-      head: [["N°", "Date", "Type", "Catégorie", "Motif / Description", "Caisse", "Montant"]],
+      head: [["N°", "Date", "Nom", "Type", "Catégorie", "Description", "Caisse", "Montant"]],
       body: txs.map((tx, i) => [
         String(i + 1),
         new Date(tx.date).toLocaleDateString("fr-FR"),
+        tx.personName || "—",
         tx.type === "income" ? "Revenu" : "Dépense",
         tx.category,
         tx.description || "—",
@@ -223,8 +225,8 @@ export function downloadDepartmentReport(deptId: DepartmentId, opts?: ReportOpti
       styles: { fontSize: 8 },
       columnStyles: {
         0: { cellWidth: 12 },
-        4: { cellWidth: 70 },
-        6: { halign: "right", fontStyle: "bold" },
+        5: { cellWidth: 60 },
+        7: { halign: "right", fontStyle: "bold" },
       },
       alternateRowStyles: { fillColor: [245, 247, 250] },
     });
@@ -291,21 +293,32 @@ export function downloadStockReport(opts?: ReportOptions) {
     y = addSectionTitle(doc, `Formations (${trainings.length})`, y);
     autoTable(doc, {
       startY: y,
-      head: [["Date", "Parc", "Formés", "Matériels utilisés", "Éléments offerts"]],
+      head: [["Date", "Type", "Parc/Lieu", "Tranche", "Inscrit le", "Formés", "Kits", "Matériels", "Offerts"]],
       body: trainings
         .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-        .map(t => [
-          new Date(t.date).toLocaleDateString("fr-FR"),
-          t.parkName,
-          t.trainees.join(", "),
-          t.materialsUsed.map(m => { const it = items.find(i => i.id === m.itemId); return `${it?.name ?? '?'} ×${m.quantity}`; }).join(", ") || "—",
-          t.giftsGiven.map(g => { const it = items.find(i => i.id === g.itemId); return `${it?.name ?? '?'} ×${g.quantity} → ${g.traineeName}`; }).join(", ") || "—",
-        ]),
+        .map(t => {
+          const kitsInfo = (t.traineeKits ?? []).map(k => {
+            const parts: string[] = [];
+            if (k.starterKitHannetons > 0) parts.push(`${k.starterKitHannetons}h`);
+            if (k.hasBook) parts.push('livre');
+            return parts.length > 0 ? `${k.traineeName}(${parts.join(',')})` : '';
+          }).filter(Boolean).join(', ') || '—';
+          return [
+            new Date(t.date).toLocaleDateString("fr-FR"),
+            t.trainingType === 'guims-academy' ? 'Academy' : 'GABA',
+            t.parkName,
+            t.tranche || '—',
+            t.enrollmentDate ? new Date(t.enrollmentDate).toLocaleDateString("fr-FR") : '—',
+            t.trainees.join(", "),
+            kitsInfo,
+            t.materialsUsed.map(m => { const it = items.find(i => i.id === m.itemId); return `${it?.name ?? '?'} ×${m.quantity}`; }).join(", ") || "—",
+            t.giftsGiven.map(g => { const it = items.find(i => i.id === g.itemId); return `${it?.name ?? '?'} ×${g.quantity} → ${g.traineeName}`; }).join(", ") || "—",
+          ];
+        }),
       theme: "striped",
-      headStyles: { fillColor: [180, 130, 30], fontSize: 8 },
+      headStyles: { fillColor: [180, 130, 30], fontSize: 7 },
       margin: { left: 14 },
-      styles: { fontSize: 8 },
-      columnStyles: { 2: { cellWidth: 50 }, 3: { cellWidth: 55 }, 4: { cellWidth: 55 } },
+      styles: { fontSize: 7 },
     });
     y = (doc as any).lastAutoTable.finalY + 10;
   }
@@ -357,13 +370,14 @@ export function downloadTransactionsReport(opts?: ReportOptions) {
   if (txs.length > 0) {
     autoTable(doc, {
       startY: y,
-      head: [["N°", "Date", "Département", "Type", "Catégorie", "Motif / Description", "Caisse", "Montant"]],
+      head: [["N°", "Date", "Département", "Nom", "Type", "Catégorie", "Description", "Caisse", "Montant"]],
       body: txs.map((tx, i) => {
         const dept = getDepartment(tx.departmentId);
         return [
           String(i + 1),
           new Date(tx.date).toLocaleDateString("fr-FR"),
           dept.name,
+          tx.personName || "—",
           tx.type === "income" ? "Revenu" : "Dépense",
           tx.category,
           tx.description || "—",
@@ -377,8 +391,8 @@ export function downloadTransactionsReport(opts?: ReportOptions) {
       styles: { fontSize: 8 },
       columnStyles: {
         0: { cellWidth: 12 },
-        5: { cellWidth: 60 },
-        7: { halign: "right", fontStyle: "bold" },
+        6: { cellWidth: 55 },
+        8: { halign: "right", fontStyle: "bold" },
       },
       alternateRowStyles: { fillColor: [245, 247, 250] },
     });

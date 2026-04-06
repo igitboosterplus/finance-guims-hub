@@ -30,6 +30,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
 
   // Edit form state
   const [editCategory, setEditCategory] = useState("");
+  const [editPersonName, setEditPersonName] = useState("");
   const [editDescription, setEditDescription] = useState("");
   const [editAmount, setEditAmount] = useState("");
   const [editDate, setEditDate] = useState("");
@@ -41,6 +42,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
       const q = search.toLowerCase();
       const matchSearch = !q ||
         tx.category.toLowerCase().includes(q) ||
+        (tx.personName || '').toLowerCase().includes(q) ||
         tx.description.toLowerCase().includes(q) ||
         getDepartment(tx.departmentId).name.toLowerCase().includes(q) ||
         getPaymentMethodLabel(tx.paymentMethod || 'especes').toLowerCase().includes(q) ||
@@ -84,6 +86,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
   const openEdit = (tx: Transaction) => {
     setEditTx(tx);
     setEditCategory(tx.category);
+    setEditPersonName(tx.personName || '');
     setEditDescription(tx.description);
     setEditAmount(String(tx.amount));
     setEditDate(tx.date);
@@ -104,16 +107,17 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
       toast.error("Montant invalide");
       return;
     }
-    const previousData = JSON.stringify({ type: editTx.type, amount: editTx.amount, category: editTx.category, date: editTx.date, paymentMethod: editTx.paymentMethod, description: editTx.description });
+    const previousData = JSON.stringify({ type: editTx.type, amount: editTx.amount, category: editTx.category, personName: editTx.personName, date: editTx.date, paymentMethod: editTx.paymentMethod, description: editTx.description });
     updateTransaction(editTx.id, {
       category: editCategory,
+      personName: editPersonName.trim(),
       description: editDescription,
       amount: parsedAmount,
       date: editDate,
       type: editType,
       paymentMethod: editPaymentMethod,
     });
-    const newData = JSON.stringify({ type: editType, amount: parsedAmount, category: editCategory, date: editDate, paymentMethod: editPaymentMethod, description: editDescription });
+    const newData = JSON.stringify({ type: editType, amount: parsedAmount, category: editCategory, personName: editPersonName, date: editDate, paymentMethod: editPaymentMethod, description: editDescription });
     if (currentUser) {
       addAuditEntry({
         userId: currentUser.id,
@@ -194,6 +198,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
                   <TableHead>Type</TableHead>
                   <TableHead>Caisse</TableHead>
                   {showDepartment && <TableHead>Département</TableHead>}
+                  <TableHead>Nom</TableHead>
                   <TableHead>Catégorie</TableHead>
                   <TableHead>Description</TableHead>
                   <TableHead className="text-right">Montant</TableHead>
@@ -234,6 +239,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
                           </div>
                         </TableCell>
                       )}
+                      <TableCell className="text-sm font-medium">{tx.personName || '—'}</TableCell>
                       <TableCell className="text-sm">{tx.category}</TableCell>
                       <TableCell className="text-sm text-muted-foreground max-w-[200px] truncate">{tx.description}</TableCell>
                       <TableCell className={`text-right font-semibold ${tx.type === 'income' ? 'text-success' : 'text-destructive'}`}>
@@ -354,6 +360,10 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
               <div className="space-y-2">
                 <Label>Montant (FCFA)</Label>
                 <Input type="number" step="1" min="1" value={editAmount} onChange={(e) => setEditAmount(e.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label>Nom de la personne</Label>
+                <Input placeholder="Nom..." value={editPersonName} onChange={(e) => setEditPersonName(e.target.value)} maxLength={100} />
               </div>
             </div>
             <div className="space-y-2">
