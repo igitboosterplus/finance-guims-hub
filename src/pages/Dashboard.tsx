@@ -30,12 +30,12 @@ export default function Dashboard() {
   }, []);
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6 sm:space-y-8">
       {/* Hero header */}
-      <div className="rounded-2xl bg-gradient-to-r from-primary/10 via-primary/5 to-transparent p-6 flex items-center gap-5">
-        <img src={logoGuimsGroup} alt="Guims Group" className="h-16 w-16 rounded-2xl object-cover shadow-md hidden sm:block" />
+      <div className="rounded-2xl bg-gradient-to-r from-primary/10 via-primary/5 to-transparent p-4 sm:p-6 flex items-center gap-3 sm:gap-5">
+        <img src={logoGuimsGroup} alt="Guims Group" className="h-12 w-12 sm:h-16 sm:w-16 rounded-2xl object-cover shadow-md hidden sm:block" />
         <div className="flex-1">
-          <h2 className="text-2xl font-bold text-foreground">Tableau de bord</h2>
+          <h2 className="text-xl sm:text-2xl font-bold text-foreground">Tableau de bord</h2>
           <p className="text-muted-foreground text-sm">Vue globale des finances de Guims Group</p>
         </div>
         <div className="flex gap-2">

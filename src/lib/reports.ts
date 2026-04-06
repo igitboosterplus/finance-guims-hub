@@ -6,6 +6,7 @@ import {
   getPaymentMethodLabel, getStatsByPaymentMethod, type DepartmentId, type Transaction,
 } from "./data";
 import { getStockItems, getStockMovements, getCategoryLabel, getStockStats, getTrainings, getMovementTypeLabel } from "./stock";
+import { getAuditLog, buildHumanDiff } from "./auth";
 
 // ==================== HELPERS ====================
 
@@ -399,4 +400,53 @@ export function downloadTransactionsReport(opts?: ReportOptions) {
   }
 
   doc.save(`rapport-transactions-${new Date().toISOString().slice(0, 10)}.pdf`);
+}
+
+// ==================== AUDIT LOG REPORT ====================
+
+const AUDIT_ACTION_LABELS: Record<string, string> = {
+  create: 'Création',
+  update: 'Modification',
+  delete: 'Suppression',
+};
+
+export function downloadAuditReport() {
+  const doc = setupDoc("Journal d'audit");
+  const log = getAuditLog().sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  let y = 44;
+
+  y = addSectionTitle(doc, `Total : ${log.length} entrées`, y);
+
+  if (log.length > 0) {
+    autoTable(doc, {
+      startY: y,
+      head: [["Date", "Utilisateur", "Action", "Détails", "Justification"]],
+      body: log.map(e => {
+        const readableDetails = e.action === 'update' && e.previousData && e.newData
+          ? buildHumanDiff(e.previousData, e.newData)
+          : e.details;
+        return [
+          new Date(e.timestamp).toLocaleString("fr-FR"),
+          e.username,
+          AUDIT_ACTION_LABELS[e.action] || e.action,
+          readableDetails || e.details,
+          e.justification || "—",
+        ];
+      }),
+      theme: "striped",
+      headStyles: { fillColor: [34, 87, 122], fontSize: 8 },
+      margin: { left: 14 },
+      styles: { fontSize: 7, cellPadding: 3 },
+      columnStyles: {
+        0: { cellWidth: 38 },
+        1: { cellWidth: 30 },
+        2: { cellWidth: 26 },
+        3: { cellWidth: 120 },
+        4: { cellWidth: 55 },
+      },
+      alternateRowStyles: { fillColor: [245, 247, 250] },
+    });
+  }
+
+  doc.save(`rapport-audit-${new Date().toISOString().slice(0, 10)}.pdf`);
 }

@@ -48,6 +48,9 @@ export interface Transaction {
   // Champs spécifiques formations
   enrollmentDate?: string;  // Date d'inscription (auto)
   tranche?: string;         // Numéro de tranche (Guims Academy)
+  formationName?: string;   // Nom de la formation choisie
+  desiredTrainingDate?: string; // Date souhaitée de la formation
+  formationKit?: string[];  // Éléments du kit (starter kit, livre, etc.)
 }
 
 export const departments: Department[] = [
@@ -225,3 +228,31 @@ export const isEnrollmentCategory = (category: string): boolean =>
 
 export const isTranche = (category: string): boolean =>
   category.startsWith('Frais de formation - Tranche');
+
+// Formations disponibles par département
+export interface FormationOption {
+  name: string;
+  department: DepartmentId;
+  kitElements: string[];
+  defaultAmount?: number;
+}
+
+export const AVAILABLE_FORMATIONS: FormationOption[] = [
+  // GABA
+  { name: 'Formation élevage de hannetons', department: 'gaba', kitElements: ['Starter Kit Hannetons', 'Livre de formation', 'Matériel pratique'] },
+  { name: 'Formation intrants agricoles', department: 'gaba', kitElements: ['Kit intrants', 'Manuel technique'] },
+  // Guims Educ
+  { name: 'Cours de répétition', department: 'guims-educ', kitElements: ['Support de cours', 'Cahier d\'exercices'] },
+  { name: 'Prépas concours', department: 'guims-educ', kitElements: ['Annales', 'Fiches de révision'] },
+  { name: 'Coaching scolaire', department: 'guims-educ', kitElements: ['Guide de coaching', 'Bilan initial'] },
+  { name: 'Cours à domicile', department: 'guims-educ', kitElements: ['Support de cours'] },
+  { name: 'Cours en ligne', department: 'guims-educ', kitElements: ['Accès plateforme', 'Support PDF'] },
+  // Guims Academy
+  { name: 'Formation développement web', department: 'guims-academy', kitElements: ['Starter Kit', 'Livre', 'Accès plateforme'] },
+  { name: 'Formation marketing digital', department: 'guims-academy', kitElements: ['Starter Kit', 'Livre', 'Accès outils'] },
+  { name: 'Formation graphisme', department: 'guims-academy', kitElements: ['Starter Kit', 'Livre', 'Licence logiciel'] },
+  { name: 'Formation bureautique', department: 'guims-academy', kitElements: ['Support de cours', 'Livre'] },
+];
+
+export const getFormationsForDepartment = (departmentId: DepartmentId): FormationOption[] =>
+  AVAILABLE_FORMATIONS.filter(f => f.department === departmentId);

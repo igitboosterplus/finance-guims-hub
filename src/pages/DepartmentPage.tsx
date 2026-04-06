@@ -44,33 +44,35 @@ export default function DepartmentPage() {
   }
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6 sm:space-y-8">
       {/* Department hero header */}
-      <div className={`rounded-2xl ${dept.bgLightClass} p-6`}>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <img src={dept.logo} alt={dept.name} className="h-16 w-16 rounded-2xl object-cover shadow-md bg-card" />
+      <div className={`rounded-2xl ${dept.bgLightClass} p-4 sm:p-6`}>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-3 sm:gap-4">
+            <img src={dept.logo} alt={dept.name} className="h-12 w-12 sm:h-16 sm:w-16 rounded-2xl object-cover shadow-md bg-card" />
             <div>
-              <h2 className="text-2xl font-bold text-foreground">{dept.name}</h2>
-              <p className="text-sm text-muted-foreground">{dept.description}</p>
+              <h2 className="text-xl sm:text-2xl font-bold text-foreground">{dept.name}</h2>
+              <p className="text-xs sm:text-sm text-muted-foreground">{dept.description}</p>
             </div>
           </div>
+          <div className="flex flex-wrap gap-2">
           {hasPermission(getCurrentUser(), 'canCreateTransaction') && (
-            <Button onClick={() => navigate(`/transaction/new?dept=${dept.id}`)} className="shadow-md">
-              <Plus className="h-4 w-4 mr-2" />
-              Nouvelle transaction
+            <Button size="sm" onClick={() => navigate(`/transaction/new?dept=${dept.id}`)} className="shadow-md">
+              <Plus className="h-4 w-4 mr-1 sm:mr-2" />
+              <span className="hidden sm:inline">Nouvelle transaction</span><span className="sm:hidden">Nouveau</span>
             </Button>
           )}
           {dept.id === 'gaba' && (
-            <Button variant="outline" onClick={() => navigate('/gaba/stock')} className="shadow-md">
-              <Package className="h-4 w-4 mr-2" />
-              Gestion des stocks
+            <Button variant="outline" size="sm" onClick={() => navigate('/gaba/stock')} className="shadow-md">
+              <Package className="h-4 w-4 mr-1 sm:mr-2" />
+              <span className="hidden sm:inline">Gestion des stocks</span><span className="sm:hidden">Stocks</span>
             </Button>
           )}
-          <Button variant="outline" onClick={() => setReportOpen(true)} className="shadow-md">
-            <FileDown className="h-4 w-4 mr-2" />
-            Rapport PDF
+          <Button variant="outline" size="sm" onClick={() => setReportOpen(true)} className="shadow-md">
+            <FileDown className="h-4 w-4 mr-1 sm:mr-2" />
+            <span className="hidden sm:inline">Rapport PDF</span><span className="sm:hidden">PDF</span>
           </Button>
+          </div>
         </div>
       </div>
 

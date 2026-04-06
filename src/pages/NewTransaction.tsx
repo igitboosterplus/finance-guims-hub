@@ -6,11 +6,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { departments, addTransaction, PAYMENT_METHODS, isEnrollmentCategory, isTranche, type DepartmentId, type PaymentMethod } from "@/lib/data";
+import { departments, addTransaction, PAYMENT_METHODS, isEnrollmentCategory, isTranche, getFormationsForDepartment, type DepartmentId, type PaymentMethod, type FormationOption } from "@/lib/data";
 import { addAuditEntry, getCurrentUser, hasPermission, hasDepartmentAccess } from "@/lib/auth";
 import { getStockItems, getStockByCategory, addStockMovement, type StockItem } from "@/lib/stock";
 import { toast } from "sonner";
-import { ArrowLeft, ShieldAlert, Package } from "lucide-react";
+import { ArrowLeft, ShieldAlert, Package, GraduationCap, CheckSquare } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 
 export default function NewTransaction() {
   const navigate = useNavigate();
@@ -30,6 +31,9 @@ export default function NewTransaction() {
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [quantity, setQuantity] = useState('');
   const [stockItemId, setStockItemId] = useState('');
+  const [formationName, setFormationName] = useState('');
+  const [desiredTrainingDate, setDesiredTrainingDate] = useState('');
+  const [selectedKitElements, setSelectedKitElements] = useState<string[]>([]);
 
   const selectedDept = departments.find(d => d.id === departmentId);
   const categories = selectedDept
@@ -46,6 +50,23 @@ export default function NewTransaction() {
   const isStockCategory = departmentId === 'gaba' && category in STOCK_CATEGORIES_MAP;
   const stockDirection = isStockCategory ? STOCK_CATEGORIES_MAP[category] : null;
   const availableStockItems: StockItem[] = isStockCategory ? getStockItems() : [];
+
+  // Formation enrollment
+  const isEnrollment = isEnrollmentCategory(category);
+  const availableFormations = departmentId ? getFormationsForDepartment(departmentId as DepartmentId) : [];
+  const selectedFormation = availableFormations.find(f => f.name === formationName);
+
+  const handleFormationChange = (name: string) => {
+    setFormationName(name);
+    const formation = availableFormations.find(f => f.name === name);
+    setSelectedKitElements(formation ? [...formation.kitElements] : []);
+  };
+
+  const toggleKitElement = (element: string) => {
+    setSelectedKitElements(prev =>
+      prev.includes(element) ? prev.filter(e => e !== element) : [...prev, element]
+    );
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -110,6 +131,9 @@ export default function NewTransaction() {
       ...(isStockCategory && parsedQty > 0 ? { quantity: parsedQty, stockItemId } : {}),
       ...(isEnrollmentCategory(category) ? { enrollmentDate: new Date().toISOString() } : {}),
       ...(isTranche(category) ? { tranche: category.replace('Frais de formation - ', '') } : {}),
+      ...(isEnrollment && formationName ? { formationName } : {}),
+      ...(isEnrollment && desiredTrainingDate ? { desiredTrainingDate } : {}),
+      ...(isEnrollment && selectedKitElements.length > 0 ? { formationKit: selectedKitElements } : {}),
     });
 
     const currentUser = getCurrentUser();
@@ -159,7 +183,7 @@ export default function NewTransaction() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Département *</Label>
-                <Select value={departmentId} onValueChange={(v) => { setDepartmentId(v); setCategory(''); setStockItemId(''); setQuantity(''); }}>
+                <Select value={departmentId} onValueChange={(v) => { setDepartmentId(v); setCategory(''); setStockItemId(''); setQuantity(''); setFormationName(''); setSelectedKitElements([]); setDesiredTrainingDate(''); }}>
                   <SelectTrigger>
                     <SelectValue placeholder="Choisir un département" />
                   </SelectTrigger>
@@ -178,7 +202,7 @@ export default function NewTransaction() {
 
               <div className="space-y-2">
                 <Label>Type *</Label>
-                <Select value={type} onValueChange={(v) => { setType(v as 'income' | 'expense'); setCategory(''); setStockItemId(''); setQuantity(''); }}>
+                <Select value={type} onValueChange={(v) => { setType(v as 'income' | 'expense'); setCategory(''); setStockItemId(''); setQuantity(''); setFormationName(''); setSelectedKitElements([]); setDesiredTrainingDate(''); }}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
@@ -206,7 +230,7 @@ export default function NewTransaction() {
               </div>
               <div className="space-y-2">
                 <Label>Catégorie *</Label>
-                <Select value={category} onValueChange={(v) => { setCategory(v); setStockItemId(''); setQuantity(''); }} disabled={!departmentId}>
+                <Select value={category} onValueChange={(v) => { setCategory(v); setStockItemId(''); setQuantity(''); setFormationName(''); setSelectedKitElements([]); setDesiredTrainingDate(''); }} disabled={!departmentId}>
                   <SelectTrigger>
                     <SelectValue placeholder="Choisir une catégorie" />
                   </SelectTrigger>
@@ -294,12 +318,55 @@ export default function NewTransaction() {
               <p className="text-xs text-muted-foreground">Client, fournisseur, formé, élève, etc.</p>
             </div>
 
-            {isEnrollmentCategory(category) && (
-              <div className="rounded-lg border border-dashed border-blue-400/40 bg-blue-50 dark:bg-blue-900/20 p-4 space-y-2">
-                <p className="text-sm font-medium text-blue-700 dark:text-blue-400">📋 Inscription / Formation</p>
+            {isEnrollment && (
+              <div className="rounded-lg border border-dashed border-blue-400/40 bg-blue-50 dark:bg-blue-900/20 p-4 space-y-4">
+                <div className="flex items-center gap-2 text-sm font-medium text-blue-700 dark:text-blue-400">
+                  <GraduationCap className="h-4 w-4" />
+                  Inscription / Formation
+                </div>
                 <p className="text-xs text-muted-foreground">La date d'inscription sera enregistrée automatiquement par le système.</p>
                 {isTranche(category) && (
                   <p className="text-xs text-blue-600 dark:text-blue-400">Tranche : <span className="font-semibold">{category.replace('Frais de formation - ', '')}</span></p>
+                )}
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Formation choisie *</Label>
+                    <Select value={formationName} onValueChange={handleFormationChange}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Sélectionner une formation" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {availableFormations.map((f) => (
+                          <SelectItem key={f.name} value={f.name}>{f.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Date souhaitée de formation</Label>
+                    <Input type="date" value={desiredTrainingDate} onChange={(e) => setDesiredTrainingDate(e.target.value)} />
+                  </div>
+                </div>
+
+                {selectedFormation && (
+                  <div className="space-y-2">
+                    <Label className="flex items-center gap-2">
+                      <CheckSquare className="h-3.5 w-3.5" />
+                      Éléments du kit / formation
+                    </Label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {selectedFormation.kitElements.map((element) => (
+                        <label key={element} className="flex items-center gap-2 text-sm cursor-pointer rounded-md border p-2 hover:bg-accent">
+                          <Checkbox
+                            checked={selectedKitElements.includes(element)}
+                            onCheckedChange={() => toggleKitElement(element)}
+                          />
+                          {element}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
                 )}
               </div>
             )}

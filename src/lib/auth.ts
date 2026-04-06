@@ -50,6 +50,7 @@ export interface AuditLogEntry {
   details: string;
   previousData?: string;
   newData?: string;
+  justification?: string;
   timestamp: string;
   seen: boolean;
 }
@@ -273,18 +274,40 @@ export function getUnseenAuditCount(): number {
   return getAuditLog().filter(e => !e.seen).length;
 }
 
-export function exportAuditReportCSV(): string {
-  const log = getAuditLog();
-  const headers = ['Date', 'Utilisateur', 'Action', 'Détails', 'Données précédentes', 'Nouvelles données'];
-  const rows = log
-    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-    .map(e => [
-      new Date(e.timestamp).toLocaleString('fr-FR'),
-      e.username,
-      e.action === 'create' ? 'Création' : e.action === 'update' ? 'Modification' : 'Suppression',
-      `"${e.details.replace(/"/g, '""')}"`,
-      e.previousData ? `"${e.previousData.replace(/"/g, '""')}"` : '',
-      e.newData ? `"${e.newData.replace(/"/g, '""')}"` : '',
-    ].join(';'));
-  return [headers.join(';'), ...rows].join('\n');
+const FIELD_LABELS: Record<string, string> = {
+  type: 'Type',
+  amount: 'Montant',
+  category: 'Catégorie',
+  personName: 'Nom',
+  date: 'Date',
+  paymentMethod: 'Caisse',
+  description: 'Description',
+};
+
+const TYPE_LABELS: Record<string, string> = { income: 'Revenu', expense: 'Dépense' };
+const PAYMENT_LABELS: Record<string, string> = { especes: 'Espèces', momo: 'MTN MoMo', om: 'Orange Money', banque: 'Banque' };
+
+function fmtFieldValue(key: string, value: unknown): string {
+  if (key === 'type') return TYPE_LABELS[String(value)] ?? String(value);
+  if (key === 'paymentMethod') return PAYMENT_LABELS[String(value)] ?? String(value);
+  if (key === 'amount') return Number(value).toLocaleString('fr-FR') + ' FCFA';
+  return String(value ?? '');
+}
+
+export function buildHumanDiff(previousJson: string, newJson: string): string {
+  try {
+    const prev = JSON.parse(previousJson);
+    const next = JSON.parse(newJson);
+    const changes: string[] = [];
+    for (const key of Object.keys(FIELD_LABELS)) {
+      const oldVal = prev[key];
+      const newVal = next[key];
+      if (String(oldVal ?? '') !== String(newVal ?? '')) {
+        changes.push(`${FIELD_LABELS[key]}: ${fmtFieldValue(key, oldVal)} → ${fmtFieldValue(key, newVal)}`);
+      }
+    }
+    return changes.length > 0 ? changes.join(' | ') : 'Aucun changement';
+  } catch {
+    return '';
+  }
 }

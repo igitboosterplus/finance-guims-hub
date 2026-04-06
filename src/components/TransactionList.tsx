@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Trash2, ArrowUpRight, ArrowDownRight, Search, Pencil, ChevronLeft, ChevronRight, Download } from "lucide-react";
 import { formatCurrency, type Transaction, type PaymentMethod, getDepartment, deleteTransaction, updateTransaction, departments, exportTransactionsCSV, PAYMENT_METHODS, getPaymentMethodLabel } from "@/lib/data";
-import { addAuditEntry, getCurrentUser, isSuperAdmin, hasPermission } from "@/lib/auth";
+import { addAuditEntry, getCurrentUser, isSuperAdmin, hasPermission, buildHumanDiff } from "@/lib/auth";
 import { toast } from "sonner";
 
 interface TransactionListProps {
@@ -36,6 +36,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
   const [editDate, setEditDate] = useState("");
   const [editType, setEditType] = useState<'income' | 'expense'>('income');
   const [editPaymentMethod, setEditPaymentMethod] = useState<PaymentMethod>('especes');
+  const [editJustification, setEditJustification] = useState("");
 
   const filtered = [...transactions]
     .filter((tx) => {
@@ -92,6 +93,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
     setEditDate(tx.date);
     setEditType(tx.type);
     setEditPaymentMethod(tx.paymentMethod || 'especes');
+    setEditJustification("");
   };
 
   const handleEdit = () => {
@@ -107,6 +109,10 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
       toast.error("Montant invalide");
       return;
     }
+    if (!editJustification.trim()) {
+      toast.error("Veuillez saisir la justification de la modification");
+      return;
+    }
     const previousData = JSON.stringify({ type: editTx.type, amount: editTx.amount, category: editTx.category, personName: editTx.personName, date: editTx.date, paymentMethod: editTx.paymentMethod, description: editTx.description });
     updateTransaction(editTx.id, {
       category: editCategory,
@@ -118,6 +124,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
       paymentMethod: editPaymentMethod,
     });
     const newData = JSON.stringify({ type: editType, amount: parsedAmount, category: editCategory, personName: editPersonName, date: editDate, paymentMethod: editPaymentMethod, description: editDescription });
+    const readableDetails = buildHumanDiff(previousData, newData);
     if (currentUser) {
       addAuditEntry({
         userId: currentUser.id,
@@ -125,9 +132,10 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
         action: 'update',
         entityType: 'transaction',
         entityId: editTx.id,
-        details: `Modification: ${editTx.category} → ${editCategory}`,
+        details: readableDetails || `Modification: ${editTx.category} → ${editCategory}`,
         previousData,
         newData,
+        justification: editJustification.trim(),
       });
     }
     setEditTx(null);
@@ -190,8 +198,8 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
         </div>
       ) : (
         <>
-          <div className="rounded-lg border bg-card">
-            <Table>
+          <div className="rounded-lg border bg-card overflow-x-auto">
+            <Table className="min-w-[700px]">
               <TableHeader>
                 <TableRow>
                   <TableHead>Date</TableHead>
@@ -305,12 +313,12 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
 
       {/* Edit dialog */}
       <Dialog open={!!editTx} onOpenChange={(open) => !open && setEditTx(null)}>
-        <DialogContent>
+        <DialogContent className="max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Modifier la transaction</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Type</Label>
                 <Select value={editType} onValueChange={(v) => { setEditType(v as 'income' | 'expense'); setEditCategory(''); }}>
@@ -337,7 +345,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
                 </Select>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Catégorie</Label>
                 <Select value={editCategory} onValueChange={setEditCategory}>
@@ -356,7 +364,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
                 <Input type="date" value={editDate} onChange={(e) => setEditDate(e.target.value)} />
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Montant (FCFA)</Label>
                 <Input type="number" step="1" min="1" value={editAmount} onChange={(e) => setEditAmount(e.target.value)} />
@@ -369,6 +377,17 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
             <div className="space-y-2">
               <Label>Description</Label>
               <Textarea value={editDescription} onChange={(e) => setEditDescription(e.target.value)} maxLength={500} />
+            </div>
+            <div className="space-y-2">
+              <Label>Justification de la modification *</Label>
+              <Textarea
+                placeholder="Raison de la modification (obligatoire)..."
+                value={editJustification}
+                onChange={(e) => setEditJustification(e.target.value)}
+                maxLength={300}
+                className="border-warning/50 focus-visible:ring-warning"
+              />
+              <p className="text-xs text-muted-foreground">Cette justification sera enregistrée dans le journal d'audit.</p>
             </div>
           </div>
           <DialogFooter>

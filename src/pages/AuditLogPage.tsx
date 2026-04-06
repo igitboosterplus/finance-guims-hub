@@ -4,7 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { getAuditLog, markAuditEntriesSeen, exportAuditReportCSV, type AuditLogEntry } from "@/lib/auth";
+import { getAuditLog, markAuditEntriesSeen, buildHumanDiff, type AuditLogEntry } from "@/lib/auth";
+import { downloadAuditReport } from "@/lib/reports";
 import { useAuth } from "@/hooks/useAuth";
 import { Download, Search, FileText, PenLine, Trash2, Plus, Shield, ChevronLeft, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
@@ -67,30 +68,23 @@ export default function AuditLogPage() {
   const paginated = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
 
   const handleExport = () => {
-    const csv = exportAuditReportCSV();
-    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `rapport-audit_${new Date().toISOString().split("T")[0]}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-    toast.success("Rapport d'audit téléchargé");
+    downloadAuditReport();
+    toast.success("Rapport d'audit PDF téléchargé");
   };
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h2 className="text-2xl font-bold text-foreground flex items-center gap-2">
-            <FileText className="h-6 w-6" />
+          <h2 className="text-xl sm:text-2xl font-bold text-foreground flex items-center gap-2">
+            <FileText className="h-5 w-5 sm:h-6 sm:w-6" />
             Journal d'audit
           </h2>
           <p className="text-sm text-muted-foreground">{entries.length} entrée{entries.length > 1 ? 's' : ''} enregistrée{entries.length > 1 ? 's' : ''}</p>
         </div>
-        <Button variant="outline" onClick={handleExport} className="gap-2">
+        <Button variant="outline" onClick={handleExport} className="gap-2 self-start sm:self-auto">
           <Download className="h-4 w-4" />
-          Exporter le rapport
+          Rapport PDF
         </Button>
       </div>
 
@@ -111,22 +105,24 @@ export default function AuditLogPage() {
         </div>
       ) : (
         <>
-          <Card className="border-0 shadow-md">
+          <Card className="border-0 shadow-md overflow-x-auto">
             <CardContent className="p-0">
-              <Table>
+              <Table className="min-w-[700px]">
                 <TableHeader>
                   <TableRow>
                     <TableHead>Date</TableHead>
                     <TableHead>Utilisateur</TableHead>
                     <TableHead>Action</TableHead>
                     <TableHead>Détails</TableHead>
-                    <TableHead>Avant</TableHead>
-                    <TableHead>Après</TableHead>
+                    <TableHead>Justification</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {paginated.map(entry => {
                     const Icon = actionIcons[entry.action] || FileText;
+                    const readableDetails = entry.action === 'update' && entry.previousData && entry.newData
+                      ? buildHumanDiff(entry.previousData, entry.newData)
+                      : entry.details;
                     return (
                       <TableRow key={entry.id} className={!entry.seen ? 'bg-primary/5' : ''}>
                         <TableCell className="text-xs whitespace-nowrap">
@@ -139,12 +135,13 @@ export default function AuditLogPage() {
                             {actionLabels[entry.action]}
                           </Badge>
                         </TableCell>
-                        <TableCell className="text-sm max-w-[250px] truncate">{entry.details}</TableCell>
-                        <TableCell className="text-xs text-muted-foreground max-w-[150px] truncate">
-                          {entry.previousData || '—'}
+                        <TableCell className="text-sm max-w-[350px]">
+                          <span className="whitespace-pre-wrap break-words">{readableDetails || entry.details}</span>
                         </TableCell>
-                        <TableCell className="text-xs text-muted-foreground max-w-[150px] truncate">
-                          {entry.newData || '—'}
+                        <TableCell className="text-sm text-muted-foreground max-w-[200px]">
+                          {entry.justification ? (
+                            <span className="italic">{entry.justification}</span>
+                          ) : '—'}
                         </TableCell>
                       </TableRow>
                     );
