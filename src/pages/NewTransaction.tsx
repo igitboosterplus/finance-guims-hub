@@ -6,12 +6,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { departments, addTransaction, PAYMENT_METHODS, isEnrollmentCategory, isTranche, getFormationsForDepartment, type DepartmentId, type PaymentMethod, type FormationOption } from "@/lib/data";
+import { departments, addTransaction, PAYMENT_METHODS, isEnrollmentCategory, isInscriptionCategory, isTranche, type DepartmentId, type PaymentMethod, formatCurrency } from "@/lib/data";
 import { addAuditEntry, getCurrentUser, hasPermission, hasDepartmentAccess } from "@/lib/auth";
-import { getStockItems, getStockByCategory, addStockMovement, type StockItem } from "@/lib/stock";
+import { getStockItems, addStockMovement, getFormationsByDepartment, addPaymentPlan, addInstallment, getPaymentPlans, getEnrolledStudents, buildAllocationMessage, updatePlanInscription, getAllocationSummary, getRemainingAmount, type StockItem, type FormationCatalog, type FormationPack } from "@/lib/stock";
 import { toast } from "sonner";
-import { ArrowLeft, ShieldAlert, Package, GraduationCap, CheckSquare } from "lucide-react";
-import { Checkbox } from "@/components/ui/checkbox";
+import { ArrowLeft, ShieldAlert, Package, GraduationCap, Star, Award, Calendar, CreditCard } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
 
 export default function NewTransaction() {
   const navigate = useNavigate();
@@ -32,8 +33,8 @@ export default function NewTransaction() {
   const [quantity, setQuantity] = useState('');
   const [stockItemId, setStockItemId] = useState('');
   const [formationName, setFormationName] = useState('');
+  const [formationPackId, setFormationPackId] = useState('');
   const [desiredTrainingDate, setDesiredTrainingDate] = useState('');
-  const [selectedKitElements, setSelectedKitElements] = useState<string[]>([]);
 
   const selectedDept = departments.find(d => d.id === departmentId);
   const categories = selectedDept
@@ -53,19 +54,78 @@ export default function NewTransaction() {
 
   // Formation enrollment
   const isEnrollment = isEnrollmentCategory(category);
-  const availableFormations = departmentId ? getFormationsForDepartment(departmentId as DepartmentId) : [];
+  const availableFormations: FormationCatalog[] = (departmentId && isEnrollment)
+    ? getFormationsByDepartment(departmentId as DepartmentId)
+    : [];
   const selectedFormation = availableFormations.find(f => f.name === formationName);
+  const selectedPack = selectedFormation?.packs.find(p => p.id === formationPackId);
+  const isTrancheMode = selectedFormation?.mode === 'tranches';
+
+  // Auto-suggest enrolled students for tranche payments
+  const enrolledStudents = (isTranche(category) && selectedFormation)
+    ? getEnrolledStudents(selectedFormation.id)
+    : [];
 
   const handleFormationChange = (name: string) => {
     setFormationName(name);
+    setFormationPackId('');
+    // For tranche-mode formations, auto-set amount based on selected category
     const formation = availableFormations.find(f => f.name === name);
-    setSelectedKitElements(formation ? [...formation.kitElements] : []);
+    if (formation?.mode === 'tranches') {
+      autoFillTrancheAmount(formation);
+    }
   };
 
-  const toggleKitElement = (element: string) => {
-    setSelectedKitElements(prev =>
-      prev.includes(element) ? prev.filter(e => e !== element) : [...prev, element]
-    );
+  /** Auto-fill amount from tranche configuration based on current category.
+   *  If a plan already exists for this person, use the REMAINING amount instead of the full tranche. */
+  const autoFillTrancheAmount = (formation: FormationCatalog) => {
+    if (!formation.tranches) return;
+
+    // Check if there's an existing plan — if so, use allocation-aware remaining amount
+    if (personName.trim()) {
+      const existingPlans = getPaymentPlans();
+      const existingPlan = existingPlans.find(p =>
+        p.clientName.toLowerCase() === personName.trim().toLowerCase() &&
+        p.formationId === formation.id &&
+        p.status === 'en_cours'
+      );
+      if (existingPlan) {
+        const alloc = getAllocationSummary(existingPlan);
+        if (isTranche(category)) {
+          const trancheNum = category.replace('Frais de formation - Tranche ', '');
+          const matchedAlloc = alloc.find(a => a.name.includes(trancheNum));
+          if (matchedAlloc && matchedAlloc.remaining > 0) {
+            setAmount(String(matchedAlloc.remaining));
+            return;
+          }
+        }
+        // For 'Complet' or if selected tranche is already paid, show total remaining
+        const totalRemaining = getRemainingAmount(existingPlan);
+        if (totalRemaining > 0) {
+          setAmount(String(totalRemaining));
+          return;
+        }
+      }
+    }
+
+    // No existing plan or person not entered yet — use scheduled tranche amount
+    if (category === 'Frais de formation - Complet' && formation.totalPrice) {
+      setAmount(String(formation.totalPrice));
+    } else if (isTranche(category)) {
+      const trancheNum = category.replace('Frais de formation - Tranche ', '');
+      const matched = formation.tranches.find(t => t.name.includes(trancheNum));
+      if (matched) setAmount(String(matched.amount));
+    }
+  };
+
+  const handlePackChange = (packId: string) => {
+    setFormationPackId(packId);
+    // Auto-set amount from pack price
+    const formation = availableFormations.find(f => f.name === formationName);
+    const pack = formation?.packs.find(p => p.id === packId);
+    if (pack && pack.price > 0) {
+      setAmount(String(pack.price));
+    }
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -77,6 +137,12 @@ export default function NewTransaction() {
 
     if (!personName.trim()) {
       toast.error("Veuillez saisir le nom de la personne");
+      return;
+    }
+
+    // Require formation selection for enrollment categories
+    if (isEnrollment && availableFormations.length > 0 && !formationName) {
+      toast.error("Veuillez sélectionner une formation pour cette inscription");
       return;
     }
 
@@ -131,12 +197,108 @@ export default function NewTransaction() {
       ...(isStockCategory && parsedQty > 0 ? { quantity: parsedQty, stockItemId } : {}),
       ...(isEnrollmentCategory(category) ? { enrollmentDate: new Date().toISOString() } : {}),
       ...(isTranche(category) ? { tranche: category.replace('Frais de formation - ', '') } : {}),
-      ...(isEnrollment && formationName ? { formationName } : {}),
+      ...(isEnrollment && formationName ? { formationName: selectedPack ? `${formationName} — ${selectedPack.name}` : isTrancheMode && isTranche(category) ? `${formationName} — ${category.replace('Frais de formation - ', '')}` : formationName } : {}),
       ...(isEnrollment && desiredTrainingDate ? { desiredTrainingDate } : {}),
-      ...(isEnrollment && selectedKitElements.length > 0 ? { formationKit: selectedKitElements } : {}),
+      ...(isEnrollment && selectedPack ? { formationKit: selectedPack.kitItems.map(k => k.label).filter(Boolean) } : {}),
     });
 
-    const currentUser = getCurrentUser();
+    // ==================== AUTO-CREATE PAYMENT PLAN FOR FORMATION ENROLLMENTS ====================
+    if (isEnrollment && selectedFormation) {
+      const existingPlans = getPaymentPlans();
+      const isInscription = isInscriptionCategory(category);
+      const formationInscriptionFee = selectedFormation.inscriptionFee || 0;
+
+      // Determine total amount and scheduled tranches based on formation mode
+      let totalAmount = 0;
+      let scheduledTranches: { id: string; name: string; amount: number; dueDate: string }[] = [];
+      let planLabel = selectedFormation.name;
+      let packIdForPlan: string | undefined;
+
+      if (selectedFormation.mode === 'tranches' && selectedFormation.tranches?.length) {
+        totalAmount = selectedFormation.totalPrice
+          ?? selectedFormation.tranches.reduce((s, t) => s + t.amount, 0);
+        scheduledTranches = selectedFormation.tranches.map(t => ({
+          id: crypto.randomUUID(),
+          name: t.name,
+          amount: t.amount,
+          dueDate: t.deadline,
+        }));
+      } else if (selectedFormation.mode === 'packs' && selectedPack) {
+        totalAmount = selectedPack.price;
+        planLabel = `${selectedFormation.name} — ${selectedPack.name}`;
+        packIdForPlan = selectedPack.id;
+      } else {
+        totalAmount = selectedFormation.totalPrice || parsedAmount;
+      }
+
+      // Check for existing plan (dedup by client + formation + optional pack)
+      const existingPlan = existingPlans.find(p =>
+        p.clientName.toLowerCase() === personName.trim().toLowerCase() &&
+        p.formationId === selectedFormation.id &&
+        (packIdForPlan ? p.packId === packIdForPlan : !p.packId) &&
+        p.status === 'en_cours'
+      );
+
+      if (existingPlan) {
+        // Plan exists
+        if (isInscription) {
+          // Mark inscription as paid on existing plan (don't count toward formation total)
+          updatePlanInscription(existingPlan.id, true, parsedAmount);
+          toast.success(`Inscription de ${formatCurrency(parsedAmount)} enregistrée pour ${personName.trim()} (hors frais de formation)`);
+        } else if (parsedAmount > 0) {
+          // Normalize note to short format ("Tranche 1" not "Frais de formation - Tranche 1")
+          const shortNote = isTranche(category) ? category.replace('Frais de formation - ', '') : category;
+          const updatedPlan = addInstallment(existingPlan.id, {
+            amount: parsedAmount,
+            date,
+            paymentMethod,
+            note: shortNote,
+            recordedBy: currentUser?.displayName ?? 'Inconnu',
+          });
+          const allocMsg = updatedPlan ? buildAllocationMessage(updatedPlan) : '';
+          toast.success(`Paiement de ${formatCurrency(parsedAmount)} ajouté au suivi de ${personName.trim()}${allocMsg ? ` — ${allocMsg}` : ''}`);
+        }
+      } else {
+        // Create new PaymentPlan — totalAmount = formation price only (not including inscription)
+        const plan = addPaymentPlan({
+          departmentId: departmentId as DepartmentId,
+          clientName: personName.trim(),
+          planType: 'formation',
+          label: planLabel,
+          description: `Inscription automatique — ${category}`,
+          totalAmount,
+          createdBy: currentUser?.displayName ?? 'Inconnu',
+          ...(scheduledTranches.length > 0 ? { scheduledTranches } : {}),
+          formationId: selectedFormation.id,
+          ...(packIdForPlan ? { packId: packIdForPlan } : {}),
+          inscriptionFee: isInscription ? parsedAmount : (formationInscriptionFee > 0 ? formationInscriptionFee : undefined),
+          inscriptionPaid: isInscription,
+        });
+
+        if (isInscription) {
+          // Inscription fee: NOT counted as a formation installment
+          toast.success(`📋 Suivi créé pour ${personName.trim()} — ${planLabel}. Inscription payée (${formatCurrency(parsedAmount)}). Formation: ${formatCurrency(totalAmount)} à payer.`);
+        } else if (parsedAmount > 0) {
+          // Normal formation payment — record as installment
+          const shortNote = isTranche(category) ? category.replace('Frais de formation - ', '') : category;
+          const updatedPlan = addInstallment(plan.id, {
+            amount: parsedAmount,
+            date,
+            paymentMethod,
+            note: shortNote,
+            recordedBy: currentUser?.displayName ?? 'Inconnu',
+          });
+          const remaining = totalAmount - parsedAmount;
+          const allocMsg = updatedPlan ? buildAllocationMessage(updatedPlan) : '';
+          if (remaining <= 0) {
+            toast.success(`Plan de paiement créé et complété pour ${personName.trim()} — ${planLabel}`);
+          } else {
+            toast.success(`📋 Suivi créé pour ${personName.trim()} — ${planLabel}. Reste: ${formatCurrency(remaining)}${allocMsg ? ` (${allocMsg})` : ''}`);
+          }
+        }
+      }
+    }
+
     if (currentUser) {
       addAuditEntry({
         userId: currentUser.id,
@@ -314,8 +476,20 @@ export default function NewTransaction() {
                 value={personName}
                 onChange={(e) => setPersonName(e.target.value)}
                 maxLength={100}
+                list={enrolledStudents.length > 0 ? "enrolled-students-list" : undefined}
               />
-              <p className="text-xs text-muted-foreground">Client, fournisseur, formé, élève, etc.</p>
+              {enrolledStudents.length > 0 && (
+                <datalist id="enrolled-students-list">
+                  {enrolledStudents.map((name, i) => (
+                    <option key={i} value={name} />
+                  ))}
+                </datalist>
+              )}
+              <p className="text-xs text-muted-foreground">
+                {enrolledStudents.length > 0
+                  ? `${enrolledStudents.length} étudiant(s) inscrit(s) — commencez à taper pour voir les suggestions`
+                  : 'Client, fournisseur, formé, élève, etc.'}
+              </p>
             </div>
 
             {isEnrollment && (
@@ -329,44 +503,149 @@ export default function NewTransaction() {
                   <p className="text-xs text-blue-600 dark:text-blue-400">Tranche : <span className="font-semibold">{category.replace('Frais de formation - ', '')}</span></p>
                 )}
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>Formation choisie *</Label>
-                    <Select value={formationName} onValueChange={handleFormationChange}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Sélectionner une formation" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {availableFormations.map((f) => (
-                          <SelectItem key={f.name} value={f.name}>{f.name}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Date souhaitée de formation</Label>
-                    <Input type="date" value={desiredTrainingDate} onChange={(e) => setDesiredTrainingDate(e.target.value)} />
-                  </div>
-                </div>
-
-                {selectedFormation && (
-                  <div className="space-y-2">
-                    <Label className="flex items-center gap-2">
-                      <CheckSquare className="h-3.5 w-3.5" />
-                      Éléments du kit / formation
-                    </Label>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {selectedFormation.kitElements.map((element) => (
-                        <label key={element} className="flex items-center gap-2 text-sm cursor-pointer rounded-md border p-2 hover:bg-accent">
-                          <Checkbox
-                            checked={selectedKitElements.includes(element)}
-                            onCheckedChange={() => toggleKitElement(element)}
-                          />
-                          {element}
-                        </label>
-                      ))}
+                {availableFormations.length === 0 ? (
+                  <p className="text-xs text-amber-600 dark:text-amber-400">Aucune formation configurée pour ce département. Créez-en dans le catalogue des formations.</p>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label>Formation choisie *</Label>
+                        <Select value={formationName} onValueChange={handleFormationChange}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Sélectionner une formation" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {availableFormations.map((f) => (
+                              <SelectItem key={f.id} value={f.name}>
+                                {f.name}
+                                {f.mode === 'tranches' && ' (tranches)'}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      {isInscriptionCategory(category) && (
+                        <div className="space-y-2">
+                          <Label>Date souhaitée de formation</Label>
+                          <Input type="date" value={desiredTrainingDate} onChange={(e) => setDesiredTrainingDate(e.target.value)} />
+                        </div>
+                      )}
                     </div>
-                  </div>
+
+                    {/* Pack selection — for pack-mode formations */}
+                    {selectedFormation && !isTrancheMode && selectedFormation.packs.length > 0 && (
+                      <div className="space-y-3">
+                        <Label>Pack / Formule *</Label>
+                        <div className={`grid grid-cols-1 ${selectedFormation.packs.length >= 3 ? 'md:grid-cols-3' : selectedFormation.packs.length === 2 ? 'md:grid-cols-2' : ''} gap-3`}>
+                          {selectedFormation.packs.map((pack, pi) => {
+                            const isSelected = formationPackId === pack.id;
+                            const packColors = [
+                              isSelected ? 'border-blue-500 bg-blue-100 dark:bg-blue-900/50 ring-2 ring-blue-500' : 'border-blue-200 bg-white dark:bg-blue-950/20 hover:border-blue-400',
+                              isSelected ? 'border-amber-500 bg-amber-100 dark:bg-amber-900/50 ring-2 ring-amber-500' : 'border-amber-200 bg-white dark:bg-amber-950/20 hover:border-amber-400',
+                              isSelected ? 'border-purple-500 bg-purple-100 dark:bg-purple-900/50 ring-2 ring-purple-500' : 'border-purple-200 bg-white dark:bg-purple-950/20 hover:border-purple-400',
+                            ];
+                            const icons = [Award, Star, Award];
+                            const IconComp = icons[pi % icons.length];
+                            return (
+                              <button
+                                key={pack.id}
+                                type="button"
+                                onClick={() => handlePackChange(pack.id)}
+                                className={`rounded-lg border-2 p-3 text-left transition-all space-y-2 ${packColors[pi % packColors.length]}`}
+                              >
+                                <div className="flex items-center justify-between">
+                                  <span className="flex items-center gap-1.5 font-semibold text-sm">
+                                    <IconComp className="h-4 w-4" />
+                                    {pack.name}
+                                  </span>
+                                  <Badge className="text-xs">{formatCurrency(pack.price)}</Badge>
+                                </div>
+                                {pack.advantages.filter(a => a.description).length > 0 && (
+                                  <ul className="space-y-0.5">
+                                    {pack.advantages.filter(a => a.description).map((a, ai) => (
+                                      <li key={ai} className="text-[11px] text-foreground/80 flex items-start gap-1">
+                                        <span className="text-success mt-0.5 shrink-0">✓</span>
+                                        {a.description}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                )}
+                                {pack.kitItems.length > 0 && (
+                                  <>
+                                    <Separator className="my-1" />
+                                    <div className="space-y-0.5">
+                                      {pack.kitItems.map((kit, ki) => (
+                                        <div key={ki} className="text-[11px] flex items-center justify-between gap-1">
+                                          <span className="flex items-center gap-1">
+                                            <Package className="h-3 w-3 text-muted-foreground shrink-0" />
+                                            {kit.label}{kit.quantity > 1 ? ` ×${kit.quantity}` : ''}
+                                          </span>
+                                          {kit.specialPrice !== undefined && kit.normalPrice ? (
+                                            <span className="shrink-0">
+                                              <span className="line-through text-muted-foreground">{formatCurrency(kit.normalPrice)}</span>
+                                              {' '}
+                                              <span className="font-semibold text-success">{kit.specialPrice === 0 ? 'Gratuit' : formatCurrency(kit.specialPrice)}</span>
+                                            </span>
+                                          ) : kit.specialPrice === 0 ? (
+                                            <span className="font-semibold text-success shrink-0">Gratuit</span>
+                                          ) : null}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Tranche info — for tranche-mode formations */}
+                    {selectedFormation && isTrancheMode && selectedFormation.tranches && selectedFormation.tranches.length > 0 && (
+                      <div className="space-y-3">
+                        <Label className="flex items-center gap-1.5">
+                          <CreditCard className="h-3.5 w-3.5" />
+                          Échéancier des tranches
+                        </Label>
+                        <div className={`grid grid-cols-1 ${selectedFormation.tranches.length >= 3 ? 'md:grid-cols-3' : selectedFormation.tranches.length === 2 ? 'md:grid-cols-2' : ''} gap-3`}>
+                          {selectedFormation.tranches.map((tranche, ti) => {
+                            const trancheColors = ['border-green-200 bg-green-50 dark:bg-green-950/20', 'border-orange-200 bg-orange-50 dark:bg-orange-950/20', 'border-red-200 bg-red-50 dark:bg-red-950/20'];
+                            const isOverdue = tranche.deadline && new Date(tranche.deadline) < new Date();
+                            const isCurrentTranche = isTranche(category) && tranche.name.includes(category.replace('Frais de formation - Tranche ', ''));
+                            return (
+                              <div key={tranche.id} className={`rounded-lg border p-3 space-y-1.5 ${isCurrentTranche ? 'ring-2 ring-primary border-primary' : trancheColors[ti % trancheColors.length]}`}>
+                                <div className="flex items-center justify-between">
+                                  <span className="font-semibold text-sm flex items-center gap-1.5">
+                                    <CreditCard className="h-4 w-4" />
+                                    {tranche.name}
+                                    {isCurrentTranche && <Badge variant="default" className="text-[10px] ml-1">En cours</Badge>}
+                                  </span>
+                                  <Badge className="text-xs">{formatCurrency(tranche.amount)}</Badge>
+                                </div>
+                                {tranche.deadline && (
+                                  <p className={`text-xs flex items-center gap-1 ${isOverdue ? 'text-destructive font-medium' : 'text-muted-foreground'}`}>
+                                    <Calendar className="h-3 w-3" />
+                                    Date limite : {new Date(tranche.deadline).toLocaleDateString('fr-FR')}
+                                    {isOverdue && ' (dépassée)'}
+                                  </p>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                        {selectedFormation.totalPrice && (
+                          <div className="rounded-lg border border-dashed border-primary/30 bg-primary/5 p-2.5 flex items-center justify-between">
+                            <span className="text-xs font-medium flex items-center gap-1">
+                              <CreditCard className="h-3.5 w-3.5" />
+                              Paiement complet
+                            </span>
+                            <Badge variant="secondary" className="text-xs">{formatCurrency(selectedFormation.totalPrice)}</Badge>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             )}

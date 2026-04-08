@@ -1,4 +1,4 @@
-import { LayoutDashboard, Plus, Users, FileText, Bell, UserCircle, Package } from "lucide-react";
+import { LayoutDashboard, Plus, Users, FileText, Bell, UserCircle, Package, GraduationCap, CreditCard } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
 import { departments } from "@/lib/data";
@@ -123,6 +123,30 @@ export function AppSidebar() {
                   >
                     <Plus className="mr-2 h-4 w-4" />
                     {!collapsed && <span>Nouvelle transaction</span>}
+                  </NavLink>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild>
+                  <NavLink
+                    to="/formations"
+                    className="hover:bg-sidebar-accent"
+                    activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
+                  >
+                    <GraduationCap className="mr-2 h-4 w-4" />
+                    {!collapsed && <span>Formations</span>}
+                  </NavLink>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild>
+                  <NavLink
+                    to="/paiements"
+                    className="hover:bg-sidebar-accent"
+                    activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
+                  >
+                    <CreditCard className="mr-2 h-4 w-4" />
+                    {!collapsed && <span>Suivi paiements</span>}
                   </NavLink>
                 </SidebarMenuButton>
               </SidebarMenuItem>

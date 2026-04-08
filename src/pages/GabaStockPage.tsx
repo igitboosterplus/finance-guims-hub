@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import {
   Package, Plus, ArrowDownToLine, ArrowUpFromLine, BarChart3, AlertTriangle,
   Pencil, Trash2, History, Search, Download, SlidersHorizontal, ArrowLeft,
-  Box, Layers, FileDown, GraduationCap, Gift,
+  Box, Layers, FileDown, GraduationCap, Gift, Boxes, ShoppingCart,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,7 +34,9 @@ import {
   STOCK_CATEGORIES, getStockItems, addStockItem, updateStockItem, deleteStockItem,
   addStockMovement, getStockMovements, getStockStats, getCategoryLabel,
   exportStockCSV, getTrainings, addTraining, deleteTraining, getMovementTypeLabel,
+  getStockKits, addStockKit, updateStockKit, deleteStockKit, checkKitAvailability, sellKit,
   type StockItem, type StockMovement, type MovementType, type Training, type TrainingType, type TraineeKit,
+  type StockKit, type KitComponent,
 } from "@/lib/stock";
 import logoGaba from "@/assets/logo-gaba.png";
 
@@ -49,26 +51,18 @@ export default function GabaStockPage() {
   const navigate = useNavigate();
   const user = getCurrentUser();
 
-  // --- Access check ---
-  if (!hasDepartmentAccess(user, 'gaba')) {
-    return (
-      <div className="text-center py-12 text-muted-foreground">
-        <p className="text-lg">Vous n'avez pas accès au stock GABA</p>
-        <p className="text-sm">Contactez le Super Admin pour obtenir l'accès.</p>
-      </div>
-    );
-  }
-
   // --- Data ---
   const [items, setItems] = useState<StockItem[]>(getStockItems);
   const [movements, setMovements] = useState<StockMovement[]>(getStockMovements);
   const [trainings, setTrainings] = useState<Training[]>(getTrainings);
-  const stats = useMemo(() => getStockStats(), [items, movements]);
+  const [kits, setKits] = useState<StockKit[]>(getStockKits);
+  const stats = useMemo(() => getStockStats(), []);
 
   const refresh = () => {
     setItems(getStockItems());
     setMovements(getStockMovements());
     setTrainings(getTrainings());
+    setKits(getStockKits());
   };
 
   // --- Filters ---
@@ -109,6 +103,15 @@ export default function GabaStockPage() {
   // --- Stock report dialog ---
   const [stockReportOpen, setStockReportOpen] = useState(false);
 
+  // --- Kit dialogs ---
+  const [kitDialog, setKitDialog] = useState(false);
+  const [editKit, setEditKit] = useState<StockKit | null>(null);
+  const [kitForm, setKitForm] = useState({ name: '', description: '', sellingPrice: '', components: [] as { stockItemId: string; quantity: string }[] });
+  const [sellKitDialog, setSellKitDialog] = useState(false);
+  const [sellKitId, setSellKitId] = useState<string | null>(null);
+  const [sellKitForm, setSellKitForm] = useState({ quantity: '1', date: new Date().toISOString().slice(0, 10), clientName: '' });
+  const [deleteKitId, setDeleteKitId] = useState<string | null>(null);
+
   // ==================== FILTERED DATA ====================
 
   const filteredItems = useMemo(() => {
@@ -132,6 +135,23 @@ export default function GabaStockPage() {
     }
     return result;
   }, [movements, search, items]);
+
+  const itemMovements = useMemo(() => {
+    if (!historyItem) return [];
+    return movements
+      .filter(m => m.itemId === historyItem.id)
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  }, [historyItem, movements]);
+
+  // --- Access check (after all hooks) ---
+  if (!hasDepartmentAccess(user, 'gaba')) {
+    return (
+      <div className="text-center py-12 text-muted-foreground">
+        <p className="text-lg">Vous n'avez pas accès au stock GABA</p>
+        <p className="text-sm">Contactez le Super Admin pour obtenir l'accès.</p>
+      </div>
+    );
+  }
 
   // ==================== HANDLERS ====================
 
@@ -334,14 +354,71 @@ export default function GabaStockPage() {
     toast.success('Stock exporté en CSV');
   };
 
-  const getItemById = (id: string) => items.find(i => i.id === id);
+  // ==================== KIT HANDLERS ====================
 
-  const itemMovements = useMemo(() => {
-    if (!historyItem) return [];
-    return movements
-      .filter(m => m.itemId === historyItem.id)
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  }, [historyItem, movements]);
+  const openNewKit = () => {
+    setEditKit(null);
+    setKitForm({ name: '', description: '', sellingPrice: '', components: [{ stockItemId: items[0]?.id ?? '', quantity: '1' }] });
+    setKitDialog(true);
+  };
+
+  const openEditKit = (kit: StockKit) => {
+    setEditKit(kit);
+    setKitForm({
+      name: kit.name,
+      description: kit.description,
+      sellingPrice: String(kit.sellingPrice),
+      components: kit.components.map(c => ({ stockItemId: c.stockItemId, quantity: String(c.quantity) })),
+    });
+    setKitDialog(true);
+  };
+
+  const handleSaveKit = () => {
+    if (!kitForm.name.trim()) { toast.error('Nom du kit requis'); return; }
+    const price = parseInt(kitForm.sellingPrice);
+    if (isNaN(price) || price < 0) { toast.error('Prix de vente invalide'); return; }
+    const components: KitComponent[] = kitForm.components
+      .filter(c => c.stockItemId && parseInt(c.quantity) > 0)
+      .map(c => ({ stockItemId: c.stockItemId, quantity: parseInt(c.quantity) }));
+    if (components.length === 0) { toast.error('Ajoutez au moins un composant'); return; }
+
+    if (editKit) {
+      updateStockKit(editKit.id, { name: kitForm.name.trim(), description: kitForm.description.trim(), sellingPrice: price, components });
+      toast.success('Kit modifié');
+    } else {
+      addStockKit({ name: kitForm.name.trim(), description: kitForm.description.trim(), sellingPrice: price, components, createdBy: user?.displayName ?? 'Inconnu' });
+      toast.success('Kit créé');
+    }
+    setKitDialog(false);
+    refresh();
+  };
+
+  const handleDeleteKit = () => {
+    if (!deleteKitId) return;
+    deleteStockKit(deleteKitId);
+    toast.success('Kit supprimé');
+    setDeleteKitId(null);
+    refresh();
+  };
+
+  const openSellKit = (kitId: string) => {
+    setSellKitId(kitId);
+    setSellKitForm({ quantity: '1', date: new Date().toISOString().slice(0, 10), clientName: '' });
+    setSellKitDialog(true);
+  };
+
+  const handleSellKit = () => {
+    if (!sellKitId) return;
+    const qty = parseInt(sellKitForm.quantity);
+    if (isNaN(qty) || qty <= 0) { toast.error('Quantité invalide'); return; }
+    const result = sellKit(sellKitId, qty, sellKitForm.date, user?.displayName ?? 'Inconnu', sellKitForm.clientName.trim() || undefined);
+    if (!result.success) { toast.error(result.error ?? 'Erreur'); return; }
+    toast.success(`Kit vendu — ${result.movements?.length ?? 0} déduction(s) automatiques`);
+    setSellKitDialog(false);
+    refresh();
+  };
+
+  const getItemById = (id: string) => items.find(i => i.id === id);
 
   // ==================== RENDER ====================
 
@@ -423,6 +500,7 @@ export default function GabaStockPage() {
           <TabsList>
             <TabsTrigger value="items" className="gap-2"><Layers className="h-4 w-4" /> Articles</TabsTrigger>
             <TabsTrigger value="movements" className="gap-2"><History className="h-4 w-4" /> Mouvements</TabsTrigger>
+            <TabsTrigger value="kits" className="gap-2"><Boxes className="h-4 w-4" /> Kits</TabsTrigger>
             <TabsTrigger value="trainings" className="gap-2"><GraduationCap className="h-4 w-4" /> Formations</TabsTrigger>
           </TabsList>
           <div className="flex items-center gap-2">
@@ -578,6 +656,75 @@ export default function GabaStockPage() {
         </TabsContent>
 
         {/* ==================== FORMATIONS TAB ==================== */}
+        {/* ==================== KITS TAB ==================== */}
+        <TabsContent value="kits" className="mt-4">
+          <div className="flex items-center justify-between mb-4">
+            <p className="text-sm text-muted-foreground">
+              Un kit est une composition d'articles. Vendre un kit déduit automatiquement tous les composants du stock.
+            </p>
+            <Button onClick={openNewKit} className="gap-2">
+              <Plus className="h-4 w-4" /> Nouveau kit
+            </Button>
+          </div>
+          {kits.length === 0 ? (
+            <Card>
+              <CardContent className="py-12 text-center text-muted-foreground">
+                <Boxes className="h-12 w-12 mx-auto mb-4 opacity-40" />
+                <p className="text-lg font-medium">Aucun kit configuré</p>
+                <p className="text-sm">Créez un kit pour grouper des articles et automatiser les déductions de stock</p>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {kits.map(kit => {
+                const check = checkKitAvailability(kit.id);
+                return (
+                  <Card key={kit.id} className="overflow-hidden">
+                    <CardHeader className="pb-2">
+                      <div className="flex items-center justify-between">
+                        <CardTitle className="text-base">{kit.name}</CardTitle>
+                        <div className="flex gap-1">
+                          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEditKit(kit)}>
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setDeleteKitId(kit.id)}>
+                            <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                          </Button>
+                        </div>
+                      </div>
+                      {kit.description && <p className="text-xs text-muted-foreground">{kit.description}</p>}
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      <div className="space-y-1">
+                        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Composition</p>
+                        {kit.components.map((comp, i) => {
+                          const item = getItemById(comp.stockItemId);
+                          const hasEnough = item ? item.currentQuantity >= comp.quantity : false;
+                          return (
+                            <div key={i} className="flex items-center justify-between text-xs">
+                              <span>{item?.name ?? '—'}</span>
+                              <span className={hasEnough ? 'text-muted-foreground' : 'text-destructive font-semibold'}>
+                                {comp.quantity} {item?.unit ?? ''} {!hasEnough && `(dispo: ${item?.currentQuantity ?? 0})`}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div className="flex items-center justify-between pt-2 border-t">
+                        <span className="text-sm font-semibold">{formatCurrency(kit.sellingPrice)}</span>
+                        <Button size="sm" onClick={() => openSellKit(kit.id)} disabled={!check.available} className="gap-1 text-xs">
+                          <ShoppingCart className="h-3.5 w-3.5" />
+                          {check.available ? 'Vendre ce kit' : 'Stock insuffisant'}
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
+        </TabsContent>
+
         <TabsContent value="trainings" className="mt-4">
           {trainings.length === 0 ? (
             <Card>
@@ -1082,6 +1229,139 @@ export default function GabaStockPage() {
         title="Rapport de stock — GABA"
         onGenerate={(opts) => { downloadStockReport(opts); toast.success('Rapport PDF téléchargé'); }}
       />
+
+      {/* New / Edit Kit dialog */}
+      <Dialog open={kitDialog} onOpenChange={setKitDialog}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{editKit ? 'Modifier le kit' : 'Nouveau kit'}</DialogTitle>
+            <DialogDescription>
+              Un kit est une composition d'articles du stock. Quand vous vendez un kit, chaque composant est déduit automatiquement.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label>Nom du kit</Label>
+              <Input placeholder="Ex: Kit Hanneton, Kit de démarrage avicole..." value={kitForm.name} onChange={e => setKitForm(f => ({ ...f, name: e.target.value }))} />
+            </div>
+            <div className="space-y-2">
+              <Label>Description</Label>
+              <Input placeholder="Détails du kit..." value={kitForm.description} onChange={e => setKitForm(f => ({ ...f, description: e.target.value }))} />
+            </div>
+            <div className="space-y-2">
+              <Label>Prix de vente du kit (FCFA)</Label>
+              <Input type="number" min="0" placeholder="Ex: 25000" value={kitForm.sellingPrice} onChange={e => setKitForm(f => ({ ...f, sellingPrice: e.target.value }))} />
+            </div>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label className="text-base font-semibold">Composants</Label>
+                <Button type="button" variant="outline" size="sm" onClick={() => setKitForm(f => ({ ...f, components: [...f.components, { stockItemId: items[0]?.id ?? '', quantity: '1' }] }))}>
+                  <Plus className="h-3 w-3 mr-1" /> Ajouter
+                </Button>
+              </div>
+              {kitForm.components.map((comp, idx) => (
+                <div key={idx} className="flex gap-2 items-end">
+                  <div className="flex-1">
+                    <Select value={comp.stockItemId} onValueChange={v => { const c = [...kitForm.components]; c[idx].stockItemId = v; setKitForm(f => ({ ...f, components: c })); }}>
+                      <SelectTrigger><SelectValue placeholder="Article" /></SelectTrigger>
+                      <SelectContent>
+                        {items.map(i => <SelectItem key={i.id} value={i.id}>{i.name} ({i.currentQuantity} {i.unit})</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Input className="w-24" type="number" min="1" placeholder="Qté" value={comp.quantity} onChange={e => { const c = [...kitForm.components]; c[idx].quantity = e.target.value; setKitForm(f => ({ ...f, components: c })); }} />
+                  <Button type="button" variant="ghost" size="icon" className="h-9 w-9" onClick={() => setKitForm(f => ({ ...f, components: f.components.filter((_, i) => i !== idx) }))}>
+                    <Trash2 className="h-4 w-4 text-destructive" />
+                  </Button>
+                </div>
+              ))}
+              {kitForm.components.length === 0 && (
+                <p className="text-sm text-muted-foreground">Ajoutez des articles qui composent ce kit.</p>
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setKitDialog(false)}>Annuler</Button>
+            <Button onClick={handleSaveKit}>{editKit ? 'Modifier' : 'Créer le kit'}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Sell Kit dialog */}
+      <Dialog open={sellKitDialog} onOpenChange={setSellKitDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Vendre un kit</DialogTitle>
+            <DialogDescription>
+              {sellKitId && (() => {
+                const kit = kits.find(k => k.id === sellKitId);
+                if (!kit) return null;
+                return (
+                  <span className="block mt-1">
+                    <strong>{kit.name}</strong> — {kit.components.map(c => {
+                      const item = getItemById(c.stockItemId);
+                      return `${item?.name ?? '?'} ×${c.quantity}`;
+                    }).join(', ')}
+                  </span>
+                );
+              })()}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Quantité de kits</Label>
+                <Input type="number" min="1" value={sellKitForm.quantity} onChange={e => setSellKitForm(f => ({ ...f, quantity: e.target.value }))} />
+              </div>
+              <div className="space-y-2">
+                <Label>Date</Label>
+                <Input type="date" value={sellKitForm.date} onChange={e => setSellKitForm(f => ({ ...f, date: e.target.value }))} />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label>Nom du client (optionnel)</Label>
+              <Input placeholder="Ex: Jean Dupont" value={sellKitForm.clientName} onChange={e => setSellKitForm(f => ({ ...f, clientName: e.target.value }))} />
+            </div>
+            {sellKitId && (() => {
+              const qty = parseInt(sellKitForm.quantity) || 1;
+              const check = checkKitAvailability(sellKitId, qty);
+              if (!check.available) return (
+                <div className="rounded-md bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 p-3">
+                  <p className="text-xs text-red-700 dark:text-red-400 font-semibold flex items-center gap-1">
+                    <AlertTriangle className="h-3.5 w-3.5" /> Stock insuffisant pour {qty} kit{qty > 1 ? 's' : ''}
+                  </p>
+                  <ul className="mt-1 text-xs text-red-600 dark:text-red-300 list-disc list-inside">
+                    {check.missing.map((m, i) => <li key={i}>{m.itemName}: besoin {m.required}, dispo {m.available}</li>)}
+                  </ul>
+                </div>
+              );
+              return null;
+            })()}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSellKitDialog(false)}>Annuler</Button>
+            <Button onClick={handleSellKit}>Confirmer la vente</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Kit confirmation */}
+      <AlertDialog open={!!deleteKitId} onOpenChange={open => !open && setDeleteKitId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Supprimer ce kit ?</AlertDialogTitle>
+            <AlertDialogDescription>
+              La configuration du kit sera supprimée. Le stock actuel ne sera pas modifié.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Annuler</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDeleteKit} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              Supprimer
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

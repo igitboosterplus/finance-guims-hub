@@ -13,20 +13,48 @@ import UserManagement from "@/pages/UserManagement";
 import AuditLogPage from "@/pages/AuditLogPage";
 import ProfilePage from "@/pages/ProfilePage";
 import GabaStockPage from "@/pages/GabaStockPage";
+import FormationsPage from "@/pages/FormationsPage";
+import PaymentTrackingPage from "@/pages/PaymentTrackingPage";
 import NotFound from "./pages/NotFound.tsx";
 import { initSupabase, isSupabaseConfigured } from "@/lib/firebase";
-import { pullAllFromSupabase } from "@/lib/sync";
+import { pullAllFromSupabase, purgeAllSupabase, pushAllToSupabase } from "@/lib/sync";
+import { purgeAllData } from "@/lib/auth";
+import { migrateInscriptionInstallments, cleanupOrphanedInstallments } from "@/lib/stock";
 
-// Initialize Supabase on app load — pull cloud data to sync across devices
+const PURGE_FLAG = 'guims-purge-v3-done';
+
+// Initialize Supabase on app load
 if (isSupabaseConfigured()) {
   const sb = initSupabase();
   if (sb) {
-    // Pull depuis Supabase pour récupérer les données cloud (si Supabase vide, push auto)
-    pullAllFromSupabase().then(result => {
-      if (result.success) console.log("[App] Sync Supabase OK");
-      else console.warn("[App] Sync échouée:", result.error);
-    }).catch(err => console.error("[App] Erreur sync:", err));
+    (async () => {
+      // One-time purge: clear local + cloud data
+      if (localStorage.getItem(PURGE_FLAG) !== '1') {
+        purgeAllData();
+        await purgeAllSupabase();
+        localStorage.setItem(PURGE_FLAG, '1');
+        console.log('[App] Purge complète (local + Supabase)');
+      }
+      // Then sync
+      try {
+        const result = await pullAllFromSupabase();
+        if (result.success) console.log("[App] Sync Supabase OK");
+        else console.warn("[App] Sync échouée:", result.error);
+      } catch (err) {
+        console.error("[App] Erreur sync:", err);
+      }
+      migrateInscriptionInstallments();
+      cleanupOrphanedInstallments();
+    })();
   }
+} else {
+  // No Supabase — purge local only
+  if (localStorage.getItem(PURGE_FLAG) !== '1') {
+    purgeAllData();
+    localStorage.setItem(PURGE_FLAG, '1');
+  }
+  migrateInscriptionInstallments();
+  cleanupOrphanedInstallments();
 }
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
@@ -62,6 +90,8 @@ const App = () => (
                     <Route path="/audit" element={<AuditLogPage />} />
                     <Route path="/profile" element={<ProfilePage />} />
                     <Route path="/gaba/stock" element={<GabaStockPage />} />
+                    <Route path="/formations" element={<FormationsPage />} />
+                    <Route path="/paiements" element={<PaymentTrackingPage />} />
                     <Route path="*" element={<NotFound />} />
                   </Routes>
                 </Layout>

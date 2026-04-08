@@ -43,6 +43,9 @@ export const TABLES = {
   stockMovements: "stock_movements",
   trainings: "trainings",
   auditLog: "audit_log",
+  formationsCatalog: "formations_catalog",
+  paymentPlans: "payment_plans",
+  stockKits: "stock_kits",
 } as const;
 
 // ==================== SQL À EXÉCUTER DANS SUPABASE ====================
@@ -130,5 +133,33 @@ CREATE POLICY "Allow all" ON users FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all" ON stock_items FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all" ON stock_movements FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all" ON audit_log FOR ALL USING (true) WITH CHECK (true);
+
+-- ==================== NOUVELLES TABLES ====================
+
+CREATE TABLE formations_catalog (
+  id UUID PRIMARY KEY,
+  data JSONB,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE payment_plans (
+  id UUID PRIMARY KEY,
+  data JSONB,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE stock_kits (
+  id UUID PRIMARY KEY,
+  data JSONB,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE formations_catalog ENABLE ROW LEVEL SECURITY;
+ALTER TABLE payment_plans ENABLE ROW LEVEL SECURITY;
+ALTER TABLE stock_kits ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Allow all" ON formations_catalog FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all" ON payment_plans FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all" ON stock_kits FOR ALL USING (true) WITH CHECK (true);
 
 */

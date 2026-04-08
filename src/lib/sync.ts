@@ -51,6 +51,9 @@ export async function pullAllFromSupabase(): Promise<{ success: boolean; error?:
       pullTable(TABLES.stockItems, "gaba-stock-items"),
       pullTable(TABLES.stockMovements, "gaba-stock-movements"),
       pullTable(TABLES.trainings, "gaba-trainings"),
+      pullTable(TABLES.formationsCatalog, "formations-catalog"),
+      pullTable(TABLES.paymentPlans, "payment-plans"),
+      pullTable(TABLES.stockKits, "gaba-stock-kits"),
     ]);
     console.log("[Sync] Pull complet depuis Supabase.");
     return { success: true };
@@ -95,6 +98,9 @@ export async function pushAllToSupabase(): Promise<{ success: boolean; error?: s
       [TABLES.stockItems, "gaba-stock-items"],
       [TABLES.stockMovements, "gaba-stock-movements"],
       [TABLES.trainings, "gaba-trainings"],
+      [TABLES.formationsCatalog, "formations-catalog"],
+      [TABLES.paymentPlans, "payment-plans"],
+      [TABLES.stockKits, "gaba-stock-kits"],
     ];
 
     for (const [tableName, storageKey] of pairs) {
@@ -110,6 +116,23 @@ export async function pushAllToSupabase(): Promise<{ success: boolean; error?: s
     console.error("[Sync] Erreur push global:", error);
     return { success: false, error: String(error) };
   }
+}
+
+// ==================== PURGE ALL SUPABASE DATA ====================
+
+export async function purgeAllSupabase(): Promise<void> {
+  const sb = getSupabase();
+  if (!sb) return;
+  const allTables: TableName[] = [
+    TABLES.transactions, TABLES.users, TABLES.auditLog,
+    TABLES.stockItems, TABLES.stockMovements, TABLES.trainings,
+    TABLES.formationsCatalog, TABLES.paymentPlans, TABLES.stockKits,
+  ];
+  for (const table of allTables) {
+    const { error } = await sb.from(table).delete().neq('id', '___none___');
+    if (error) console.error(`[Purge] Erreur suppression ${table}:`, error);
+  }
+  console.log('[Purge] Toutes les tables Supabase vidées.');
 }
 
 // ==================== SINGLE DOCUMENT OPERATIONS ====================

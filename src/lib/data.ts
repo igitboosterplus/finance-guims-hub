@@ -2,7 +2,7 @@ import logoGaba from '@/assets/logo-gaba.png';
 import logoGuimsEduc from '@/assets/logo-guims-educ.jpg';
 import logoGuimsAcademy from '@/assets/logo-guims-academy.jpg';
 import logoDigitbooster from '@/assets/logo-digitbooster.png';
-import { syncSetDoc, syncDeleteDoc, syncFullCollection } from './sync';
+import { syncSetDoc, syncFullCollection } from './sync';
 import { TABLES } from './firebase';
 
 export type DepartmentId = 'gaba' | 'guims-educ' | 'guims-academy' | 'digitboosterplus';
@@ -134,9 +134,12 @@ export const updateTransaction = (id: string, updates: Partial<Omit<Transaction,
 };
 
 export const deleteTransaction = (id: string) => {
+  const tx = getTransactions().find(t => t.id === id);
   const transactions = getTransactions().filter(t => t.id !== id);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(transactions));
-  syncDeleteDoc(TABLES.transactions, id);
+  // Also sync to Supabase via full collection replace (more reliable than single delete)
+  syncFullCollection(TABLES.transactions, STORAGE_KEY);
+  return tx;
 };
 
 export const exportTransactionsCSV = (): string => {
@@ -229,30 +232,6 @@ export const isEnrollmentCategory = (category: string): boolean =>
 export const isTranche = (category: string): boolean =>
   category.startsWith('Frais de formation - Tranche');
 
-// Formations disponibles par département
-export interface FormationOption {
-  name: string;
-  department: DepartmentId;
-  kitElements: string[];
-  defaultAmount?: number;
-}
-
-export const AVAILABLE_FORMATIONS: FormationOption[] = [
-  // GABA
-  { name: 'Formation élevage de hannetons', department: 'gaba', kitElements: ['Starter Kit Hannetons', 'Livre de formation', 'Matériel pratique'] },
-  { name: 'Formation intrants agricoles', department: 'gaba', kitElements: ['Kit intrants', 'Manuel technique'] },
-  // Guims Educ
-  { name: 'Cours de répétition', department: 'guims-educ', kitElements: ['Support de cours', 'Cahier d\'exercices'] },
-  { name: 'Prépas concours', department: 'guims-educ', kitElements: ['Annales', 'Fiches de révision'] },
-  { name: 'Coaching scolaire', department: 'guims-educ', kitElements: ['Guide de coaching', 'Bilan initial'] },
-  { name: 'Cours à domicile', department: 'guims-educ', kitElements: ['Support de cours'] },
-  { name: 'Cours en ligne', department: 'guims-educ', kitElements: ['Accès plateforme', 'Support PDF'] },
-  // Guims Academy
-  { name: 'Formation développement web', department: 'guims-academy', kitElements: ['Starter Kit', 'Livre', 'Accès plateforme'] },
-  { name: 'Formation marketing digital', department: 'guims-academy', kitElements: ['Starter Kit', 'Livre', 'Accès outils'] },
-  { name: 'Formation graphisme', department: 'guims-academy', kitElements: ['Starter Kit', 'Livre', 'Licence logiciel'] },
-  { name: 'Formation bureautique', department: 'guims-academy', kitElements: ['Support de cours', 'Livre'] },
-];
-
-export const getFormationsForDepartment = (departmentId: DepartmentId): FormationOption[] =>
-  AVAILABLE_FORMATIONS.filter(f => f.department === departmentId);
+/** Categories that are inscription fees (separate from formation tuition) */
+export const isInscriptionCategory = (category: string): boolean =>
+  ['Inscription étudiant', 'Inscription élève/étudiant', 'Inscriptions formation'].includes(category);

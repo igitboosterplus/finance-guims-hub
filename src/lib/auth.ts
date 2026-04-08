@@ -82,18 +82,40 @@ function saveUsers(users: User[]) {
 export async function initDefaultSuperAdmin() {
   const users = getUsers();
   if (users.length === 0) {
-    const hash = await hashPassword('admin123');
+    const hash = await hashPassword('Yvan2000@');
     const superAdmin: User = {
       id: crypto.randomUUID(),
-      username: 'admin',
+      username: 'Guimtsop',
       passwordHash: hash,
-      displayName: 'Super Admin',
+      displayName: 'Guimtsop',
       role: 'superadmin',
       approved: true,
       createdAt: new Date().toISOString(),
     };
     saveUsers([superAdmin]);
   }
+}
+
+/** Purge ALL application data from localStorage (users, transactions, stock, audits, etc.).
+ *  After purge, initDefaultSuperAdmin will recreate the default account on next load. */
+export function purgeAllData(): void {
+  const ALL_KEYS = [
+    'finance-users',
+    'finance-session',
+    'finance-audit-log',
+    'finance-transactions',
+    'gaba-stock-items',
+    'gaba-stock-movements',
+    'gaba-trainings',
+    'gaba-stock-kits',
+    'formations-catalog',
+    'payment-plans',
+    'finance-seed-done',
+  ];
+  for (const key of ALL_KEYS) {
+    localStorage.removeItem(key);
+  }
+  console.log('[Purge] All application data cleared.');
 }
 
 export async function login(username: string, password: string): Promise<{ success: boolean; user?: User; error?: string }> {

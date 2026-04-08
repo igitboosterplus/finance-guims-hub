@@ -11,6 +11,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Trash2, ArrowUpRight, ArrowDownRight, Search, Pencil, ChevronLeft, ChevronRight, Download } from "lucide-react";
 import { formatCurrency, type Transaction, type PaymentMethod, getDepartment, deleteTransaction, updateTransaction, departments, exportTransactionsCSV, PAYMENT_METHODS, getPaymentMethodLabel } from "@/lib/data";
 import { addAuditEntry, getCurrentUser, isSuperAdmin, hasPermission, buildHumanDiff } from "@/lib/auth";
+import { syncInstallmentFromTransaction, removeInstallmentFromTransaction, syncEditedTransaction } from "@/lib/stock";
 import { toast } from "sonner";
 
 interface TransactionListProps {
@@ -24,6 +25,7 @@ const PAGE_SIZE = 15;
 export function TransactionList({ transactions, onDelete, showDepartment = false }: TransactionListProps) {
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>("all");
+  const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [page, setPage] = useState(1);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [editTx, setEditTx] = useState<Transaction | null>(null);
@@ -49,7 +51,8 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
         getPaymentMethodLabel(tx.paymentMethod || 'especes').toLowerCase().includes(q) ||
         tx.amount.toString().includes(q);
       const matchType = typeFilter === "all" || tx.type === typeFilter;
-      return matchSearch && matchType;
+      const matchCategory = categoryFilter === "all" || tx.category === categoryFilter;
+      return matchSearch && matchType && matchCategory;
     })
     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
@@ -67,6 +70,10 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
     }
     const txToDelete = transactions.find(t => t.id === deleteId);
     deleteTransaction(deleteId);
+    // Remove corresponding installment from payment plan (or reset inscription)
+    if (txToDelete?.personName) {
+      removeInstallmentFromTransaction(txToDelete.personName, txToDelete.date, txToDelete.amount, txToDelete.category);
+    }
     if (txToDelete && currentUser) {
       addAuditEntry({
         userId: currentUser.id,
@@ -123,6 +130,10 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
       type: editType,
       paymentMethod: editPaymentMethod,
     });
+    // Sync changes to payment plan (handles amount change, category change inscription ↔ tranche)
+    if (editTx.personName && (editTx.amount !== parsedAmount || editTx.category !== editCategory)) {
+      syncEditedTransaction(editTx.personName, editTx.date, editTx.amount, parsedAmount, editTx.category, editCategory);
+    }
     const newData = JSON.stringify({ type: editType, amount: parsedAmount, category: editCategory, personName: editPersonName, date: editDate, paymentMethod: editPaymentMethod, description: editDescription });
     const readableDetails = buildHumanDiff(previousData, newData);
     if (currentUser) {
@@ -173,6 +184,17 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
             className="pl-9"
           />
         </div>
+        <Select value={categoryFilter} onValueChange={(v) => { setCategoryFilter(v); setPage(1); }}>
+          <SelectTrigger className="w-[200px]">
+            <SelectValue placeholder="Toutes catégories" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Toutes catégories</SelectItem>
+            {[...new Set(transactions.map(tx => tx.category))].sort().map(cat => (
+              <SelectItem key={cat} value={cat}>{cat}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <Select value={typeFilter} onValueChange={(v) => { setTypeFilter(v); setPage(1); }}>
           <SelectTrigger className="w-[160px]">
             <SelectValue />

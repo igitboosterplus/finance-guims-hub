@@ -172,9 +172,6 @@ export default function LoginPage() {
                     <LogIn className="h-4 w-4" />
                     {loginLoading ? "Connexion en cours..." : "Se connecter"}
                   </Button>
-                  <p className="text-xs text-muted-foreground text-center">
-                    Première connexion ? Utilisez <strong>admin</strong> / <strong>admin123</strong>
-                  </p>
                 </form>
               </TabsContent>
 

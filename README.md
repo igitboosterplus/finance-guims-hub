@@ -1,3 +1,3 @@
-# Welcome to your Lovable project
+# Guims Finance Hub
 
-TODO: Document your project here
+Application de gestion financière pour Guims Group — GABA, Guims Educ, Guims Academy, DigitBoosterPlus.
