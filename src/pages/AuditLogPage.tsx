@@ -4,11 +4,22 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { getAuditLog, markAuditEntriesSeen, buildHumanDiff, type AuditLogEntry } from "@/lib/auth";
+import { getAuditLog, markAuditEntriesSeen, buildHumanDiff, deleteAuditEntry, type AuditLogEntry } from "@/lib/auth";
 import { downloadAuditReport } from "@/lib/reports";
 import { useAuth } from "@/hooks/useAuth";
 import { Download, Search, FileText, PenLine, Trash2, Plus, Shield, ChevronLeft, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 
 const PAGE_SIZE = 20;
 
@@ -72,6 +83,17 @@ export default function AuditLogPage() {
     toast.success("Rapport d'audit PDF téléchargé");
   };
 
+  const handleDelete = (entryId: string) => {
+    if (!user) return;
+    const success = deleteAuditEntry(entryId, { userId: user.id, username: user.username });
+    if (success) {
+      setEntries(getAuditLog());
+      toast.success("Entrée d'audit supprimée");
+    } else {
+      toast.error("Erreur lors de la suppression");
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -115,6 +137,7 @@ export default function AuditLogPage() {
                     <TableHead>Action</TableHead>
                     <TableHead>Détails</TableHead>
                     <TableHead>Justification</TableHead>
+                    <TableHead className="w-[60px]"></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -142,6 +165,29 @@ export default function AuditLogPage() {
                           {entry.justification ? (
                             <span className="italic">{entry.justification}</span>
                           ) : '—'}
+                        </TableCell>
+                        <TableCell>
+                          <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                              <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive">
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent>
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>Supprimer cette entrée ?</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                  Cette action sera enregistrée dans le Super Audit. L'entrée sera définitivement supprimée du journal.
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel>Annuler</AlertDialogCancel>
+                                <AlertDialogAction onClick={() => handleDelete(entry.id)} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                                  Supprimer
+                                </AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
                         </TableCell>
                       </TableRow>
                     );

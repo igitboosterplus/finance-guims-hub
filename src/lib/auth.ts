@@ -103,6 +103,7 @@ export function purgeAllData(): void {
     'finance-users',
     'finance-session',
     'finance-audit-log',
+    'finance-super-audit',
     'finance-transactions',
     'gaba-stock-items',
     'gaba-stock-movements',
@@ -284,6 +285,39 @@ export function addAuditEntry(entry: Omit<AuditLogEntry, 'id' | 'timestamp' | 's
     seen: false,
   });
   saveAuditLog(log);
+
+  // Mirror into super audit
+  const actionMap: Record<string, SuperAuditAction> = {
+    create: 'create_transaction',
+    update: 'update_transaction',
+    delete: 'delete_transaction',
+  };
+  addSuperAuditEntry({
+    userId: entry.userId,
+    username: entry.username,
+    action: actionMap[entry.action] ?? 'other',
+    details: entry.details,
+    targetEntityId: entry.entityId,
+  });
+}
+
+/** Delete an audit entry and log the deletion in the super audit */
+export function deleteAuditEntry(entryId: string, deletedBy: { userId: string; username: string }): boolean {
+  const log = getAuditLog();
+  const entry = log.find(e => e.id === entryId);
+  if (!entry) return false;
+  // Log in super audit BEFORE deletion
+  addSuperAuditEntry({
+    userId: deletedBy.userId,
+    username: deletedBy.username,
+    action: 'delete_audit',
+    details: `Suppression audit: [${actionLabelsInternal[entry.action] ?? entry.action}] ${entry.details}`,
+    targetEntityId: entry.entityId,
+    metadata: JSON.stringify(entry),
+  });
+  const filtered = log.filter(e => e.id !== entryId);
+  saveAuditLog(filtered);
+  return true;
 }
 
 export function markAuditEntriesSeen() {
@@ -294,6 +328,56 @@ export function markAuditEntriesSeen() {
 
 export function getUnseenAuditCount(): number {
   return getAuditLog().filter(e => !e.seen).length;
+}
+
+const actionLabelsInternal: Record<string, string> = {
+  create: 'Création',
+  update: 'Modification',
+  delete: 'Suppression',
+};
+
+// ==================== SUPER AUDIT LOG ====================
+// Tracks ALL system actions — accessible ONLY by the principal superadmin.
+// Cannot be deleted by anyone.
+
+const SUPER_AUDIT_KEY = 'finance-super-audit';
+
+export type SuperAuditAction =
+  | 'create_transaction' | 'update_transaction' | 'delete_transaction'
+  | 'delete_audit'
+  | 'create_user' | 'delete_user' | 'approve_user' | 'reject_user' | 'reset_password' | 'update_permissions'
+  | 'login' | 'logout'
+  | 'other';
+
+export interface SuperAuditEntry {
+  id: string;
+  userId: string;
+  username: string;
+  action: SuperAuditAction;
+  details: string;
+  targetEntityId?: string;
+  metadata?: string;
+  timestamp: string;
+}
+
+export function getSuperAuditLog(): SuperAuditEntry[] {
+  const data = localStorage.getItem(SUPER_AUDIT_KEY);
+  return data ? JSON.parse(data) : [];
+}
+
+function saveSuperAuditLog(entries: SuperAuditEntry[]) {
+  localStorage.setItem(SUPER_AUDIT_KEY, JSON.stringify(entries));
+  syncFullCollection(TABLES.superAudit, SUPER_AUDIT_KEY);
+}
+
+export function addSuperAuditEntry(entry: Omit<SuperAuditEntry, 'id' | 'timestamp'>) {
+  const log = getSuperAuditLog();
+  log.push({
+    ...entry,
+    id: crypto.randomUUID(),
+    timestamp: new Date().toISOString(),
+  });
+  saveSuperAuditLog(log);
 }
 
 const FIELD_LABELS: Record<string, string> = {

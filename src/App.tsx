@@ -11,6 +11,7 @@ import NewTransaction from "@/pages/NewTransaction";
 import LoginPage from "@/pages/LoginPage";
 import UserManagement from "@/pages/UserManagement";
 import AuditLogPage from "@/pages/AuditLogPage";
+import SuperAuditPage from "@/pages/SuperAuditPage";
 import ProfilePage from "@/pages/ProfilePage";
 import GabaStockPage from "@/pages/GabaStockPage";
 import FormationsPage from "@/pages/FormationsPage";
@@ -88,6 +89,7 @@ const App = () => (
                     <Route path="/transaction/new" element={<NewTransaction />} />
                     <Route path="/users" element={<UserManagement />} />
                     <Route path="/audit" element={<AuditLogPage />} />
+                    <Route path="/super-audit" element={<SuperAuditPage />} />
                     <Route path="/profile" element={<ProfilePage />} />
                     <Route path="/gaba/stock" element={<GabaStockPage />} />
                     <Route path="/formations" element={<FormationsPage />} />

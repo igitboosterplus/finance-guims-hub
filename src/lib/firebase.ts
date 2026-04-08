@@ -43,6 +43,7 @@ export const TABLES = {
   stockMovements: "stock_movements",
   trainings: "trainings",
   auditLog: "audit_log",
+  superAudit: "super_audit",
   formationsCatalog: "formations_catalog",
   paymentPlans: "payment_plans",
   stockKits: "stock_kits",

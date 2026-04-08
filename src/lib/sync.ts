@@ -48,6 +48,7 @@ export async function pullAllFromSupabase(): Promise<{ success: boolean; error?:
       pullTable(TABLES.transactions, "finance-transactions"),
       pullTable(TABLES.users, "finance-users"),
       pullTable(TABLES.auditLog, "finance-audit-log"),
+      pullTable(TABLES.superAudit, "finance-super-audit"),
       pullTable(TABLES.stockItems, "gaba-stock-items"),
       pullTable(TABLES.stockMovements, "gaba-stock-movements"),
       pullTable(TABLES.trainings, "gaba-trainings"),
@@ -95,6 +96,7 @@ export async function pushAllToSupabase(): Promise<{ success: boolean; error?: s
       [TABLES.transactions, "finance-transactions"],
       [TABLES.users, "finance-users"],
       [TABLES.auditLog, "finance-audit-log"],
+      [TABLES.superAudit, "finance-super-audit"],
       [TABLES.stockItems, "gaba-stock-items"],
       [TABLES.stockMovements, "gaba-stock-movements"],
       [TABLES.trainings, "gaba-trainings"],
@@ -124,7 +126,7 @@ export async function purgeAllSupabase(): Promise<void> {
   const sb = getSupabase();
   if (!sb) return;
   const allTables: TableName[] = [
-    TABLES.transactions, TABLES.users, TABLES.auditLog,
+    TABLES.transactions, TABLES.users, TABLES.auditLog, TABLES.superAudit,
     TABLES.stockItems, TABLES.stockMovements, TABLES.trainings,
     TABLES.formationsCatalog, TABLES.paymentPlans, TABLES.stockKits,
   ];
