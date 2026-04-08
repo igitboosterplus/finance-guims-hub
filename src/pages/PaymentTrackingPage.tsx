@@ -10,17 +10,21 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
 import { departments, type DepartmentId, type PaymentMethod, formatCurrency, PAYMENT_METHODS, addTransaction, isInscriptionCategory } from "@/lib/data";
-import { addAuditEntry, getCurrentUser, hasPermission, hasDepartmentAccess } from "@/lib/auth";
+import { addAuditEntry, addSuperAuditEntry, getCurrentUser, hasPermission, hasDepartmentAccess } from "@/lib/auth";
 import {
-  getPaymentPlans, addPaymentPlan, addInstallment, updatePaymentPlanStatus,
+  getPaymentPlans, addPaymentPlan, addInstallment, updatePaymentPlanStatus, deletePaymentPlan,
   getPaidAmount, getRemainingAmount, getPaymentReminders, getOverdueTranches, getAllocationSummary,
   updatePlanInscription,
   type PaymentPlan, type PaymentInstallment, type PaymentReminder, type ScheduledTranche,
 } from "@/lib/stock";
 import { toast } from "sonner";
 import {
-  CreditCard, Plus, Search, ChevronDown, ChevronUp, CheckCircle2, Clock, XCircle, Archive, ArchiveRestore, Receipt, User, CalendarDays, Banknote, AlertTriangle, Bell,
+  CreditCard, Plus, Search, ChevronDown, ChevronUp, CheckCircle2, Clock, XCircle, Archive, ArchiveRestore, Receipt, User, CalendarDays, Banknote, AlertTriangle, Bell, Trash2,
 } from "lucide-react";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 
 const STATUS_CONFIG = {
   en_cours: { label: "En cours", icon: Clock, color: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400" },
@@ -256,6 +260,27 @@ export default function PaymentTrackingPage() {
     updatePaymentPlanStatus(planId, 'en_cours');
     toast.success("Plan réouvert");
     refresh();
+  };
+
+  const handleDelete = (plan: PaymentPlan) => {
+    const success = deletePaymentPlan(plan.id);
+    if (success) {
+      const currentUser = getCurrentUser();
+      if (currentUser) {
+        addSuperAuditEntry({
+          userId: currentUser.id,
+          username: currentUser.username,
+          action: 'other',
+          details: `Suppression plan de suivi: ${plan.clientName} — ${plan.label} (${plan.departmentId})`,
+          targetEntityId: plan.id,
+          metadata: JSON.stringify(plan),
+        });
+      }
+      toast.success("Plan de suivi supprimé");
+      refresh();
+    } else {
+      toast.error("Erreur lors de la suppression");
+    }
   };
 
   const getDeptName = (id: string) => departments.find(d => d.id === id)?.name ?? id;
@@ -544,6 +569,27 @@ export default function PaymentTrackingPage() {
                       <Button size="sm" variant="outline" onClick={() => handleReopen(plan.id)} className="gap-1 text-xs">
                         <ArchiveRestore className="h-3.5 w-3.5" /> Restaurer
                       </Button>
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <Button size="sm" variant="ghost" className="gap-1 text-xs text-destructive hover:text-destructive">
+                            <Trash2 className="h-3.5 w-3.5" /> Supprimer
+                          </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>Supprimer ce plan de suivi ?</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              Cette action est irréversible. Le plan de suivi de <strong>{plan.clientName}</strong> sera définitivement supprimé. L'action sera enregistrée dans le Super Audit.
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>Annuler</AlertDialogCancel>
+                            <AlertDialogAction onClick={() => handleDelete(plan)} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                              Supprimer
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
                     </div>
                   )}
 
