@@ -1,4 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
-  <rect width="256" height="256" rx="48" fill="#1a1a2e"/>
-  <text x="128" y="180" font-family="Arial,sans-serif" font-weight="bold" font-size="180" fill="#6366f1" text-anchor="middle">G</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 580 580">
+  <!-- Outer arcs - blue (left/right) -->
+  <path d="M120 290 A170 170 0 0 1 290 120" fill="none" stroke="#1a3a7a" stroke-width="52" stroke-linecap="round"/>
+  <path d="M460 290 A170 170 0 0 1 290 460" fill="none" stroke="#1a3a7a" stroke-width="52" stroke-linecap="round"/>
+  <!-- Middle arcs - green (left/right) -->
+  <path d="M175 290 A115 115 0 0 0 290 175" fill="none" stroke="#2eae4a" stroke-width="52" stroke-linecap="round"/>
+  <path d="M405 290 A115 115 0 0 0 290 405" fill="none" stroke="#2eae4a" stroke-width="52" stroke-linecap="round"/>
+  <!-- Center circle - blue ring -->
+  <circle cx="290" cy="290" r="58" fill="none" stroke="#1a3a7a" stroke-width="40"/>
+  <!-- Vertical bar - green -->
+  <rect x="264" y="40" width="52" height="160" rx="4" fill="#2eae4a"/>
+  <rect x="264" y="380" width="52" height="160" rx="4" fill="#2eae4a"/>
 </svg>
