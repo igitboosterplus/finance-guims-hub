@@ -82,7 +82,7 @@ function saveUsers(users: User[]) {
 export async function initDefaultSuperAdmin() {
   let users = getUsers();
 
-  // Deduplicate superadmins with the same username (bug fix)
+  // Deduplicate users with the same username (keep first occurrence)
   const seen = new Set<string>();
   const deduped = users.filter(u => {
     const key = u.username.toLowerCase();
@@ -90,13 +90,26 @@ export async function initDefaultSuperAdmin() {
     seen.add(key);
     return true;
   });
-  if (deduped.length < users.length) {
+
+  // One-time cleanup: remove all non-superadmin accounts
+  const CLEANUP_FLAG = 'guims-users-cleanup-v1';
+  if (localStorage.getItem(CLEANUP_FLAG) !== '1') {
+    const superadminsOnly = deduped.filter(u => u.role === 'superadmin');
+    if (superadminsOnly.length > 0) {
+      saveUsers(superadminsOnly);
+      users = superadminsOnly;
+      console.log('[Auth] Cleanup: kept only superadmin accounts.');
+    } else {
+      users = [];
+    }
+    localStorage.setItem(CLEANUP_FLAG, '1');
+  } else if (deduped.length < users.length) {
     saveUsers(deduped);
     users = deduped;
     console.log('[Auth] Removed duplicate user entries.');
   }
 
-  if (users.length === 0) {
+  if (users.length === 0 || !users.some(u => u.role === 'superadmin')) {
     const hash = await hashPassword('Yvan2000@');
     const superAdmin: User = {
       id: crypto.randomUUID(),
@@ -107,7 +120,10 @@ export async function initDefaultSuperAdmin() {
       approved: true,
       createdAt: new Date().toISOString(),
     };
-    saveUsers([superAdmin]);
+    // Keep existing non-superadmin users if any, add superadmin
+    const final = users.filter(u => u.role !== 'superadmin');
+    final.push(superAdmin);
+    saveUsers(final);
   }
 }
 
