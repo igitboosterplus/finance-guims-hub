@@ -13,12 +13,12 @@ import { departments, type DepartmentId, formatCurrency } from "@/lib/data";
 import { getCurrentUser, hasPermission, hasDepartmentAccess } from "@/lib/auth";
 import {
   getFormationsCatalog, addFormationCatalog, updateFormationCatalog, deleteFormationCatalog,
-  getStockItems,
-  type FormationCatalog, type FormationPack, type FormationTranche, type PackAdvantage, type PackKitItem, type StockItem,
+  getStockItems, getStockKits,
+  type FormationCatalog, type FormationPack, type FormationTranche, type PackAdvantage, type PackKitItem, type StockItem, type StockKit,
 } from "@/lib/stock";
 import { toast } from "sonner";
 import {
-  GraduationCap, Plus, Pencil, Trash2, Package, Star, Award, ChevronDown, ChevronUp, Search, Calendar, CreditCard,
+  GraduationCap, Plus, Pencil, Trash2, Package, Star, Award, ChevronDown, ChevronUp, Search, Calendar, CreditCard, Boxes,
 } from "lucide-react";
 
 // ==================== PACK EDITOR COMPONENT ====================
@@ -26,12 +26,13 @@ import {
 interface PackEditorProps {
   pack: FormationPack;
   stockItems: StockItem[];
+  stockKits: StockKit[];
   onChange: (pack: FormationPack) => void;
   onRemove: () => void;
   index: number;
 }
 
-function PackEditor({ pack, stockItems, onChange, onRemove, index }: PackEditorProps) {
+function PackEditor({ pack, stockItems, stockKits, onChange, onRemove, index }: PackEditorProps) {
   const [expanded, setExpanded] = useState(true);
 
   const updateAdvantage = (i: number, description: string) => {
@@ -194,6 +195,41 @@ function PackEditor({ pack, stockItems, onChange, onRemove, index }: PackEditorP
             <Button type="button" variant="outline" size="sm" onClick={addKitItem} className="gap-1 text-xs">
               <Plus className="h-3 w-3" /> Ajouter un élément de kit
             </Button>
+            {stockKits.length > 0 && (
+              <div className="space-y-2 pt-2 border-t">
+                <Label className="text-xs flex items-center gap-1"><Boxes className="h-3 w-3" /> Ajouter un kit complet du stock</Label>
+                <div className="flex gap-2 items-end">
+                  <Select onValueChange={(kitId) => {
+                    const kit = stockKits.find(k => k.id === kitId);
+                    if (!kit) return;
+                    const newKitItems: PackKitItem[] = kit.components.map(comp => {
+                      const item = stockItems.find(s => s.id === comp.stockItemId);
+                      return {
+                        stockItemId: comp.stockItemId,
+                        label: item?.name ?? 'Article',
+                        quantity: comp.quantity,
+                        specialPrice: 0,
+                        normalPrice: item?.sellingPrice ?? 0,
+                      };
+                    });
+                    onChange({ ...pack, kitItems: [...pack.kitItems, ...newKitItems] });
+                    toast.success(`Kit "${kit.name}" ajouté (${kit.components.length} élément(s))`);
+                  }}>
+                    <SelectTrigger className="h-8 text-xs flex-1">
+                      <SelectValue placeholder="Sélectionner un kit..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {stockKits.map(k => (
+                        <SelectItem key={k.id} value={k.id}>
+                          {k.name} — {k.components.length} composant(s) ({formatCurrency(k.sellingPrice)})
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <p className="text-[10px] text-muted-foreground">Les éléments du kit seront ajoutés avec un prix spécial à 0 (gratuit). Vous pouvez modifier le prix après.</p>
+              </div>
+            )}
           </div>
         </>
       )}
@@ -210,6 +246,7 @@ export default function FormationsPage() {
 
   const [formations, setFormations] = useState<FormationCatalog[]>([]);
   const [stockItems, setStockItems] = useState<StockItem[]>([]);
+  const [stockKits, setStockKits] = useState<StockKit[]>([]);
   const [filterDept, setFilterDept] = useState<string>("all");
   const [search, setSearch] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -236,6 +273,7 @@ export default function FormationsPage() {
   const refresh = () => {
     setFormations(getFormationsCatalog());
     setStockItems(getStockItems());
+    setStockKits(getStockKits());
   };
 
   const filtered = formations.filter(f => {
@@ -534,6 +572,15 @@ export default function FormationsPage() {
                           Voir les détails des packs →
                         </button>
                       )}
+                      {f.inscriptionFee && f.inscriptionFee > 0 && (
+                        <div className="rounded-lg border border-dashed border-amber-400/40 bg-amber-50 dark:bg-amber-900/20 p-3 flex items-center justify-between mt-3">
+                          <span className="text-sm font-medium flex items-center gap-1.5">
+                            <CreditCard className="h-4 w-4" />
+                            Frais d'inscription (hors formation)
+                          </span>
+                          <Badge variant="outline" className="text-sm border-amber-400 text-amber-700 dark:text-amber-400">{formatCurrency(f.inscriptionFee)}</Badge>
+                        </div>
+                      )}
                     </>
                   ) : (
                     /* Tranche mode display */
@@ -680,6 +727,7 @@ export default function FormationsPage() {
                     key={pack.id}
                     pack={pack}
                     stockItems={stockItems}
+                    stockKits={stockKits}
                     onChange={(p) => updatePack(i, p)}
                     onRemove={() => removePack(i)}
                     index={i}
@@ -688,6 +736,22 @@ export default function FormationsPage() {
                 {formPacks.length === 0 && (
                   <p className="text-sm text-muted-foreground text-center py-4">Aucun pack. Cliquez sur "Ajouter un pack" pour commencer.</p>
                 )}
+
+                {/* Frais d'inscription (packs mode) */}
+                <div className="rounded-lg border border-dashed border-amber-400/40 bg-amber-50 dark:bg-amber-900/20 p-4 space-y-2">
+                  <Label className="flex items-center gap-1.5 text-sm font-semibold">
+                    <CreditCard className="h-4 w-4" />
+                    Frais d'inscription (hors formation)
+                  </Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    placeholder="Ex: 10000"
+                    value={formInscriptionFee || ""}
+                    onChange={(e) => setFormInscriptionFee(parseInt(e.target.value) || 0)}
+                  />
+                  <p className="text-[11px] text-muted-foreground">Montant de l'inscription, non inclus dans le prix du pack. Laissez vide si pas de frais d'inscription.</p>
+                </div>
               </div>
             ) : (
               /* ===== TRANCHE EDITOR ===== */
