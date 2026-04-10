@@ -381,6 +381,7 @@ export default function FormationsPage() {
     price: 0,
     advantages: [{ description: "" }],
     kitItems: [],
+    kits: [],
   });
 
   const newEmptyTranche = (index: number): FormationTranche => ({
@@ -409,7 +410,7 @@ export default function FormationsPage() {
     setFormDescription(f.description);
     setFormDept(f.departmentId);
     setFormMode(f.mode || 'packs');
-    setFormPacks(f.packs.map(p => ({ ...p })));
+    setFormPacks(f.packs.map(p => ({ ...p, advantages: [...p.advantages], kitItems: [...p.kitItems], kits: [...(p.kits || [])] })));
     setFormTranches((f.tranches || []).map(t => ({ ...t })));
     setFormTotalPrice(f.totalPrice || 0);
     setFormInscriptionFee(f.inscriptionFee || 0);
@@ -615,26 +616,27 @@ export default function FormationsPage() {
                                   <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Kits complets</p>
                                   {pack.kits.map((ref, ki) => {
                                     const kit = stockKits.find(k => k.id === ref.kitId);
-                                    if (!kit) return null;
                                     return (
                                       <div key={ki} className="rounded border bg-background/60 p-1.5 space-y-0.5">
                                         <div className="text-xs flex items-center justify-between">
                                           <span className="flex items-center gap-1 font-semibold">
                                             <Boxes className="h-3 w-3 text-primary" />
-                                            {kit.name}
+                                            {kit?.name ?? 'Kit supprimé'}
                                             {ref.quantity > 1 && <span className="text-muted-foreground">×{ref.quantity}</span>}
                                           </span>
                                           <span className="font-semibold text-success">
                                             {ref.priceMode === 'free' ? 'Gratuit' : formatCurrency(ref.reducedPrice ?? 0)}
                                           </span>
                                         </div>
-                                        <div className="text-[10px] text-muted-foreground pl-4">
-                                          {kit.components.map((c, ci) => {
-                                            const it = stockItems.find(s => s.id === c.stockItemId);
-                                            return <span key={ci}>{ci > 0 && ' · '}{it?.name ?? '?'} ×{c.quantity * ref.quantity}</span>;
-                                          })}
-                                        </div>
-                                        {ref.priceMode === 'reduced' && kit.sellingPrice > 0 && (
+                                        {kit && (
+                                          <div className="text-[10px] text-muted-foreground pl-4">
+                                            {kit.components.map((c, ci) => {
+                                              const it = stockItems.find(s => s.id === c.stockItemId);
+                                              return <span key={ci}>{ci > 0 && ' · '}{it?.name ?? '?'} ×{c.quantity * ref.quantity}</span>;
+                                            })}
+                                          </div>
+                                        )}
+                                        {ref.priceMode === 'reduced' && kit && kit.sellingPrice > 0 && (
                                           <div className="text-[10px] text-muted-foreground pl-4">
                                             <span className="line-through">{formatCurrency(kit.sellingPrice * ref.quantity)}</span> → {formatCurrency(ref.reducedPrice ?? 0)}
                                           </div>
