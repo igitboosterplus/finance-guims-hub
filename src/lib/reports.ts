@@ -254,7 +254,7 @@ export function downloadStockReport(opts?: ReportOptions) {
   y = addSectionTitle(doc, "Résumé du stock", y);
   autoTable(doc, {
     startY: y,
-    head: [["Articles", "Stock bas", "Valeur totale (achat)", "Mouvements"]],
+    head: [["Articles", "Stock bas", "Valeur totale (vente)", "Mouvements"]],
     body: [[String(stats.totalItems), String(stats.lowStock), fmtAmount(stats.totalValue), String(movements.length)]],
     theme: "grid",
     headStyles: { fillColor: [76, 140, 43], fontSize: 9 },
@@ -278,7 +278,7 @@ export function downloadStockReport(opts?: ReportOptions) {
           i.unit,
           fmtAmount(i.purchasePrice),
           fmtAmount(i.sellingPrice),
-          fmtAmount(i.currentQuantity * i.purchasePrice),
+          fmtAmount(i.currentQuantity * i.sellingPrice),
         ]),
       theme: "striped",
       headStyles: { fillColor: [76, 140, 43], fontSize: 8 },

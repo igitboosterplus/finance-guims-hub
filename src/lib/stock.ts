@@ -232,7 +232,7 @@ export function getStockStats() {
   const items = getStockItems();
   const totalItems = items.length;
   const lowStock = items.filter(i => i.currentQuantity <= i.alertThreshold).length;
-  const totalValue = items.reduce((sum, i) => sum + i.currentQuantity * i.purchasePrice, 0);
+  const totalValue = items.reduce((sum, i) => sum + i.currentQuantity * i.sellingPrice, 0);
   const movements = getStockMovements();
   const totalMovements = movements.length;
   return { totalItems, lowStock, totalValue, totalMovements };
@@ -257,7 +257,7 @@ export function exportStockCSV(): string {
       item.alertThreshold,
       item.purchasePrice,
       item.sellingPrice,
-      item.currentQuantity * item.purchasePrice,
+      item.currentQuantity * item.sellingPrice,
     ].join(';'));
   return [headers.join(';'), ...rows].join('\n');
 }

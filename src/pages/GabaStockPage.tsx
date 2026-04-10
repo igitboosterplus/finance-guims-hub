@@ -570,7 +570,7 @@ export default function GabaStockPage() {
                       <TableCell>{item.unit}</TableCell>
                       <TableCell className="text-right">{formatCurrency(item.purchasePrice)}</TableCell>
                       <TableCell className="text-right">{formatCurrency(item.sellingPrice)}</TableCell>
-                      <TableCell className="text-right">{formatCurrency(item.currentQuantity * item.purchasePrice)}</TableCell>
+                      <TableCell className="text-right">{formatCurrency(item.currentQuantity * item.sellingPrice)}</TableCell>
                       <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-1">
                           <Button variant="ghost" size="icon" className="h-8 w-8" title="Entrée" onClick={() => openMovement('entry', item.id)}>
