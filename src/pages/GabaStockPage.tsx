@@ -34,9 +34,9 @@ import {
   STOCK_CATEGORIES, getStockItems, addStockItem, updateStockItem, deleteStockItem,
   addStockMovement, getStockMovements, getStockStats, getCategoryLabel,
   exportStockCSV, getTrainings, addTraining, deleteTraining, getMovementTypeLabel,
-  getStockKits, addStockKit, updateStockKit, deleteStockKit, checkKitAvailability, sellKit,
+  getStockKits, addStockKit, updateStockKit, deleteStockKit, checkKitAvailability, sellKit, useKitForTraining,
   type StockItem, type StockMovement, type MovementType, type Training, type TrainingType, type TraineeKit,
-  type StockKit, type KitComponent,
+  type StockKit, type KitComponent, type TrainingKitUsage,
 } from "@/lib/stock";
 import logoGaba from "@/assets/logo-gaba.png";
 
@@ -85,12 +85,13 @@ export default function GabaStockPage() {
   const [trainingDialog, setTrainingDialog] = useState(false);
   const [trainingForm, setTrainingForm] = useState({
     trainingType: 'gaba' as TrainingType,
-    parkName: '', date: new Date().toISOString().slice(0, 10), description: '',
+    parkName: '', date: new Date().toISOString().slice(0, 10), enrollmentDate: new Date().toISOString().slice(0, 10), description: '',
     trainees: '' as string, // comma-separated
     tranche: '' as string, // Guims Academy
     materials: [] as { itemId: string; quantity: string }[],
     gifts: [] as { traineeName: string; itemId: string; quantity: string }[],
     traineeKits: [] as { traineeName: string; starterKitHannetons: string; hasBook: boolean; }[],
+    kitUsages: [] as { kitId: string; quantity: string }[],
   });
 
   // --- Delete dialog ---
@@ -264,6 +265,8 @@ export default function GabaStockPage() {
       materials: [{ itemId: items[0]?.id ?? '', quantity: '' }],
       gifts: [],
       traineeKits: [],
+      kitUsages: [],
+      enrollmentDate: new Date().toISOString().slice(0, 10),
     });
     setTrainingDialog(true);
   };
@@ -295,6 +298,15 @@ export default function GabaStockPage() {
         const result = addStockMovement(gift.itemId, 'gift', qty, 0, `Don à ${gift.traineeName.trim()}`, trainingForm.date, userName, trainingForm.parkName.trim(), gift.traineeName.trim());
         if (!result.success) errors.push(`${item?.name} → ${gift.traineeName}: ${result.error}`);
       }
+
+      // Record kit usages
+      for (const ku of trainingForm.kitUsages) {
+        const qty = parseInt(ku.quantity, 10);
+        if (!ku.kitId || isNaN(qty) || qty <= 0) continue;
+        const kit = kits.find(k => k.id === ku.kitId);
+        const result = useKitForTraining(ku.kitId, qty, trainingForm.date, userName, trainingForm.parkName.trim());
+        if (!result.success) errors.push(`Kit ${kit?.name}: ${result.error}`);
+      }
     }
 
     // Build trainee kits
@@ -316,11 +328,13 @@ export default function GabaStockPage() {
       trainingType: trainingForm.trainingType,
       parkName: trainingForm.parkName.trim(),
       date: trainingForm.date,
+      enrollmentDate: trainingForm.enrollmentDate ? new Date(trainingForm.enrollmentDate).toISOString() : new Date().toISOString(),
       description: trainingForm.description.trim(),
       trainees: traineeList,
       traineeKits,
       materialsUsed: trainingForm.materials.filter(m => m.itemId && parseInt(m.quantity, 10) > 0).map(m => ({ itemId: m.itemId, quantity: parseInt(m.quantity, 10) })),
       giftsGiven: trainingForm.gifts.filter(g => g.itemId && parseInt(g.quantity, 10) > 0 && g.traineeName.trim()).map(g => ({ traineeName: g.traineeName.trim(), itemId: g.itemId, quantity: parseInt(g.quantity, 10) })),
+      kitsUsed: trainingForm.kitUsages.filter(ku => ku.kitId && parseInt(ku.quantity, 10) > 0).map(ku => ({ kitId: ku.kitId, quantity: parseInt(ku.quantity, 10) })),
       ...(trainingForm.trainingType === 'guims-academy' ? { tranche: trainingForm.tranche } : {}),
       createdBy: userName,
     });
@@ -796,6 +810,17 @@ export default function GabaStockPage() {
                         </ul>
                       </div>
                     )}
+                    {tr.kitsUsed && tr.kitsUsed.length > 0 && (
+                      <div>
+                        <span className="font-medium">Kits utilisés :</span>
+                        <ul className="list-disc list-inside text-muted-foreground">
+                          {tr.kitsUsed.map((ku, i) => {
+                            const kit = kits.find(k => k.id === ku.kitId);
+                            return <li key={i}>{kit?.name ?? '—'} × {ku.quantity}</li>;
+                          })}
+                        </ul>
+                      </div>
+                    )}
                     {tr.giftsGiven.length > 0 && (
                       <div>
                         <span className="font-medium">Éléments offerts :</span>
@@ -1062,21 +1087,26 @@ export default function GabaStockPage() {
                 <Label>Date de formation</Label>
                 <Input type="date" value={trainingForm.date} onChange={e => setTrainingForm(f => ({ ...f, date: e.target.value }))} />
               </div>
-              {trainingForm.trainingType === 'guims-academy' && (
-                <div className="space-y-2">
-                  <Label>Tranche *</Label>
-                  <Select value={trainingForm.tranche} onValueChange={v => setTrainingForm(f => ({ ...f, tranche: v }))}>
-                    <SelectTrigger><SelectValue placeholder="Sélectionner la tranche" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="Tranche 1">Tranche 1</SelectItem>
-                      <SelectItem value="Tranche 2">Tranche 2</SelectItem>
-                      <SelectItem value="Tranche 3">Tranche 3</SelectItem>
-                      <SelectItem value="Complet">Paiement Complet</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
+              <div className="space-y-2">
+                <Label>Date d'inscription *</Label>
+                <Input type="date" value={trainingForm.enrollmentDate} onChange={e => setTrainingForm(f => ({ ...f, enrollmentDate: e.target.value }))} />
+              </div>
             </div>
+
+            {trainingForm.trainingType === 'guims-academy' && (
+              <div className="space-y-2">
+                <Label>Tranche *</Label>
+                <Select value={trainingForm.tranche} onValueChange={v => setTrainingForm(f => ({ ...f, tranche: v }))}>
+                  <SelectTrigger><SelectValue placeholder="Sélectionner la tranche" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Tranche 1">Tranche 1</SelectItem>
+                    <SelectItem value="Tranche 2">Tranche 2</SelectItem>
+                    <SelectItem value="Tranche 3">Tranche 3</SelectItem>
+                    <SelectItem value="Complet">Paiement Complet</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
 
             <div className="space-y-2">
               <Label>Description / notes</Label>
@@ -1105,7 +1135,7 @@ export default function GabaStockPage() {
             </div>
 
             <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-3 text-sm text-blue-700 dark:text-blue-400">
-              📋 La date d'inscription sera enregistrée automatiquement ({new Date().toLocaleDateString('fr-FR')}).
+              📋 La date d'inscription est définie ci-dessus. Par défaut c'est la date du jour ({new Date().toLocaleDateString('fr-FR')}).
             </div>
 
             {/* Trainee kits (GABA) */}
@@ -1163,6 +1193,47 @@ export default function GabaStockPage() {
                     </Button>
                   </div>
                 ))}
+              </div>
+            )}
+
+            {/* Kits used (GABA only) */}
+            {trainingForm.trainingType === 'gaba' && kits.length > 0 && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label className="text-base font-semibold">Kits stock utilisés</Label>
+                  <Button type="button" variant="outline" size="sm" onClick={() => setTrainingForm(f => ({ ...f, kitUsages: [...f.kitUsages, { kitId: kits[0]?.id ?? '', quantity: '1' }] }))}>
+                    <Boxes className="h-3 w-3 mr-1" /> Ajouter un kit
+                  </Button>
+                </div>
+                {trainingForm.kitUsages.map((ku, idx) => {
+                  const selectedKit = kits.find(k => k.id === ku.kitId);
+                  return (
+                    <div key={idx} className="space-y-1">
+                      <div className="flex gap-2 items-end">
+                        <div className="flex-1">
+                          <Select value={ku.kitId} onValueChange={v => { const k = [...trainingForm.kitUsages]; k[idx].kitId = v; setTrainingForm(f => ({ ...f, kitUsages: k })); }}>
+                            <SelectTrigger><SelectValue placeholder="Kit" /></SelectTrigger>
+                            <SelectContent>
+                              {kits.map(k => <SelectItem key={k.id} value={k.id}>{k.name} ({formatCurrency(k.sellingPrice)})</SelectItem>)}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <Input className="w-20" type="number" min="1" placeholder="Qté" value={ku.quantity} onChange={e => { const k = [...trainingForm.kitUsages]; k[idx].quantity = e.target.value; setTrainingForm(f => ({ ...f, kitUsages: k })); }} />
+                        <Button type="button" variant="ghost" size="icon" className="h-9 w-9" onClick={() => setTrainingForm(f => ({ ...f, kitUsages: f.kitUsages.filter((_, i) => i !== idx) }))}>
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      </div>
+                      {selectedKit && (
+                        <p className="text-xs text-muted-foreground ml-1">
+                          Composants : {selectedKit.components.map(c => { const it = items.find(i => i.id === c.stockItemId); return `${it?.name ?? '?'} ×${c.quantity}`; }).join(', ')}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+                {trainingForm.kitUsages.length === 0 && (
+                  <p className="text-sm text-muted-foreground">Aucun kit ajouté. Cliquez "Ajouter un kit" pour utiliser un kit stock dans cette formation.</p>
+                )}
               </div>
             )}
 

@@ -69,6 +69,11 @@ export interface TraineeKit {
   otherItems: TrainingGift[];  // Autres éléments offerts
 }
 
+export interface TrainingKitUsage {
+  kitId: string;
+  quantity: number;
+}
+
 export interface Training {
   id: string;
   trainingType: TrainingType;  // GABA ou Guims Academy
@@ -80,6 +85,7 @@ export interface Training {
   traineeKits: TraineeKit[];   // kits par formé (GABA)
   materialsUsed: TrainingMaterial[];
   giftsGiven: TrainingGift[];
+  kitsUsed?: TrainingKitUsage[];  // Kits stock utilisés pour la formation
   // Guims Academy specifics
   tranche?: string;            // Tranche en cours (Tranche 1, 2, 3, Complet)
   createdAt: string;
@@ -274,12 +280,12 @@ function saveTrainings(trainings: Training[]) {
   syncFullCollection(TABLES.trainings, TRAININGS_KEY);
 }
 
-export function addTraining(training: Omit<Training, 'id' | 'createdAt' | 'enrollmentDate'>): Training {
+export function addTraining(training: Omit<Training, 'id' | 'createdAt'>): Training {
   const trainings = getTrainings();
   const newTraining: Training = {
     ...training,
     id: crypto.randomUUID(),
-    enrollmentDate: new Date().toISOString(),
+    enrollmentDate: training.enrollmentDate || new Date().toISOString(),
     createdAt: new Date().toISOString(),
   };
   trainings.push(newTraining);
@@ -981,6 +987,40 @@ export function sellKit(
       `Vente kit "${kit.name}"${quantity > 1 ? ` ×${quantity}` : ''}${clientName ? ` — ${clientName}` : ''}`,
       date,
       createdBy,
+    );
+    if (!result.success) {
+      return { success: false, error: result.error };
+    }
+    if (result.movement) movements.push(result.movement);
+  }
+  return { success: true, movements };
+}
+
+/** Use one or more kits for a training session — auto deduct all components from stock.
+ * Returns success/failure + list of movements created. */
+export function useKitForTraining(
+  kitId: string, quantity: number, date: string, createdBy: string, parkName?: string,
+): { success: boolean; error?: string; movements?: StockMovement[] } {
+  const kit = getStockKits().find(k => k.id === kitId);
+  if (!kit) return { success: false, error: 'Kit introuvable' };
+
+  const check = checkKitAvailability(kitId, quantity);
+  if (!check.available) {
+    const missingStr = check.missing.map(m => `${m.itemName}: besoin ${m.required}, dispo ${m.available}`).join('; ');
+    return { success: false, error: `Stock insuffisant — ${missingStr}` };
+  }
+
+  const movements: StockMovement[] = [];
+  for (const comp of kit.components) {
+    const result = addStockMovement(
+      comp.stockItemId,
+      'training',
+      comp.quantity * quantity,
+      0,
+      `Kit "${kit.name}" pour formation${quantity > 1 ? ` ×${quantity}` : ''}`,
+      date,
+      createdBy,
+      parkName,
     );
     if (!result.success) {
       return { success: false, error: result.error };
