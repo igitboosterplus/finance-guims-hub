@@ -602,9 +602,48 @@ export default function FormationsPage() {
                                 <div className="flex items-center gap-1.5">
                                   <IconComp className="h-4 w-4 text-primary" />
                                   <span className="font-semibold text-sm">{pack.name}</span>
+                                  {pack.kits && pack.kits.length > 0 && (
+                                    <Badge variant="outline" className="text-[10px] gap-0.5"><Boxes className="h-2.5 w-2.5" />{pack.kits.reduce((s, r) => s + r.quantity, 0)} kit(s)</Badge>
+                                  )}
                                 </div>
                                 <Badge className="text-xs">{formatCurrency(pack.price)}</Badge>
                               </div>
+
+                              {/* Kits complets — toujours visible */}
+                              {pack.kits && pack.kits.length > 0 && (
+                                <div className="space-y-1.5">
+                                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Kits complets</p>
+                                  {pack.kits.map((ref, ki) => {
+                                    const kit = stockKits.find(k => k.id === ref.kitId);
+                                    if (!kit) return null;
+                                    return (
+                                      <div key={ki} className="rounded border bg-background/60 p-1.5 space-y-0.5">
+                                        <div className="text-xs flex items-center justify-between">
+                                          <span className="flex items-center gap-1 font-semibold">
+                                            <Boxes className="h-3 w-3 text-primary" />
+                                            {kit.name}
+                                            {ref.quantity > 1 && <span className="text-muted-foreground">×{ref.quantity}</span>}
+                                          </span>
+                                          <span className="font-semibold text-success">
+                                            {ref.priceMode === 'free' ? 'Gratuit' : formatCurrency(ref.reducedPrice ?? 0)}
+                                          </span>
+                                        </div>
+                                        <div className="text-[10px] text-muted-foreground pl-4">
+                                          {kit.components.map((c, ci) => {
+                                            const it = stockItems.find(s => s.id === c.stockItemId);
+                                            return <span key={ci}>{ci > 0 && ' · '}{it?.name ?? '?'} ×{c.quantity * ref.quantity}</span>;
+                                          })}
+                                        </div>
+                                        {ref.priceMode === 'reduced' && kit.sellingPrice > 0 && (
+                                          <div className="text-[10px] text-muted-foreground pl-4">
+                                            <span className="line-through">{formatCurrency(kit.sellingPrice * ref.quantity)}</span> → {formatCurrency(ref.reducedPrice ?? 0)}
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
 
                               {isExpanded && (
                                 <>
@@ -642,45 +681,6 @@ export default function FormationsPage() {
                                             )}
                                           </div>
                                         ))}
-                                      </div>
-                                    </>
-                                  )}
-
-                                  {/* Kits complets du stock */}
-                                  {pack.kits && pack.kits.length > 0 && (
-                                    <>
-                                      <Separator className="my-1" />
-                                      <div className="space-y-1.5">
-                                        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Kits complets</p>
-                                        {pack.kits.map((ref, ki) => {
-                                          const kit = getStockKits().find(k => k.id === ref.kitId);
-                                          if (!kit) return null;
-                                          return (
-                                            <div key={ki} className="rounded border bg-background/60 p-1.5 space-y-0.5">
-                                              <div className="text-xs flex items-center justify-between">
-                                                <span className="flex items-center gap-1 font-semibold">
-                                                  <Boxes className="h-3 w-3 text-primary" />
-                                                  {kit.name}
-                                                  {ref.quantity > 1 && <span className="text-muted-foreground">×{ref.quantity}</span>}
-                                                </span>
-                                                <span className="font-semibold text-success">
-                                                  {ref.priceMode === 'free' ? 'Gratuit' : formatCurrency(ref.reducedPrice ?? 0)}
-                                                </span>
-                                              </div>
-                                              <div className="text-[10px] text-muted-foreground pl-4">
-                                                {kit.components.map((c, ci) => {
-                                                  const it = stockItems.find(s => s.id === c.stockItemId);
-                                                  return <span key={ci}>{ci > 0 && ' · '}{it?.name ?? '?'} ×{c.quantity * ref.quantity}</span>;
-                                                })}
-                                              </div>
-                                              {ref.priceMode === 'reduced' && kit.sellingPrice > 0 && (
-                                                <div className="text-[10px] text-muted-foreground pl-4">
-                                                  <span className="line-through">{formatCurrency(kit.sellingPrice * ref.quantity)}</span> → {formatCurrency(ref.reducedPrice ?? 0)}
-                                                </div>
-                                              )}
-                                            </div>
-                                          );
-                                        })}
                                       </div>
                                     </>
                                   )}
