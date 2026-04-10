@@ -16,21 +16,38 @@ async function pullTable(tableName: TableName, storageKey: string): Promise<bool
     const { data, error } = await sb.from(tableName).select("data");
     if (error) throw error;
 
+    const localRaw = localStorage.getItem(storageKey);
+    const localItems: { id: string }[] = localRaw ? JSON.parse(localRaw) : [];
+
     if (!data || data.length === 0) {
       // Table vide sur Supabase mais données locales → push
-      const localData = localStorage.getItem(storageKey);
-      if (localData) {
-        const items = JSON.parse(localData);
-        if (Array.isArray(items) && items.length > 0) {
-          await pushArrayToSupabase(tableName, items);
-          return true;
-        }
+      if (Array.isArray(localItems) && localItems.length > 0) {
+        await pushArrayToSupabase(tableName, localItems);
       }
       return true;
     }
-    // Chaque ligne stocke l'objet complet dans la colonne "data"
-    const items = data.map(row => row.data);
-    localStorage.setItem(storageKey, JSON.stringify(items));
+
+    // Merge: union of remote + local, local wins on conflict (by id)
+    const remoteItems: { id: string }[] = data.map(row => row.data);
+    const localById = new Map(localItems.map(item => [item.id, item]));
+    const remoteById = new Map(remoteItems.map(item => [item.id, item]));
+
+    // Start with all remote items, then overwrite/add local items
+    const merged = new Map(remoteById);
+    for (const [id, item] of localById) {
+      merged.set(id, item); // local wins on conflict
+    }
+
+    const mergedArray = Array.from(merged.values());
+    localStorage.setItem(storageKey, JSON.stringify(mergedArray));
+
+    // Push merged result back to Supabase if local had items not in remote
+    if (mergedArray.length > remoteItems.length) {
+      replaceCollection(tableName, mergedArray).catch(err =>
+        console.error(`[Sync] Erreur push merge ${tableName}:`, err)
+      );
+    }
+
     return true;
   } catch (error) {
     console.error(`[Sync] Erreur pull ${tableName}:`, error);
