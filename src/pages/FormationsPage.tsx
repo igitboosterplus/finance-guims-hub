@@ -437,12 +437,20 @@ export default function FormationsPage() {
       if (formTotalPrice <= 0) { toast.error("Le prix total (paiement complet) doit être positif"); return; }
     }
 
+    // Deep copy packs to ensure kits and all nested data are preserved
+    const packsCopy = formMode === 'packs' ? formPacks.map(p => ({
+      ...p,
+      advantages: [...p.advantages],
+      kitItems: [...p.kitItems],
+      kits: [...(p.kits || [])],
+    })) : [];
+
     const payload = {
       name: formName.trim(),
       description: formDescription.trim(),
       departmentId: formDept as DepartmentId,
       mode: formMode,
-      packs: formMode === 'packs' ? formPacks : [],
+      packs: packsCopy,
       tranches: formMode === 'tranches' ? formTranches : undefined,
       totalPrice: formMode === 'tranches' ? formTotalPrice : undefined,
       inscriptionFee: formInscriptionFee > 0 ? formInscriptionFee : undefined,
@@ -471,13 +479,11 @@ export default function FormationsPage() {
   };
 
   const updatePack = (index: number, pack: FormationPack) => {
-    const packs = [...formPacks];
-    packs[index] = pack;
-    setFormPacks(packs);
+    setFormPacks(prev => prev.map((p, i) => i === index ? pack : p));
   };
 
   const removePack = (index: number) => {
-    setFormPacks(formPacks.filter((_, i) => i !== index));
+    setFormPacks(prev => prev.filter((_, i) => i !== index));
   };
 
   const updateTranche = (index: number, updates: Partial<FormationTranche>) => {
