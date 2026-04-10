@@ -77,11 +77,22 @@ async function pushArrayToSupabase(tableName: TableName, items: { id: string }[]
 async function replaceCollection(tableName: TableName, items: { id: string }[]) {
   const sb = getSupabase();
   if (!sb) return;
-  // Supprimer toutes les lignes existantes puis réinsérer
-  const { error: delError } = await sb.from(tableName).delete().neq("id", "___none___");
-  if (delError) throw delError;
+
+  // Upsert all current items first (atomic per-item, no data loss window)
   if (items.length > 0) {
     await pushArrayToSupabase(tableName, items);
+  }
+
+  // Then remove items that are no longer in the local set
+  const localIds = items.map(i => i.id);
+  if (localIds.length > 0) {
+    // Delete rows whose id is NOT in the local set
+    const { error } = await sb.from(tableName).delete().not('id', 'in', `(${localIds.join(',')})`);
+    if (error) console.error(`[Sync] Erreur nettoyage ${tableName}:`, error);
+  } else {
+    // Local is empty → delete all
+    const { error } = await sb.from(tableName).delete().neq('id', '___none___');
+    if (error) console.error(`[Sync] Erreur suppression ${tableName}:`, error);
   }
 }
 
