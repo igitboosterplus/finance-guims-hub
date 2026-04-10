@@ -330,6 +330,14 @@ export interface PackAdvantage {
   description: string;
 }
 
+/** A reference to a complete StockKit included in a pack */
+export interface PackKitReference {
+  kitId: string;            // Reference to StockKit
+  quantity: number;         // Number of kits
+  priceMode: 'free' | 'reduced';
+  reducedPrice?: number;    // If priceMode is 'reduced', the price in FCFA
+}
+
 /** A pack/tier within a formation */
 export interface FormationPack {
   id: string;
@@ -337,6 +345,7 @@ export interface FormationPack {
   price: number;            // Prix du pack en FCFA
   advantages: PackAdvantage[];
   kitItems: PackKitItem[];
+  kits?: PackKitReference[];  // Kits complets du stock (optionnel)
 }
 
 /** A tranche (installment) with deadline for tranche-based formations */

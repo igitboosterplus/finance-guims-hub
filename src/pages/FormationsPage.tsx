@@ -14,7 +14,7 @@ import { getCurrentUser, hasPermission, hasDepartmentAccess } from "@/lib/auth";
 import {
   getFormationsCatalog, addFormationCatalog, updateFormationCatalog, deleteFormationCatalog,
   getStockItems, getStockKits,
-  type FormationCatalog, type FormationPack, type FormationTranche, type PackAdvantage, type PackKitItem, type StockItem, type StockKit,
+  type FormationCatalog, type FormationPack, type FormationTranche, type PackAdvantage, type PackKitItem, type PackKitReference, type StockItem, type StockKit,
 } from "@/lib/stock";
 import { toast } from "sonner";
 import {
@@ -43,25 +43,22 @@ function PackEditor({ pack, stockItems, stockKits, onChange, onRemove, index }: 
     const kit = stockKits.find(k => k.id === selectedKitId);
     if (!kit) { toast.error("Sélectionnez un kit"); return; }
     const qty = parseInt(kitQuantity, 10) || 1;
-    const reducedPrice = kitPriceMode === 'reduced' ? (parseInt(kitReducedPrice, 10) || 0) : undefined;
-
-    const newKitItems: PackKitItem[] = kit.components.map(comp => {
-      const item = stockItems.find(s => s.id === comp.stockItemId);
-      const normalUnitPrice = item?.sellingPrice ?? 0;
-      return {
-        stockItemId: comp.stockItemId,
-        label: `${item?.name ?? 'Article'}${qty > 1 ? ` (kit ×${qty})` : ''}`,
-        quantity: comp.quantity * qty,
-        specialPrice: kitPriceMode === 'free' ? 0 : reducedPrice,
-        normalPrice: normalUnitPrice * comp.quantity * qty,
-      };
-    });
-    onChange({ ...pack, kitItems: [...pack.kitItems, ...newKitItems] });
-    toast.success(`Kit "${kit.name}" ×${qty} ajouté (${kit.components.length} élément(s))`);
+    const newRef: PackKitReference = {
+      kitId: kit.id,
+      quantity: qty,
+      priceMode: kitPriceMode,
+      ...(kitPriceMode === 'reduced' ? { reducedPrice: parseInt(kitReducedPrice, 10) || 0 } : {}),
+    };
+    onChange({ ...pack, kits: [...(pack.kits || []), newRef] });
+    toast.success(`Kit "${kit.name}" ×${qty} ajouté`);
     setSelectedKitId("");
     setKitQuantity("1");
     setKitPriceMode('free');
     setKitReducedPrice("");
+  };
+
+  const removeKit = (i: number) => {
+    onChange({ ...pack, kits: (pack.kits || []).filter((_, idx) => idx !== i) });
   };
 
   const updateAdvantage = (i: number, description: string) => {
@@ -226,7 +223,32 @@ function PackEditor({ pack, stockItems, stockKits, onChange, onRemove, index }: 
             </Button>
             {stockKits.length > 0 && (
               <div className="space-y-3 pt-2 border-t">
-                <Label className="text-xs flex items-center gap-1"><Boxes className="h-3 w-3" /> Ajouter un kit complet du stock</Label>
+                <Label className="text-xs flex items-center gap-1"><Boxes className="h-3 w-3" /> Kits complets du stock (optionnel)</Label>
+
+                {/* Already added kits */}
+                {(pack.kits || []).map((ref, i) => {
+                  const kit = stockKits.find(k => k.id === ref.kitId);
+                  return (
+                    <div key={i} className="flex items-center justify-between gap-2 rounded-md border bg-green-50 dark:bg-green-900/20 p-2">
+                      <div className="flex-1 min-w-0">
+                        <span className="text-xs font-semibold">{kit?.name ?? 'Kit inconnu'} ×{ref.quantity}</span>
+                        <span className="text-[10px] text-muted-foreground ml-2">
+                          {ref.priceMode === 'free' ? '(Gratuit)' : `(${formatCurrency(ref.reducedPrice ?? 0)})`}
+                        </span>
+                        {kit && (
+                          <p className="text-[10px] text-muted-foreground">
+                            {kit.components.map(c => { const it = stockItems.find(s => s.id === c.stockItemId); return `${it?.name ?? '?'} ×${c.quantity * ref.quantity}`; }).join(', ')}
+                          </p>
+                        )}
+                      </div>
+                      <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive shrink-0" onClick={() => removeKit(i)}>
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  );
+                })}
+
+                {/* Add new kit */}
                 <div className="flex gap-2 items-end flex-wrap">
                   <div className="flex-1 min-w-[180px] space-y-1">
                     <Label className="text-[10px] text-muted-foreground">Kit</Label>
@@ -289,7 +311,7 @@ function PackEditor({ pack, stockItems, stockKits, onChange, onRemove, index }: 
                   return (
                     <p className="text-[10px] text-muted-foreground">
                       Composants : {kit.components.map(c => { const it = stockItems.find(s => s.id === c.stockItemId); return `${it?.name ?? '?'} ×${c.quantity * qty}`; }).join(', ')}
-                      {kitPriceMode === 'free' ? ' — Gratuit' : kitReducedPrice ? ` — ${formatCurrency(parseInt(kitReducedPrice, 10) || 0)} par composant` : ''}
+                      {kitPriceMode === 'free' ? ' — Gratuit' : kitReducedPrice ? ` — ${formatCurrency(parseInt(kitReducedPrice, 10) || 0)}` : ''}
                     </p>
                   );
                 })()}
@@ -623,13 +645,52 @@ export default function FormationsPage() {
                                       </div>
                                     </>
                                   )}
+
+                                  {/* Kits complets du stock */}
+                                  {pack.kits && pack.kits.length > 0 && (
+                                    <>
+                                      <Separator className="my-1" />
+                                      <div className="space-y-1.5">
+                                        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Kits complets</p>
+                                        {pack.kits.map((ref, ki) => {
+                                          const kit = getStockKits().find(k => k.id === ref.kitId);
+                                          if (!kit) return null;
+                                          return (
+                                            <div key={ki} className="rounded border bg-background/60 p-1.5 space-y-0.5">
+                                              <div className="text-xs flex items-center justify-between">
+                                                <span className="flex items-center gap-1 font-semibold">
+                                                  <Boxes className="h-3 w-3 text-primary" />
+                                                  {kit.name}
+                                                  {ref.quantity > 1 && <span className="text-muted-foreground">×{ref.quantity}</span>}
+                                                </span>
+                                                <span className="font-semibold text-success">
+                                                  {ref.priceMode === 'free' ? 'Gratuit' : formatCurrency(ref.reducedPrice ?? 0)}
+                                                </span>
+                                              </div>
+                                              <div className="text-[10px] text-muted-foreground pl-4">
+                                                {kit.components.map((c, ci) => {
+                                                  const it = stockItems.find(s => s.id === c.stockItemId);
+                                                  return <span key={ci}>{ci > 0 && ' · '}{it?.name ?? '?'} ×{c.quantity * ref.quantity}</span>;
+                                                })}
+                                              </div>
+                                              {ref.priceMode === 'reduced' && kit.sellingPrice > 0 && (
+                                                <div className="text-[10px] text-muted-foreground pl-4">
+                                                  <span className="line-through">{formatCurrency(kit.sellingPrice * ref.quantity)}</span> → {formatCurrency(ref.reducedPrice ?? 0)}
+                                                </div>
+                                              )}
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    </>
+                                  )}
                                 </>
                               )}
                             </div>
                           );
                         })}
                       </div>
-                      {!isExpanded && f.packs.some(p => p.advantages.length > 0 || p.kitItems.length > 0) && (
+                      {!isExpanded && f.packs.some(p => p.advantages.length > 0 || p.kitItems.length > 0 || (p.kits && p.kits.length > 0)) && (
                         <button
                           onClick={() => setExpandedFormation(f.id)}
                           className="text-xs text-primary mt-2 hover:underline"
