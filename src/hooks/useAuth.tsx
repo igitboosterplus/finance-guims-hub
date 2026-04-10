@@ -28,10 +28,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     (async () => {
-      // 1. Init superadmin (creates if needed, deduplicates, cleans up)
-      await initDefaultSuperAdmin();
-
-      // 2. Sync with Supabase (sequential — no race condition)
+      // 1. Pull from Supabase FIRST (get accounts created on other devices)
       if (isSupabaseConfigured()) {
         try {
           const result = await pullAllFromSupabase();
@@ -41,6 +38,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           console.error("[Auth] Erreur sync:", err);
         }
       }
+
+      // 2. Init superadmin AFTER pull (only creates if no users exist locally or on Supabase)
+      await initDefaultSuperAdmin();
 
       // 3. Migrations
       migrateInscriptionInstallments();

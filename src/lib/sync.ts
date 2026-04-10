@@ -13,22 +13,21 @@ async function pullTable(tableName: TableName, storageKey: string): Promise<bool
   const sb = getSupabase();
   if (!sb) return false;
   try {
-    const localRaw = localStorage.getItem(storageKey);
-    const localItems: { id: string }[] = localRaw ? JSON.parse(localRaw) : [];
-
-    // Si local a des données → c'est la source de vérité → push vers Supabase
-    if (Array.isArray(localItems) && localItems.length > 0) {
-      await replaceCollection(tableName, localItems);
-      return true;
-    }
-
-    // Local vide → tirer depuis Supabase (nouveau device / premier lancement)
     const { data, error } = await sb.from(tableName).select("data");
     if (error) throw error;
 
     if (data && data.length > 0) {
+      // Supabase a des données → c'est la référence cloud → écrire en local
       const items = data.map(row => row.data);
       localStorage.setItem(storageKey, JSON.stringify(items));
+      return true;
+    }
+
+    // Supabase vide → pousser les données locales si elles existent
+    const localRaw = localStorage.getItem(storageKey);
+    const localItems: { id: string }[] = localRaw ? JSON.parse(localRaw) : [];
+    if (Array.isArray(localItems) && localItems.length > 0) {
+      await pushArrayToSupabase(tableName, localItems);
     }
 
     return true;
