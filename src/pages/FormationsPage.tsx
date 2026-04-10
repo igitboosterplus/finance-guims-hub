@@ -34,6 +34,35 @@ interface PackEditorProps {
 
 function PackEditor({ pack, stockItems, stockKits, onChange, onRemove, index }: PackEditorProps) {
   const [expanded, setExpanded] = useState(true);
+  const [selectedKitId, setSelectedKitId] = useState<string>("");
+  const [kitQuantity, setKitQuantity] = useState<string>("1");
+  const [kitPriceMode, setKitPriceMode] = useState<'free' | 'reduced'>('free');
+  const [kitReducedPrice, setKitReducedPrice] = useState<string>("");
+
+  const handleAddFullKit = () => {
+    const kit = stockKits.find(k => k.id === selectedKitId);
+    if (!kit) { toast.error("Sélectionnez un kit"); return; }
+    const qty = parseInt(kitQuantity, 10) || 1;
+    const reducedPrice = kitPriceMode === 'reduced' ? (parseInt(kitReducedPrice, 10) || 0) : undefined;
+
+    const newKitItems: PackKitItem[] = kit.components.map(comp => {
+      const item = stockItems.find(s => s.id === comp.stockItemId);
+      const normalUnitPrice = item?.sellingPrice ?? 0;
+      return {
+        stockItemId: comp.stockItemId,
+        label: `${item?.name ?? 'Article'}${qty > 1 ? ` (kit ×${qty})` : ''}`,
+        quantity: comp.quantity * qty,
+        specialPrice: kitPriceMode === 'free' ? 0 : reducedPrice,
+        normalPrice: normalUnitPrice * comp.quantity * qty,
+      };
+    });
+    onChange({ ...pack, kitItems: [...pack.kitItems, ...newKitItems] });
+    toast.success(`Kit "${kit.name}" ×${qty} ajouté (${kit.components.length} élément(s))`);
+    setSelectedKitId("");
+    setKitQuantity("1");
+    setKitPriceMode('free');
+    setKitReducedPrice("");
+  };
 
   const updateAdvantage = (i: number, description: string) => {
     const advantages = [...pack.advantages];
@@ -196,38 +225,74 @@ function PackEditor({ pack, stockItems, stockKits, onChange, onRemove, index }: 
               <Plus className="h-3 w-3" /> Ajouter un élément de kit
             </Button>
             {stockKits.length > 0 && (
-              <div className="space-y-2 pt-2 border-t">
+              <div className="space-y-3 pt-2 border-t">
                 <Label className="text-xs flex items-center gap-1"><Boxes className="h-3 w-3" /> Ajouter un kit complet du stock</Label>
-                <div className="flex gap-2 items-end">
-                  <Select onValueChange={(kitId) => {
-                    const kit = stockKits.find(k => k.id === kitId);
-                    if (!kit) return;
-                    const newKitItems: PackKitItem[] = kit.components.map(comp => {
-                      const item = stockItems.find(s => s.id === comp.stockItemId);
-                      return {
-                        stockItemId: comp.stockItemId,
-                        label: item?.name ?? 'Article',
-                        quantity: comp.quantity,
-                        specialPrice: 0,
-                        normalPrice: item?.sellingPrice ?? 0,
-                      };
-                    });
-                    onChange({ ...pack, kitItems: [...pack.kitItems, ...newKitItems] });
-                    toast.success(`Kit "${kit.name}" ajouté (${kit.components.length} élément(s))`);
-                  }}>
-                    <SelectTrigger className="h-8 text-xs flex-1">
-                      <SelectValue placeholder="Sélectionner un kit..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {stockKits.map(k => (
-                        <SelectItem key={k.id} value={k.id}>
-                          {k.name} — {k.components.length} composant(s) ({formatCurrency(k.sellingPrice)})
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                <div className="flex gap-2 items-end flex-wrap">
+                  <div className="flex-1 min-w-[180px] space-y-1">
+                    <Label className="text-[10px] text-muted-foreground">Kit</Label>
+                    <Select value={selectedKitId} onValueChange={setSelectedKitId}>
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue placeholder="Sélectionner un kit..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {stockKits.map(k => (
+                          <SelectItem key={k.id} value={k.id}>
+                            {k.name} — {k.components.length} composant(s) ({formatCurrency(k.sellingPrice)})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-[10px] text-muted-foreground">Nombre</Label>
+                    <Input
+                      className="h-8 text-xs w-16"
+                      type="number"
+                      min="1"
+                      value={kitQuantity}
+                      onChange={(e) => setKitQuantity(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1 min-w-[130px]">
+                    <Label className="text-[10px] text-muted-foreground">Prix</Label>
+                    <Select value={kitPriceMode} onValueChange={(v: string) => setKitPriceMode(v as 'free' | 'reduced')}>
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="free">Gratuit</SelectItem>
+                        <SelectItem value="reduced">Prix réduit</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {kitPriceMode === 'reduced' && (
+                    <div className="space-y-1">
+                      <Label className="text-[10px] text-muted-foreground">Prix réduit (FCFA)</Label>
+                      <Input
+                        className="h-8 text-xs w-24"
+                        type="number"
+                        min="0"
+                        placeholder="Ex: 5000"
+                        value={kitReducedPrice}
+                        onChange={(e) => setKitReducedPrice(e.target.value)}
+                      />
+                    </div>
+                  )}
+                  <Button type="button" variant="default" size="sm" className="h-8 gap-1 text-xs" onClick={handleAddFullKit}>
+                    <Plus className="h-3 w-3" /> Ajouter
+                  </Button>
                 </div>
-                <p className="text-[10px] text-muted-foreground">Les éléments du kit seront ajoutés avec un prix spécial à 0 (gratuit). Vous pouvez modifier le prix après.</p>
+                {selectedKitId && (() => {
+                  const kit = stockKits.find(k => k.id === selectedKitId);
+                  if (!kit) return null;
+                  const qty = parseInt(kitQuantity, 10) || 1;
+                  return (
+                    <p className="text-[10px] text-muted-foreground">
+                      Composants : {kit.components.map(c => { const it = stockItems.find(s => s.id === c.stockItemId); return `${it?.name ?? '?'} ×${c.quantity * qty}`; }).join(', ')}
+                      {kitPriceMode === 'free' ? ' — Gratuit' : kitReducedPrice ? ` — ${formatCurrency(parseInt(kitReducedPrice, 10) || 0)} par composant` : ''}
+                    </p>
+                  );
+                })()}
               </div>
             )}
           </div>
