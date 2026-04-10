@@ -78,9 +78,24 @@ function saveUsers(users: User[]) {
   syncFullCollection(TABLES.users, USERS_KEY);
 }
 
-// Initialize default super admin if no users exist
+// Initialize default super admin if no users exist, and deduplicate if needed
 export async function initDefaultSuperAdmin() {
-  const users = getUsers();
+  let users = getUsers();
+
+  // Deduplicate superadmins with the same username (bug fix)
+  const seen = new Set<string>();
+  const deduped = users.filter(u => {
+    const key = u.username.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  if (deduped.length < users.length) {
+    saveUsers(deduped);
+    users = deduped;
+    console.log('[Auth] Removed duplicate user entries.');
+  }
+
   if (users.length === 0) {
     const hash = await hashPassword('Yvan2000@');
     const superAdmin: User = {
