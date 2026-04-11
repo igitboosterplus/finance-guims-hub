@@ -18,6 +18,7 @@ import FormationsPage from "@/pages/FormationsPage";
 import PaymentTrackingPage from "@/pages/PaymentTrackingPage";
 import NotFound from "./pages/NotFound.tsx";
 import { initSupabase, isSupabaseConfigured } from "@/lib/firebase";
+import { hasDepartmentAccess, hasPermission } from "@/lib/auth";
 
 // Initialize Supabase on app load — sync is done in AuthProvider
 if (isSupabaseConfigured()) {
@@ -37,6 +38,18 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+function DeptGuard({ departmentId, children }: { departmentId: string; children: React.ReactNode }) {
+  const { user } = useAuth();
+  if (!hasDepartmentAccess(user, departmentId)) return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
+
+function PermGuard({ perm, children }: { perm: 'canManageUsers' | 'canViewAudit' | 'canViewSuperAudit'; children: React.ReactNode }) {
+  const { user } = useAuth();
+  if (!hasPermission(user, perm)) return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
+
 const App = () => (
   <ErrorBoundary>
     <TooltipProvider>
@@ -53,12 +66,12 @@ const App = () => (
                     <Route path="/" element={<Dashboard />} />
                     <Route path="/department/:id" element={<DepartmentPage />} />
                     <Route path="/transaction/new" element={<NewTransaction />} />
-                    <Route path="/users" element={<UserManagement />} />
-                    <Route path="/audit" element={<AuditLogPage />} />
-                    <Route path="/super-audit" element={<SuperAuditPage />} />
+                    <Route path="/users" element={<PermGuard perm="canManageUsers"><UserManagement /></PermGuard>} />
+                    <Route path="/audit" element={<PermGuard perm="canViewAudit"><AuditLogPage /></PermGuard>} />
+                    <Route path="/super-audit" element={<PermGuard perm="canViewSuperAudit"><SuperAuditPage /></PermGuard>} />
                     <Route path="/profile" element={<ProfilePage />} />
-                    <Route path="/gaba/stock" element={<GabaStockPage key="gaba" />} />
-                    <Route path="/guims-academy/stock" element={<GabaStockPage key="guims-academy" departmentId="guims-academy" />} />
+                    <Route path="/gaba/stock" element={<DeptGuard departmentId="gaba"><GabaStockPage key="gaba" /></DeptGuard>} />
+                    <Route path="/guims-academy/stock" element={<DeptGuard departmentId="guims-academy"><GabaStockPage key="guims-academy" departmentId="guims-academy" /></DeptGuard>} />
                     <Route path="/formations" element={<FormationsPage />} />
                     <Route path="/paiements" element={<PaymentTrackingPage />} />
                     <Route path="*" element={<NotFound />} />

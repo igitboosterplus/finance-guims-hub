@@ -238,7 +238,8 @@ function recalcStockQuantities() {
     const sorted = [...movements].sort((a, b) => {
       const da = a.createdAt || a.date || '';
       const db = b.createdAt || b.date || '';
-      return da.localeCompare(db);
+      const cmp = da.localeCompare(db);
+      return cmp !== 0 ? cmp : (a.id || '').localeCompare(b.id || '');
     });
 
     for (const m of sorted) {

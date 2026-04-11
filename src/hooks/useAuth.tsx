@@ -58,6 +58,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   };
 
+  // Session timeout: auto-logout after 2h of inactivity
+  useEffect(() => {
+    if (!user) return;
+    const SESSION_TIMEOUT = 2 * 60 * 60 * 1000; // 2 hours
+    let timer: ReturnType<typeof setTimeout>;
+
+    const resetTimer = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        console.log("[Auth] Session expirée par inactivité");
+        logout();
+      }, SESSION_TIMEOUT);
+    };
+
+    const events = ['mousedown', 'keydown', 'touchstart', 'scroll'];
+    events.forEach(e => window.addEventListener(e, resetTimer));
+    resetTimer();
+
+    return () => {
+      clearTimeout(timer);
+      events.forEach(e => window.removeEventListener(e, resetTimer));
+    };
+  }, [user]);
+
   return (
     <AuthContext.Provider value={{ user, loading, refresh, logout }}>
       {children}

@@ -1,14 +1,11 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 // ==================== SUPABASE CONFIG ====================
-// Remplis ces valeurs avec celles de ton projet Supabase :
-// 1. Va sur https://supabase.com et crée un projet (gratuit)
-// 2. Va dans Settings > API
-// 3. Copie "Project URL" et "anon public" key ici
-// 4. Dans SQL Editor, exécute le script SQL ci-dessous pour créer les tables
+// Les clés sont dans les variables d'environnement (fichier .env local + Vercel env vars)
+// VITE_SUPABASE_URL et VITE_SUPABASE_ANON_KEY
 
-const SUPABASE_URL = "https://xhbxhgymcwbixixipoxx.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhoYnhoZ3ltY3diaXhpeGlwb3h4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU0MjE0MzAsImV4cCI6MjA5MDk5NzQzMH0.QL-KtjgfEiJwJlF5xgaqI4kPwxKws2LbS5hiL8EbJU8";
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
 
 let supabase: SupabaseClient | null = null;
 
