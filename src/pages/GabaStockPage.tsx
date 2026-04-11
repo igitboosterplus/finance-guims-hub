@@ -57,7 +57,7 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
   const [movements, setMovements] = useState<StockMovement[]>(() => getStockMovements(departmentId));
   const [trainings, setTrainings] = useState<Training[]>(() => getTrainings(departmentId));
   const [kits, setKits] = useState<StockKit[]>(() => getStockKits(departmentId));
-  const stats = useMemo(() => getStockStats(departmentId), []);
+  const stats = useMemo(() => getStockStats(departmentId), [items, movements]);
 
   const refresh = () => {
     setItems(getStockItems(departmentId));

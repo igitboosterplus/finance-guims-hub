@@ -18,28 +18,10 @@ import FormationsPage from "@/pages/FormationsPage";
 import PaymentTrackingPage from "@/pages/PaymentTrackingPage";
 import NotFound from "./pages/NotFound.tsx";
 import { initSupabase, isSupabaseConfigured } from "@/lib/firebase";
-import { purgeAllSupabase } from "@/lib/sync";
-import { purgeAllData } from "@/lib/auth";
 
-const PURGE_FLAG = 'guims-purge-v3-done';
-
-// Initialize Supabase on app load — purge only, sync is done in AuthProvider
+// Initialize Supabase on app load — sync is done in AuthProvider
 if (isSupabaseConfigured()) {
-  const sb = initSupabase();
-  if (sb) {
-    if (localStorage.getItem(PURGE_FLAG) !== '1') {
-      purgeAllData();
-      purgeAllSupabase().then(() => {
-        localStorage.setItem(PURGE_FLAG, '1');
-        console.log('[App] Purge complète (local + Supabase)');
-      });
-    }
-  }
-} else {
-  if (localStorage.getItem(PURGE_FLAG) !== '1') {
-    purgeAllData();
-    localStorage.setItem(PURGE_FLAG, '1');
-  }
+  initSupabase();
 }
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
@@ -75,8 +57,8 @@ const App = () => (
                     <Route path="/audit" element={<AuditLogPage />} />
                     <Route path="/super-audit" element={<SuperAuditPage />} />
                     <Route path="/profile" element={<ProfilePage />} />
-                    <Route path="/gaba/stock" element={<GabaStockPage />} />
-                    <Route path="/guims-academy/stock" element={<GabaStockPage departmentId="guims-academy" />} />
+                    <Route path="/gaba/stock" element={<GabaStockPage key="gaba" />} />
+                    <Route path="/guims-academy/stock" element={<GabaStockPage key="guims-academy" departmentId="guims-academy" />} />
                     <Route path="/formations" element={<FormationsPage />} />
                     <Route path="/paiements" element={<PaymentTrackingPage />} />
                     <Route path="*" element={<NotFound />} />

@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
 import { getCurrentUser, initDefaultSuperAdmin, logout as doLogout, type User } from '@/lib/auth';
-import { pullAllFromSupabase, pushAllToSupabase } from '@/lib/sync';
+import { pullAllFromSupabase } from '@/lib/sync';
 import { isSupabaseConfigured } from '@/lib/firebase';
 import { migrateInscriptionInstallments, cleanupOrphanedInstallments } from '@/lib/stock';
 
@@ -28,19 +28,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     (async () => {
-      // 1. One-time force push: local → Supabase to fix corrupted cloud data
-      const FORCE_PUSH_FLAG = 'guims-force-push-v3';
-      if (isSupabaseConfigured() && localStorage.getItem(FORCE_PUSH_FLAG) !== '1') {
-        try {
-          await pushAllToSupabase();
-          console.log("[Auth] Force push local → Supabase done");
-        } catch (err) {
-          console.error("[Auth] Force push error:", err);
-        }
-        localStorage.setItem(FORCE_PUSH_FLAG, '1');
-      }
-
-      // 2. Pull from Supabase (get accounts/data created on other devices)
+      // 1. Pull from Supabase (get accounts/data created on other devices)
+      // Pull is always safe: if Supabase has data → use it; if empty → local data preserved + pushed
       if (isSupabaseConfigured()) {
         try {
           const result = await pullAllFromSupabase();
@@ -51,7 +40,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      // 3. Init superadmin AFTER pull (only creates if no users exist locally or on Supabase)
+      // 2. Init superadmin AFTER pull (only creates if no users exist locally or on Supabase)
       await initDefaultSuperAdmin();
 
       // 3. Migrations
