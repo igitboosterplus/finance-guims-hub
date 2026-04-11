@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { departments, addTransaction, PAYMENT_METHODS, isEnrollmentCategory, isInscriptionCategory, isTranche, type DepartmentId, type PaymentMethod, formatCurrency } from "@/lib/data";
 import { addAuditEntry, getCurrentUser, hasPermission, hasDepartmentAccess } from "@/lib/auth";
-import { getStockItems, addStockMovement, getFormationsByDepartment, addPaymentPlan, addInstallment, getPaymentPlans, getEnrolledStudents, buildAllocationMessage, updatePlanInscription, getAllocationSummary, getRemainingAmount, type StockItem, type FormationCatalog, type FormationPack } from "@/lib/stock";
+import { getStockItems, addStockMovement, getFormationsByDepartment, addPaymentPlan, addInstallment, getPaymentPlans, getEnrolledStudents, buildAllocationMessage, updatePlanInscription, getAllocationSummary, getRemainingAmount, addEnrollment, getEnrollmentsByFormation, updateEnrollment, type StockItem, type FormationCatalog, type FormationPack } from "@/lib/stock";
 import { toast } from "sonner";
 import { ArrowLeft, ShieldAlert, Package, GraduationCap, Star, Award, Calendar, CreditCard } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -295,6 +295,30 @@ export default function NewTransaction() {
           } else {
             toast.success(`📋 Suivi créé pour ${personName.trim()} — ${planLabel}. Reste: ${formatCurrency(remaining)}${allocMsg ? ` (${allocMsg})` : ''}`);
           }
+        }
+      }
+
+      // ==================== AUTO-CREATE ENROLLMENT IN FORMATIONS LIST ====================
+      const trimmedName = personName.trim();
+      const existingEnrollments = getEnrollmentsByFormation(selectedFormation.id);
+      const alreadyEnrolled = existingEnrollments.some(
+        e => e.fullName.toLowerCase() === trimmedName.toLowerCase() && e.status !== 'annulé'
+      );
+      if (!alreadyEnrolled) {
+        addEnrollment({
+          formationId: selectedFormation.id,
+          packId: selectedPack?.id || undefined,
+          fullName: trimmedName,
+          status: 'inscrit',
+          enrolledBy: currentUser?.displayName ?? 'Inconnu',
+        });
+      } else if (selectedPack) {
+        // Update pack if person already enrolled but chose a different pack
+        const existing = existingEnrollments.find(
+          e => e.fullName.toLowerCase() === trimmedName.toLowerCase() && e.status !== 'annulé'
+        );
+        if (existing && existing.packId !== selectedPack.id) {
+          updateEnrollment(existing.id, { packId: selectedPack.id });
         }
       }
     }

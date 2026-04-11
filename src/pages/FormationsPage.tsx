@@ -553,7 +553,7 @@ export default function FormationsPage() {
         phone: enrPhone.trim() || undefined,
         email: enrEmail.trim() || undefined,
         notes: enrNotes.trim() || undefined,
-        packId: enrPackId || undefined,
+        packId: enrPackId && enrPackId !== 'none' ? enrPackId : undefined,
         status: enrStatus,
       });
       toast.success("Inscription mise à jour");
@@ -564,7 +564,7 @@ export default function FormationsPage() {
         phone: enrPhone.trim() || undefined,
         email: enrEmail.trim() || undefined,
         notes: enrNotes.trim() || undefined,
-        packId: enrPackId || undefined,
+        packId: enrPackId && enrPackId !== 'none' ? enrPackId : undefined,
         status: enrStatus,
         enrolledBy: currentUser?.displayName ?? "Inconnu",
       });
@@ -1218,18 +1218,19 @@ export default function FormationsPage() {
               if (!fm || fm.packs.length === 0) return null;
               return (
                 <div className="space-y-2">
-                  <Label>Pack choisi</Label>
+                  <Label>Pack choisi <span className="text-muted-foreground font-normal">(optionnel, modifiable)</span></Label>
                   <Select value={enrPackId} onValueChange={setEnrPackId}>
                     <SelectTrigger>
-                      <SelectValue placeholder="Sélectionner un pack..." />
+                      <SelectValue placeholder="Pas encore choisi..." />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="none">— Aucun —</SelectItem>
+                      <SelectItem value="none">— Pas encore choisi —</SelectItem>
                       {fm.packs.map(p => (
                         <SelectItem key={p.id} value={p.id}>{p.name} — {formatCurrency(p.price)}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
+                  <p className="text-[11px] text-muted-foreground">Le client peut choisir ou changer de pack à tout moment</p>
                 </div>
               );
             })()}
