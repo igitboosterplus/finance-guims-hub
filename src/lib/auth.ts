@@ -135,6 +135,7 @@ export function purgeAllData(): void {
     'payment-plans',
     'formation-enrollments',
     'finance-seed-done',
+    'guims-sync-tombstones',
   ];
   for (const key of ALL_KEYS) {
     localStorage.removeItem(key);
