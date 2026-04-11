@@ -26,19 +26,18 @@ import {
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { getCurrentUser, hasDepartmentAccess } from "@/lib/auth";
-import { formatCurrency } from "@/lib/data";
+import { formatCurrency, departments, type DepartmentId } from "@/lib/data";
 import { downloadStockReport } from "@/lib/reports";
 import type { ReportOptions } from "@/lib/reports";
 import { ReportDialog } from "@/components/ReportDialog";
 import {
-  STOCK_CATEGORIES, getStockItems, addStockItem, updateStockItem, deleteStockItem,
+  getStockCategoriesForDept, getStockItems, addStockItem, updateStockItem, deleteStockItem,
   addStockMovement, getStockMovements, getStockStats, getCategoryLabel,
   exportStockCSV, getTrainings, addTraining, deleteTraining, getMovementTypeLabel,
   getStockKits, addStockKit, updateStockKit, deleteStockKit, checkKitAvailability, sellKit, useKitForTraining,
   type StockItem, type StockMovement, type MovementType, type Training, type TrainingType, type TraineeKit,
   type StockKit, type KitComponent, type TrainingKitUsage,
 } from "@/lib/stock";
-import logoGaba from "@/assets/logo-gaba.png";
 
 const UNITS = ['pièce', 'kg', 'sac', 'litre', 'carton', 'boîte', 'dose', 'lot'];
 
@@ -47,22 +46,24 @@ const EXIT_REASONS = ['Vente', 'Utilisation', 'Perte/Mortalité', 'Don', 'Autre'
 const TRAINING_REASONS = ['Usage formation', 'Substrat formation', 'Démonstration', 'Autre'];
 const GIFT_REASONS = ['Don au formé', 'Kit de démarrage', 'Échantillon', 'Autre'];
 
-export default function GabaStockPage() {
+export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }: { departmentId?: DepartmentId }) {
   const navigate = useNavigate();
   const user = getCurrentUser();
+  const dept = departments.find(d => d.id === departmentId)!;
+  const STOCK_CATEGORIES = getStockCategoriesForDept(departmentId);
 
   // --- Data ---
-  const [items, setItems] = useState<StockItem[]>(getStockItems);
-  const [movements, setMovements] = useState<StockMovement[]>(getStockMovements);
-  const [trainings, setTrainings] = useState<Training[]>(getTrainings);
-  const [kits, setKits] = useState<StockKit[]>(getStockKits);
-  const stats = useMemo(() => getStockStats(), []);
+  const [items, setItems] = useState<StockItem[]>(() => getStockItems(departmentId));
+  const [movements, setMovements] = useState<StockMovement[]>(() => getStockMovements(departmentId));
+  const [trainings, setTrainings] = useState<Training[]>(() => getTrainings(departmentId));
+  const [kits, setKits] = useState<StockKit[]>(() => getStockKits(departmentId));
+  const stats = useMemo(() => getStockStats(departmentId), []);
 
   const refresh = () => {
-    setItems(getStockItems());
-    setMovements(getStockMovements());
-    setTrainings(getTrainings());
-    setKits(getStockKits());
+    setItems(getStockItems(departmentId));
+    setMovements(getStockMovements(departmentId));
+    setTrainings(getTrainings(departmentId));
+    setKits(getStockKits(departmentId));
   };
 
   // --- Filters ---
@@ -120,7 +121,7 @@ export default function GabaStockPage() {
     if (filterCategory !== 'all') result = result.filter(i => i.categoryId === filterCategory);
     if (search.trim()) {
       const q = search.toLowerCase();
-      result = result.filter(i => i.name.toLowerCase().includes(q) || getCategoryLabel(i.categoryId).toLowerCase().includes(q));
+      result = result.filter(i => i.name.toLowerCase().includes(q) || getCategoryLabel(i.categoryId, departmentId).toLowerCase().includes(q));
     }
     return result.sort((a, b) => a.name.localeCompare(b.name));
   }, [items, filterCategory, search]);
@@ -145,10 +146,10 @@ export default function GabaStockPage() {
   }, [historyItem, movements]);
 
   // --- Access check (after all hooks) ---
-  if (!hasDepartmentAccess(user, 'gaba')) {
+  if (!hasDepartmentAccess(user, departmentId)) {
     return (
       <div className="text-center py-12 text-muted-foreground">
-        <p className="text-lg">Vous n'avez pas accès au stock GABA</p>
+        <p className="text-lg">Vous n'avez pas accès au stock {dept.name}</p>
         <p className="text-sm">Contactez le Super Admin pour obtenir l'accès.</p>
       </div>
     );
@@ -192,7 +193,7 @@ export default function GabaStockPage() {
         alertThreshold: threshold,
         purchasePrice: pPrice,
         sellingPrice: sPrice,
-      });
+      }, departmentId);
       toast.success('Article modifié');
     } else {
       addStockItem({
@@ -202,7 +203,7 @@ export default function GabaStockPage() {
         alertThreshold: threshold,
         purchasePrice: pPrice,
         sellingPrice: sPrice,
-      });
+      }, departmentId);
       toast.success('Article ajouté au stock');
     }
     setItemDialog(false);
@@ -211,7 +212,7 @@ export default function GabaStockPage() {
 
   const handleDeleteItem = () => {
     if (!deleteId) return;
-    deleteStockItem(deleteId);
+    deleteStockItem(deleteId, departmentId);
     toast.success('Article supprimé');
     setDeleteId(null);
     refresh();
@@ -243,6 +244,7 @@ export default function GabaStockPage() {
       user?.displayName ?? 'Inconnu',
       moveForm.parkName.trim() || undefined,
       moveForm.traineeName.trim() || undefined,
+      departmentId,
     );
 
     if (!result.success) {
@@ -286,7 +288,7 @@ export default function GabaStockPage() {
         const qty = parseInt(mat.quantity, 10);
         if (!mat.itemId || isNaN(qty) || qty <= 0) continue;
         const item = items.find(i => i.id === mat.itemId);
-        const result = addStockMovement(mat.itemId, 'training', qty, 0, 'Usage formation', trainingForm.date, userName, trainingForm.parkName.trim());
+        const result = addStockMovement(mat.itemId, 'training', qty, 0, 'Usage formation', trainingForm.date, userName, trainingForm.parkName.trim(), undefined, departmentId);
         if (!result.success) errors.push(`${item?.name}: ${result.error}`);
       }
 
@@ -295,7 +297,7 @@ export default function GabaStockPage() {
         const qty = parseInt(gift.quantity, 10);
         if (!gift.itemId || isNaN(qty) || qty <= 0 || !gift.traineeName.trim()) continue;
         const item = items.find(i => i.id === gift.itemId);
-        const result = addStockMovement(gift.itemId, 'gift', qty, 0, `Don à ${gift.traineeName.trim()}`, trainingForm.date, userName, trainingForm.parkName.trim(), gift.traineeName.trim());
+        const result = addStockMovement(gift.itemId, 'gift', qty, 0, `Don à ${gift.traineeName.trim()}`, trainingForm.date, userName, trainingForm.parkName.trim(), gift.traineeName.trim(), departmentId);
         if (!result.success) errors.push(`${item?.name} → ${gift.traineeName}: ${result.error}`);
       }
 
@@ -304,7 +306,7 @@ export default function GabaStockPage() {
         const qty = parseInt(ku.quantity, 10);
         if (!ku.kitId || isNaN(qty) || qty <= 0) continue;
         const kit = kits.find(k => k.id === ku.kitId);
-        const result = useKitForTraining(ku.kitId, qty, trainingForm.date, userName, trainingForm.parkName.trim());
+        const result = useKitForTraining(ku.kitId, qty, trainingForm.date, userName, trainingForm.parkName.trim(), departmentId);
         if (!result.success) errors.push(`Kit ${kit?.name}: ${result.error}`);
       }
     }
@@ -337,7 +339,7 @@ export default function GabaStockPage() {
       kitsUsed: trainingForm.kitUsages.filter(ku => ku.kitId && parseInt(ku.quantity, 10) > 0).map(ku => ({ kitId: ku.kitId, quantity: parseInt(ku.quantity, 10) })),
       ...(trainingForm.trainingType === 'guims-academy' ? { tranche: trainingForm.tranche } : {}),
       createdBy: userName,
-    });
+    }, departmentId);
 
     if (errors.length > 0) {
       toast.error(`Formation enregistrée avec ${errors.length} erreur(s): ${errors[0]}`);
@@ -350,19 +352,19 @@ export default function GabaStockPage() {
 
   const handleDeleteTraining = () => {
     if (!deleteTrainingId) return;
-    deleteTraining(deleteTrainingId);
+    deleteTraining(deleteTrainingId, departmentId);
     toast.success('Formation supprimée');
     setDeleteTrainingId(null);
     refresh();
   };
 
   const handleExportCSV = () => {
-    const csv = exportStockCSV();
+    const csv = exportStockCSV(departmentId);
     const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `stock-gaba-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `stock-${departmentId}-${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
     toast.success('Stock exporté en CSV');
@@ -397,10 +399,10 @@ export default function GabaStockPage() {
     if (components.length === 0) { toast.error('Ajoutez au moins un composant'); return; }
 
     if (editKit) {
-      updateStockKit(editKit.id, { name: kitForm.name.trim(), description: kitForm.description.trim(), sellingPrice: price, components });
+      updateStockKit(editKit.id, { name: kitForm.name.trim(), description: kitForm.description.trim(), sellingPrice: price, components }, departmentId);
       toast.success('Kit modifié');
     } else {
-      addStockKit({ name: kitForm.name.trim(), description: kitForm.description.trim(), sellingPrice: price, components, createdBy: user?.displayName ?? 'Inconnu' });
+      addStockKit({ name: kitForm.name.trim(), description: kitForm.description.trim(), sellingPrice: price, components, createdBy: user?.displayName ?? 'Inconnu' }, departmentId);
       toast.success('Kit créé');
     }
     setKitDialog(false);
@@ -409,7 +411,7 @@ export default function GabaStockPage() {
 
   const handleDeleteKit = () => {
     if (!deleteKitId) return;
-    deleteStockKit(deleteKitId);
+    deleteStockKit(deleteKitId, departmentId);
     toast.success('Kit supprimé');
     setDeleteKitId(null);
     refresh();
@@ -425,7 +427,7 @@ export default function GabaStockPage() {
     if (!sellKitId) return;
     const qty = parseInt(sellKitForm.quantity);
     if (isNaN(qty) || qty <= 0) { toast.error('Quantité invalide'); return; }
-    const result = sellKit(sellKitId, qty, sellKitForm.date, user?.displayName ?? 'Inconnu', sellKitForm.clientName.trim() || undefined);
+    const result = sellKit(sellKitId, qty, sellKitForm.date, user?.displayName ?? 'Inconnu', sellKitForm.clientName.trim() || undefined, departmentId);
     if (!result.success) { toast.error(result.error ?? 'Erreur'); return; }
     toast.success(`Kit vendu — ${result.movements?.length ?? 0} déduction(s) automatiques`);
     setSellKitDialog(false);
@@ -439,16 +441,16 @@ export default function GabaStockPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="rounded-2xl bg-dept-gaba-light p-6">
+      <div className={`rounded-2xl ${dept.bgLightClass} p-6`}>
         <div className="flex items-center justify-between flex-wrap gap-4">
           <div className="flex items-center gap-4">
-            <Button variant="ghost" size="icon" onClick={() => navigate('/department/gaba')}>
+            <Button variant="ghost" size="icon" onClick={() => navigate(`/department/${departmentId}`)}>
               <ArrowLeft className="h-5 w-5" />
             </Button>
-            <img src={logoGaba} alt="GABA" className="h-14 w-14 rounded-2xl object-cover shadow-md bg-card" />
+            <img src={dept.logo} alt={dept.name} className="h-14 w-14 rounded-2xl object-cover shadow-md bg-card" />
             <div>
-              <h2 className="text-2xl font-bold text-foreground">Gestion des Stocks — GABA</h2>
-              <p className="text-sm text-muted-foreground">Géniteurs, intrants, équipements & produits finis</p>
+              <h2 className="text-2xl font-bold text-foreground">Gestion des Stocks — {dept.name}</h2>
+              <p className="text-sm text-muted-foreground">{dept.description}</p>
             </div>
           </div>
           <div className="flex gap-2 flex-wrap">
@@ -578,7 +580,7 @@ export default function GabaStockPage() {
                         </div>
                       </TableCell>
                       <TableCell>
-                        <Badge variant="secondary">{getCategoryLabel(item.categoryId)}</Badge>
+                        <Badge variant="secondary">{getCategoryLabel(item.categoryId, departmentId)}</Badge>
                       </TableCell>
                       <TableCell className="text-right font-semibold">{item.currentQuantity}</TableCell>
                       <TableCell>{item.unit}</TableCell>
@@ -691,7 +693,7 @@ export default function GabaStockPage() {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {kits.map(kit => {
-                const check = checkKitAvailability(kit.id);
+                const check = checkKitAvailability(kit.id, 1, departmentId);
                 return (
                   <Card key={kit.id} className="overflow-hidden">
                     <CardHeader className="pb-2">
@@ -1008,7 +1010,7 @@ export default function GabaStockPage() {
           <DialogHeader>
             <DialogTitle>Historique — {historyItem?.name}</DialogTitle>
             <DialogDescription>
-              Stock actuel : {historyItem?.currentQuantity} {historyItem?.unit} · Catégorie : {historyItem ? getCategoryLabel(historyItem.categoryId) : ''}
+              Stock actuel : {historyItem?.currentQuantity} {historyItem?.unit} · Catégorie : {historyItem ? getCategoryLabel(historyItem.categoryId, departmentId) : ''}
             </DialogDescription>
           </DialogHeader>
           {itemMovements.length === 0 ? (
@@ -1395,7 +1397,7 @@ export default function GabaStockPage() {
             </div>
             {sellKitId && (() => {
               const qty = parseInt(sellKitForm.quantity) || 1;
-              const check = checkKitAvailability(sellKitId, qty);
+              const check = checkKitAvailability(sellKitId, qty, departmentId);
               if (!check.available) return (
                 <div className="rounded-md bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 p-3">
                   <p className="text-xs text-red-700 dark:text-red-400 font-semibold flex items-center gap-1">

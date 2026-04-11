@@ -39,6 +39,7 @@ export interface Transaction {
   paymentMethod: PaymentMethod;
   category: string;
   personName: string;       // Nom de la personne (client, fournisseur, formé, etc.)
+  phoneNumber?: string;     // Numéro de téléphone
   description: string;
   amount: number;
   date: string;

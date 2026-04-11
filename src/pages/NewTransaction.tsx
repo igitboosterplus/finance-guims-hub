@@ -10,7 +10,7 @@ import { departments, addTransaction, PAYMENT_METHODS, isEnrollmentCategory, isI
 import { addAuditEntry, getCurrentUser, hasPermission, hasDepartmentAccess } from "@/lib/auth";
 import { getStockItems, addStockMovement, getFormationsByDepartment, addPaymentPlan, addInstallment, getPaymentPlans, getEnrolledStudents, buildAllocationMessage, updatePlanInscription, getAllocationSummary, getRemainingAmount, addEnrollment, getEnrollmentsByFormation, updateEnrollment, type StockItem, type FormationCatalog, type FormationPack } from "@/lib/stock";
 import { toast } from "sonner";
-import { ArrowLeft, ShieldAlert, Package, GraduationCap, Star, Award, Calendar, CreditCard } from "lucide-react";
+import { ArrowLeft, ShieldAlert, Package, GraduationCap, Star, Award, Calendar, CreditCard, Phone } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 
@@ -27,6 +27,7 @@ export default function NewTransaction() {
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('especes');
   const [category, setCategory] = useState('');
   const [personName, setPersonName] = useState('');
+  const [phoneNumber, setPhoneNumber] = useState('');
   const [description, setDescription] = useState('');
   const [amount, setAmount] = useState('');
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
@@ -41,16 +42,23 @@ export default function NewTransaction() {
     ? type === 'income' ? selectedDept.incomeCategories : selectedDept.expenseCategories
     : [];
 
-  // GABA categories that involve stock movements
-  const STOCK_CATEGORIES_MAP: Record<string, 'entry' | 'exit'> = {
-    'Achat composants intrants': 'entry',
-    'Achat géniteurs': 'entry',
-    'Vente intrants': 'exit',
-    'Vente géniteurs': 'exit',
+  // Categories that involve stock movements (multi-department)
+  const STOCK_CATEGORIES_MAP: Record<string, Record<string, 'entry' | 'exit'>> = {
+    'gaba': {
+      'Achat composants intrants': 'entry',
+      'Achat géniteurs': 'entry',
+      'Vente intrants': 'exit',
+      'Vente géniteurs': 'exit',
+    },
+    'guims-academy': {
+      'Matériel de formation': 'entry',
+      'Location salle': 'entry',
+    },
   };
-  const isStockCategory = departmentId === 'gaba' && category in STOCK_CATEGORIES_MAP;
-  const stockDirection = isStockCategory ? STOCK_CATEGORIES_MAP[category] : null;
-  const availableStockItems: StockItem[] = isStockCategory ? getStockItems() : [];
+  const deptStockMap = STOCK_CATEGORIES_MAP[departmentId] ?? {};
+  const isStockCategory = category in deptStockMap;
+  const stockDirection = isStockCategory ? deptStockMap[category] : null;
+  const availableStockItems: StockItem[] = isStockCategory ? getStockItems(departmentId) : [];
 
   // Formation enrollment
   const isEnrollment = isEnrollmentCategory(category);
@@ -69,11 +77,42 @@ export default function NewTransaction() {
   const handleFormationChange = (name: string) => {
     setFormationName(name);
     setFormationPackId('');
-    // For tranche-mode formations, auto-set amount based on selected category
     const formation = availableFormations.find(f => f.name === name);
+    // Auto-fill inscription fee when category is an inscription category
+    if (formation && isInscriptionCategory(category)) {
+      autoFillInscriptionFee(formation);
+    }
+    // For tranche-mode formations, auto-set amount based on selected category
     if (formation?.mode === 'tranches') {
       autoFillTrancheAmount(formation);
     }
+  };
+
+  /** Auto-fill inscription fee from formation config.
+   *  If a plan already exists for this person with partial payment, use remaining amount. */
+  const autoFillInscriptionFee = (formation: FormationCatalog) => {
+    const fee = formation.inscriptionFee;
+    if (!fee || fee <= 0) return;
+    // Check for existing plan with partial inscription
+    if (personName.trim()) {
+      const existingPlans = getPaymentPlans();
+      const existingPlan = existingPlans.find(p =>
+        p.clientName.toLowerCase() === personName.trim().toLowerCase() &&
+        p.formationId === formation.id &&
+        p.status === 'en_cours'
+      );
+      if (existingPlan) {
+        const alreadyPaid = existingPlan.inscriptionPaidAmount || (existingPlan.inscriptionPaid ? (existingPlan.inscriptionFee || 0) : 0);
+        const remaining = (existingPlan.inscriptionFee || fee) - alreadyPaid;
+        if (remaining > 0) {
+          setAmount(String(remaining));
+          return;
+        }
+        // Already fully paid
+        return;
+      }
+    }
+    setAmount(String(fee));
   };
 
   /** Auto-fill amount from tranche configuration based on current category.
@@ -178,6 +217,9 @@ export default function NewTransaction() {
         reason,
         date,
         currentUser?.displayName ?? 'Inconnu',
+        undefined,
+        undefined,
+        departmentId,
       );
       if (!result.success) {
         toast.error(result.error ?? "Erreur lors de la mise à jour du stock");
@@ -191,6 +233,7 @@ export default function NewTransaction() {
       paymentMethod,
       category,
       personName: personName.trim(),
+      phoneNumber: phoneNumber.trim() || undefined,
       description,
       amount: parsedAmount,
       date,
@@ -242,9 +285,20 @@ export default function NewTransaction() {
       if (existingPlan) {
         // Plan exists
         if (isInscription) {
-          // Mark inscription as paid on existing plan (don't count toward formation total)
-          updatePlanInscription(existingPlan.id, true, parsedAmount);
-          toast.success(`Inscription de ${formatCurrency(parsedAmount)} enregistrée pour ${personName.trim()} (hors frais de formation)`);
+          // Partial/full inscription payment on existing plan
+          const updatedPlan = updatePlanInscription(existingPlan.id, false, undefined, parsedAmount);
+          if (updatedPlan) {
+            const totalFee = updatedPlan.inscriptionFee || 0;
+            const totalPaid = updatedPlan.inscriptionPaidAmount || 0;
+            const remaining = totalFee - totalPaid;
+            if (remaining <= 0) {
+              toast.success(`✅ Inscription de ${formatCurrency(totalPaid)} payée intégralement pour ${personName.trim()}`);
+            } else {
+              toast.success(`💰 Inscription : ${formatCurrency(totalPaid)} payé — reste ${formatCurrency(remaining)} pour ${personName.trim()}`);
+            }
+          } else {
+            toast.success(`Inscription de ${formatCurrency(parsedAmount)} enregistrée pour ${personName.trim()}`);
+          }
         } else if (parsedAmount > 0) {
           // Normalize note to short format ("Tranche 1" not "Frais de formation - Tranche 1")
           const shortNote = isTranche(category) ? category.replace('Frais de formation - ', '') : category;
@@ -271,13 +325,19 @@ export default function NewTransaction() {
           ...(scheduledTranches.length > 0 ? { scheduledTranches } : {}),
           formationId: selectedFormation.id,
           ...(packIdForPlan ? { packId: packIdForPlan } : {}),
-          inscriptionFee: isInscription ? parsedAmount : (formationInscriptionFee > 0 ? formationInscriptionFee : undefined),
-          inscriptionPaid: isInscription,
+          inscriptionFee: isInscription ? (formationInscriptionFee > 0 ? formationInscriptionFee : parsedAmount) : (formationInscriptionFee > 0 ? formationInscriptionFee : undefined),
+          inscriptionPaid: isInscription && parsedAmount >= (formationInscriptionFee > 0 ? formationInscriptionFee : parsedAmount),
+          inscriptionPaidAmount: isInscription ? parsedAmount : undefined,
         });
 
         if (isInscription) {
-          // Inscription fee: NOT counted as a formation installment
-          toast.success(`📋 Suivi créé pour ${personName.trim()} — ${planLabel}. Inscription payée (${formatCurrency(parsedAmount)}). Formation: ${formatCurrency(totalAmount)} à payer.`);
+          const totalFee = formationInscriptionFee > 0 ? formationInscriptionFee : parsedAmount;
+          const remaining = totalFee - parsedAmount;
+          if (remaining <= 0) {
+            toast.success(`📋 Suivi créé pour ${personName.trim()} — ${planLabel}. ✅ Inscription payée (${formatCurrency(parsedAmount)}). Formation: ${formatCurrency(totalAmount)} à payer.`);
+          } else {
+            toast.success(`📋 Suivi créé pour ${personName.trim()} — ${planLabel}. 💰 Inscription : ${formatCurrency(parsedAmount)} payé — reste ${formatCurrency(remaining)}. Formation: ${formatCurrency(totalAmount)} à payer.`);
+          }
         } else if (parsedAmount > 0) {
           // Normal formation payment — record as installment
           const shortNote = isTranche(category) ? category.replace('Frais de formation - ', '') : category;
@@ -369,7 +429,7 @@ export default function NewTransaction() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Département *</Label>
-                <Select value={departmentId} onValueChange={(v) => { setDepartmentId(v); setCategory(''); setStockItemId(''); setQuantity(''); setFormationName(''); setSelectedKitElements([]); setDesiredTrainingDate(''); }}>
+                <Select value={departmentId} onValueChange={(v) => { setDepartmentId(v); setCategory(''); setStockItemId(''); setQuantity(''); setFormationName(''); setFormationPackId(''); setDesiredTrainingDate(''); setPhoneNumber(''); }}>
                   <SelectTrigger>
                     <SelectValue placeholder="Choisir un département" />
                   </SelectTrigger>
@@ -388,7 +448,7 @@ export default function NewTransaction() {
 
               <div className="space-y-2">
                 <Label>Type *</Label>
-                <Select value={type} onValueChange={(v) => { setType(v as 'income' | 'expense'); setCategory(''); setStockItemId(''); setQuantity(''); setFormationName(''); setSelectedKitElements([]); setDesiredTrainingDate(''); }}>
+                <Select value={type} onValueChange={(v) => { setType(v as 'income' | 'expense'); setCategory(''); setStockItemId(''); setQuantity(''); setFormationName(''); setFormationPackId(''); setDesiredTrainingDate(''); }}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
@@ -416,7 +476,7 @@ export default function NewTransaction() {
               </div>
               <div className="space-y-2">
                 <Label>Catégorie *</Label>
-                <Select value={category} onValueChange={(v) => { setCategory(v); setStockItemId(''); setQuantity(''); setFormationName(''); setSelectedKitElements([]); setDesiredTrainingDate(''); }} disabled={!departmentId}>
+                <Select value={category} onValueChange={(v) => { setCategory(v); setStockItemId(''); setQuantity(''); setFormationName(''); setFormationPackId(''); setDesiredTrainingDate(''); }} disabled={!departmentId}>
                   <SelectTrigger>
                     <SelectValue placeholder="Choisir une catégorie" />
                   </SelectTrigger>
@@ -493,27 +553,39 @@ export default function NewTransaction() {
               </div>
             )}
 
-            <div className="space-y-2">
-              <Label>Nom de la personne *</Label>
-              <Input
-                placeholder="Ex: Jean Dupont, Marie Kamga..."
-                value={personName}
-                onChange={(e) => setPersonName(e.target.value)}
-                maxLength={100}
-                list={enrolledStudents.length > 0 ? "enrolled-students-list" : undefined}
-              />
-              {enrolledStudents.length > 0 && (
-                <datalist id="enrolled-students-list">
-                  {enrolledStudents.map((name, i) => (
-                    <option key={i} value={name} />
-                  ))}
-                </datalist>
-              )}
-              <p className="text-xs text-muted-foreground">
-                {enrolledStudents.length > 0
-                  ? `${enrolledStudents.length} étudiant(s) inscrit(s) — commencez à taper pour voir les suggestions`
-                  : 'Client, fournisseur, formé, élève, etc.'}
-              </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Nom de la personne *</Label>
+                <Input
+                  placeholder="Ex: Jean Dupont, Marie Kamga..."
+                  value={personName}
+                  onChange={(e) => setPersonName(e.target.value)}
+                  maxLength={100}
+                  list={enrolledStudents.length > 0 ? "enrolled-students-list" : undefined}
+                />
+                {enrolledStudents.length > 0 && (
+                  <datalist id="enrolled-students-list">
+                    {enrolledStudents.map((name, i) => (
+                      <option key={i} value={name} />
+                    ))}
+                  </datalist>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  {enrolledStudents.length > 0
+                    ? `${enrolledStudents.length} étudiant(s) inscrit(s) — commencez à taper pour voir les suggestions`
+                    : 'Client, fournisseur, formé, élève, etc.'}
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label>Numéro de téléphone</Label>
+                <Input
+                  type="tel"
+                  placeholder="Ex: 6 99 00 00 00"
+                  value={phoneNumber}
+                  onChange={(e) => setPhoneNumber(e.target.value)}
+                  maxLength={20}
+                />
+              </div>
             </div>
 
             {isEnrollment && (
@@ -555,6 +627,37 @@ export default function NewTransaction() {
                         </div>
                       )}
                     </div>
+
+                    {/* Inscription fee info — shows for inscription categories with known fee */}
+                    {selectedFormation && isInscriptionCategory(category) && selectedFormation.inscriptionFee && selectedFormation.inscriptionFee > 0 && (() => {
+                      const fee = selectedFormation.inscriptionFee!;
+                      const existingPlans = getPaymentPlans();
+                      const existingPlan = existingPlans.find(p =>
+                        personName.trim() &&
+                        p.clientName.toLowerCase() === personName.trim().toLowerCase() &&
+                        p.formationId === selectedFormation.id &&
+                        p.status === 'en_cours'
+                      );
+                      const alreadyPaid = existingPlan
+                        ? (existingPlan.inscriptionPaidAmount || (existingPlan.inscriptionPaid ? (existingPlan.inscriptionFee || 0) : 0))
+                        : 0;
+                      const remaining = fee - alreadyPaid;
+                      return (
+                        <div className="rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 p-3 space-y-1">
+                          <p className="text-xs font-semibold text-amber-800 dark:text-amber-300">
+                            Frais d'inscription : {formatCurrency(fee)}
+                          </p>
+                          {alreadyPaid > 0 && (
+                            <p className="text-xs text-amber-700 dark:text-amber-400">
+                              {remaining <= 0
+                                ? `✅ Déjà payé intégralement (${formatCurrency(alreadyPaid)})`
+                                : `💰 Déjà payé : ${formatCurrency(alreadyPaid)} — reste ${formatCurrency(remaining)}`
+                              }
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })()}
 
                     {/* Pack selection — for pack-mode formations */}
                     {selectedFormation && !isTrancheMode && selectedFormation.packs.length > 0 && (

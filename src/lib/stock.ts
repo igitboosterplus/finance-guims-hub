@@ -1,4 +1,4 @@
-// ==================== GABA STOCK MANAGEMENT ====================
+// ==================== STOCK MANAGEMENT (multi-department) ====================
 
 import { syncFullCollection } from './sync';
 import { TABLES } from './firebase';
@@ -15,6 +15,17 @@ export const STOCK_CATEGORIES: StockCategory[] = [
   { id: 'equipements', name: 'Équipements', description: 'Matériel d\'élevage et outils' },
   { id: 'produits-finis', name: 'Produits finis', description: 'Œufs, viande, fumier, etc.' },
 ];
+
+export const ACADEMY_STOCK_CATEGORIES: StockCategory[] = [
+  { id: 'materiel-formation', name: 'Matériel de formation', description: 'Supports, manuels, documents pédagogiques' },
+  { id: 'equipements-info', name: 'Équipements informatiques', description: 'Ordinateurs, imprimantes, projecteurs, etc.' },
+  { id: 'fournitures', name: 'Fournitures', description: 'Stylos, cahiers, marqueurs, etc.' },
+  { id: 'autres', name: 'Autres', description: 'Autres articles du stock' },
+];
+
+export function getStockCategoriesForDept(departmentId: string): StockCategory[] {
+  return departmentId === 'guims-academy' ? ACADEMY_STOCK_CATEGORIES : STOCK_CATEGORIES;
+}
 
 export interface StockItem {
   id: string;
@@ -92,14 +103,24 @@ export interface Training {
   createdBy: string;
 }
 
-const STOCK_ITEMS_KEY = 'gaba-stock-items';
-const STOCK_MOVEMENTS_KEY = 'gaba-stock-movements';
-const TRAININGS_KEY = 'gaba-trainings';
+// Storage key helpers — backward-compatible ('gaba' uses original keys)
+function stockItemsKey(deptId: string = 'gaba') {
+  return deptId === 'gaba' ? 'gaba-stock-items' : `${deptId}-stock-items`;
+}
+function stockMovementsKey(deptId: string = 'gaba') {
+  return deptId === 'gaba' ? 'gaba-stock-movements' : `${deptId}-stock-movements`;
+}
+function trainingsKey(deptId: string = 'gaba') {
+  return deptId === 'gaba' ? 'gaba-trainings' : `${deptId}-trainings`;
+}
+function stockKitsKey(deptId: string = 'gaba') {
+  return deptId === 'gaba' ? 'gaba-stock-kits' : `${deptId}-stock-kits`;
+}
 
 // ==================== ITEMS ====================
 
-export function getStockItems(): StockItem[] {
-  const data = localStorage.getItem(STOCK_ITEMS_KEY);
+export function getStockItems(departmentId: string = 'gaba'): StockItem[] {
+  const data = localStorage.getItem(stockItemsKey(departmentId));
   if (!data) return [];
   // Migrate legacy unitPrice → purchasePrice + sellingPrice
   const raw: any[] = JSON.parse(data);
@@ -110,13 +131,14 @@ export function getStockItems(): StockItem[] {
   }));
 }
 
-function saveStockItems(items: StockItem[]) {
-  localStorage.setItem(STOCK_ITEMS_KEY, JSON.stringify(items));
-  syncFullCollection(TABLES.stockItems, STOCK_ITEMS_KEY);
+function saveStockItems(items: StockItem[], departmentId: string = 'gaba') {
+  const key = stockItemsKey(departmentId);
+  localStorage.setItem(key, JSON.stringify(items));
+  syncFullCollection(TABLES.stockItems, key);
 }
 
-export function addStockItem(item: Omit<StockItem, 'id' | 'createdAt' | 'currentQuantity' | 'unitPrice'>): StockItem {
-  const items = getStockItems();
+export function addStockItem(item: Omit<StockItem, 'id' | 'createdAt' | 'currentQuantity' | 'unitPrice'>, departmentId: string = 'gaba'): StockItem {
+  const items = getStockItems(departmentId);
   const newItem: StockItem = {
     ...item,
     id: crypto.randomUUID(),
@@ -124,40 +146,41 @@ export function addStockItem(item: Omit<StockItem, 'id' | 'createdAt' | 'current
     createdAt: new Date().toISOString(),
   };
   items.push(newItem);
-  saveStockItems(items);
+  saveStockItems(items, departmentId);
   return newItem;
 }
 
-export function updateStockItem(id: string, updates: Partial<Pick<StockItem, 'name' | 'unit' | 'alertThreshold' | 'purchasePrice' | 'sellingPrice' | 'categoryId'>>): StockItem | null {
-  const items = getStockItems();
+export function updateStockItem(id: string, updates: Partial<Pick<StockItem, 'name' | 'unit' | 'alertThreshold' | 'purchasePrice' | 'sellingPrice' | 'categoryId'>>, departmentId: string = 'gaba'): StockItem | null {
+  const items = getStockItems(departmentId);
   const idx = items.findIndex(i => i.id === id);
   if (idx === -1) return null;
   items[idx] = { ...items[idx], ...updates };
-  saveStockItems(items);
+  saveStockItems(items, departmentId);
   return items[idx];
 }
 
-export function deleteStockItem(id: string): boolean {
-  const items = getStockItems();
+export function deleteStockItem(id: string, departmentId: string = 'gaba'): boolean {
+  const items = getStockItems(departmentId);
   const filtered = items.filter(i => i.id !== id);
   if (filtered.length === items.length) return false;
-  saveStockItems(filtered);
+  saveStockItems(filtered, departmentId);
   // Also clean movements for that item
-  const movements = getStockMovements().filter(m => m.itemId !== id);
-  saveStockMovements(movements);
+  const movements = getStockMovements(departmentId).filter(m => m.itemId !== id);
+  saveStockMovements(movements, departmentId);
   return true;
 }
 
 // ==================== MOVEMENTS ====================
 
-export function getStockMovements(): StockMovement[] {
-  const data = localStorage.getItem(STOCK_MOVEMENTS_KEY);
+export function getStockMovements(departmentId: string = 'gaba'): StockMovement[] {
+  const data = localStorage.getItem(stockMovementsKey(departmentId));
   return data ? JSON.parse(data) : [];
 }
 
-function saveStockMovements(movements: StockMovement[]) {
-  localStorage.setItem(STOCK_MOVEMENTS_KEY, JSON.stringify(movements));
-  syncFullCollection(TABLES.stockMovements, STOCK_MOVEMENTS_KEY);
+function saveStockMovements(movements: StockMovement[], departmentId: string = 'gaba') {
+  const key = stockMovementsKey(departmentId);
+  localStorage.setItem(key, JSON.stringify(movements));
+  syncFullCollection(TABLES.stockMovements, key);
 }
 
 export function addStockMovement(
@@ -170,8 +193,9 @@ export function addStockMovement(
   createdBy: string,
   parkName?: string,
   traineeName?: string,
+  departmentId: string = 'gaba',
 ): { success: boolean; movement?: StockMovement; error?: string } {
-  const items = getStockItems();
+  const items = getStockItems(departmentId);
   const idx = items.findIndex(i => i.id === itemId);
   if (idx === -1) return { success: false, error: 'Article introuvable' };
 
@@ -195,10 +219,10 @@ export function addStockMovement(
   items[idx].currentQuantity = newQuantity;
   if (type === 'entry' && unitPrice > 0) items[idx].purchasePrice = unitPrice;
   if (type === 'exit' && unitPrice > 0) items[idx].sellingPrice = unitPrice;
-  saveStockItems(items);
+  saveStockItems(items, departmentId);
 
   // Record movement
-  const movements = getStockMovements();
+  const movements = getStockMovements(departmentId);
   const movement: StockMovement = {
     id: crypto.randomUUID(),
     itemId,
@@ -215,48 +239,49 @@ export function addStockMovement(
     ...(traineeName ? { traineeName } : {}),
   };
   movements.push(movement);
-  saveStockMovements(movements);
+  saveStockMovements(movements, departmentId);
 
   return { success: true, movement };
 }
 
 // ==================== QUERIES ====================
 
-export function getItemMovements(itemId: string): StockMovement[] {
-  return getStockMovements().filter(m => m.itemId === itemId);
+export function getItemMovements(itemId: string, departmentId: string = 'gaba'): StockMovement[] {
+  return getStockMovements(departmentId).filter(m => m.itemId === itemId);
 }
 
-export function getStockByCategory(categoryId: string): StockItem[] {
-  return getStockItems().filter(i => i.categoryId === categoryId);
+export function getStockByCategory(categoryId: string, departmentId: string = 'gaba'): StockItem[] {
+  return getStockItems(departmentId).filter(i => i.categoryId === categoryId);
 }
 
-export function getLowStockItems(): StockItem[] {
-  return getStockItems().filter(i => i.currentQuantity <= i.alertThreshold);
+export function getLowStockItems(departmentId: string = 'gaba'): StockItem[] {
+  return getStockItems(departmentId).filter(i => i.currentQuantity <= i.alertThreshold);
 }
 
-export function getStockStats() {
-  const items = getStockItems();
+export function getStockStats(departmentId: string = 'gaba') {
+  const items = getStockItems(departmentId);
   const totalItems = items.length;
   const lowStock = items.filter(i => i.currentQuantity <= i.alertThreshold).length;
   const totalValue = items.reduce((sum, i) => sum + i.currentQuantity * i.sellingPrice, 0);
-  const movements = getStockMovements();
+  const movements = getStockMovements(departmentId);
   const totalMovements = movements.length;
   return { totalItems, lowStock, totalValue, totalMovements };
 }
 
-export function getCategoryLabel(categoryId: string): string {
-  return STOCK_CATEGORIES.find(c => c.id === categoryId)?.name ?? categoryId;
+export function getCategoryLabel(categoryId: string, departmentId: string = 'gaba'): string {
+  const cats = getStockCategoriesForDept(departmentId);
+  return cats.find(c => c.id === categoryId)?.name ?? categoryId;
 }
 
 // ==================== EXPORT ====================
 
-export function exportStockCSV(): string {
-  const items = getStockItems();
+export function exportStockCSV(departmentId: string = 'gaba'): string {
+  const items = getStockItems(departmentId);
   const headers = ['Catégorie', 'Article', 'Unité', 'Quantité', 'Seuil alerte', 'Prix achat (FCFA)', 'Prix vente (FCFA)', 'Valeur stock (FCFA)'];
   const rows = items
     .sort((a, b) => a.categoryId.localeCompare(b.categoryId))
     .map(item => [
-      getCategoryLabel(item.categoryId),
+      getCategoryLabel(item.categoryId, departmentId),
       `"${item.name.replace(/"/g, '""')}"`,
       item.unit,
       item.currentQuantity,
@@ -270,18 +295,19 @@ export function exportStockCSV(): string {
 
 // ==================== TRAININGS / FORMATIONS ====================
 
-export function getTrainings(): Training[] {
-  const data = localStorage.getItem(TRAININGS_KEY);
+export function getTrainings(departmentId: string = 'gaba'): Training[] {
+  const data = localStorage.getItem(trainingsKey(departmentId));
   return data ? JSON.parse(data) : [];
 }
 
-function saveTrainings(trainings: Training[]) {
-  localStorage.setItem(TRAININGS_KEY, JSON.stringify(trainings));
-  syncFullCollection(TABLES.trainings, TRAININGS_KEY);
+function saveTrainings(trainings: Training[], departmentId: string = 'gaba') {
+  const key = trainingsKey(departmentId);
+  localStorage.setItem(key, JSON.stringify(trainings));
+  syncFullCollection(TABLES.trainings, key);
 }
 
-export function addTraining(training: Omit<Training, 'id' | 'createdAt'>): Training {
-  const trainings = getTrainings();
+export function addTraining(training: Omit<Training, 'id' | 'createdAt'>, departmentId: string = 'gaba'): Training {
+  const trainings = getTrainings(departmentId);
   const newTraining: Training = {
     ...training,
     id: crypto.randomUUID(),
@@ -289,15 +315,15 @@ export function addTraining(training: Omit<Training, 'id' | 'createdAt'>): Train
     createdAt: new Date().toISOString(),
   };
   trainings.push(newTraining);
-  saveTrainings(trainings);
+  saveTrainings(trainings, departmentId);
   return newTraining;
 }
 
-export function deleteTraining(id: string): boolean {
-  const trainings = getTrainings();
+export function deleteTraining(id: string, departmentId: string = 'gaba'): boolean {
+  const trainings = getTrainings(departmentId);
   const filtered = trainings.filter(t => t.id !== id);
   if (filtered.length === trainings.length) return false;
-  saveTrainings(filtered);
+  saveTrainings(filtered, departmentId);
   return true;
 }
 
@@ -520,7 +546,8 @@ export interface PaymentPlan {
   formationId?: string;     // Lien optionnel vers FormationCatalog
   packId?: string;          // Lien optionnel vers un pack
   inscriptionFee?: number;  // Frais d'inscription (hors formation)
-  inscriptionPaid?: boolean; // Inscription déjà payée ?
+  inscriptionPaid?: boolean; // Inscription entièrement payée ?
+  inscriptionPaidAmount?: number; // Montant déjà payé pour l'inscription
 }
 
 const PAYMENT_PLANS_KEY = 'payment-plans';
@@ -660,14 +687,21 @@ export function deletePaymentPlan(planId: string): boolean {
   return true;
 }
 
-/** Mark inscription as paid (or update inscriptionFee) on a payment plan.
+/** Mark inscription as paid (or add partial payment).
+ *  If paidAmount < inscriptionFee → partial payment, inscriptionPaid stays false.
+ *  If paidAmount >= inscriptionFee → fully paid, inscriptionPaid = true.
  *  Does NOT count as a formation installment — tracked separately. */
-export function updatePlanInscription(planId: string, paid: boolean, fee?: number): PaymentPlan | null {
+export function updatePlanInscription(planId: string, paid: boolean, fee?: number, paidAmount?: number): PaymentPlan | null {
   const plans = getPaymentPlans();
   const plan = plans.find(p => p.id === planId);
   if (!plan) return null;
-  plan.inscriptionPaid = paid;
   if (fee !== undefined) plan.inscriptionFee = fee;
+  if (paidAmount !== undefined) {
+    plan.inscriptionPaidAmount = (plan.inscriptionPaidAmount || 0) + paidAmount;
+    plan.inscriptionPaid = plan.inscriptionPaidAmount >= (plan.inscriptionFee || 0);
+  } else {
+    plan.inscriptionPaid = paid;
+  }
   savePaymentPlans(plans);
   return plan;
 }
@@ -968,53 +1002,52 @@ export interface StockKit {
   createdBy: string;
 }
 
-const STOCK_KITS_KEY = 'gaba-stock-kits';
-
-export function getStockKits(): StockKit[] {
-  const data = localStorage.getItem(STOCK_KITS_KEY);
+export function getStockKits(departmentId: string = 'gaba'): StockKit[] {
+  const data = localStorage.getItem(stockKitsKey(departmentId));
   return data ? JSON.parse(data) : [];
 }
 
-function saveStockKits(kits: StockKit[]) {
-  localStorage.setItem(STOCK_KITS_KEY, JSON.stringify(kits));
-  syncFullCollection(TABLES.stockKits, STOCK_KITS_KEY);
+function saveStockKits(kits: StockKit[], departmentId: string = 'gaba') {
+  const key = stockKitsKey(departmentId);
+  localStorage.setItem(key, JSON.stringify(kits));
+  syncFullCollection(TABLES.stockKits, key);
 }
 
-export function addStockKit(kit: Omit<StockKit, 'id' | 'createdAt'>): StockKit {
-  const kits = getStockKits();
+export function addStockKit(kit: Omit<StockKit, 'id' | 'createdAt'>, departmentId: string = 'gaba'): StockKit {
+  const kits = getStockKits(departmentId);
   const newKit: StockKit = {
     ...kit,
     id: crypto.randomUUID(),
     createdAt: new Date().toISOString(),
   };
   kits.push(newKit);
-  saveStockKits(kits);
+  saveStockKits(kits, departmentId);
   return newKit;
 }
 
-export function updateStockKit(id: string, updates: Partial<Omit<StockKit, 'id' | 'createdAt' | 'createdBy'>>): StockKit | null {
-  const kits = getStockKits();
+export function updateStockKit(id: string, updates: Partial<Omit<StockKit, 'id' | 'createdAt' | 'createdBy'>>, departmentId: string = 'gaba'): StockKit | null {
+  const kits = getStockKits(departmentId);
   const idx = kits.findIndex(k => k.id === id);
   if (idx === -1) return null;
   kits[idx] = { ...kits[idx], ...updates };
-  saveStockKits(kits);
+  saveStockKits(kits, departmentId);
   return kits[idx];
 }
 
-export function deleteStockKit(id: string): boolean {
-  const kits = getStockKits();
+export function deleteStockKit(id: string, departmentId: string = 'gaba'): boolean {
+  const kits = getStockKits(departmentId);
   const filtered = kits.filter(k => k.id !== id);
   if (filtered.length === kits.length) return false;
-  saveStockKits(filtered);
+  saveStockKits(filtered, departmentId);
   return true;
 }
 
 /** Check if all components are available in stock for selling N kits */
-export function checkKitAvailability(kitId: string, quantity: number = 1): { available: boolean; missing: { itemName: string; required: number; available: number }[] } {
-  const kit = getStockKits().find(k => k.id === kitId);
+export function checkKitAvailability(kitId: string, quantity: number = 1, departmentId: string = 'gaba'): { available: boolean; missing: { itemName: string; required: number; available: number }[] } {
+  const kit = getStockKits(departmentId).find(k => k.id === kitId);
   if (!kit) return { available: false, missing: [{ itemName: 'Kit introuvable', required: 0, available: 0 }] };
 
-  const items = getStockItems();
+  const items = getStockItems(departmentId);
   const missing: { itemName: string; required: number; available: number }[] = [];
 
   for (const comp of kit.components) {
@@ -1035,12 +1068,12 @@ export function checkKitAvailability(kitId: string, quantity: number = 1): { ava
 /** Sell one or more kits — auto deduct all components from stock.
  * Returns success/failure + list of movements created. */
 export function sellKit(
-  kitId: string, quantity: number, date: string, createdBy: string, clientName?: string,
+  kitId: string, quantity: number, date: string, createdBy: string, clientName?: string, departmentId: string = 'gaba',
 ): { success: boolean; error?: string; movements?: StockMovement[] } {
-  const kit = getStockKits().find(k => k.id === kitId);
+  const kit = getStockKits(departmentId).find(k => k.id === kitId);
   if (!kit) return { success: false, error: 'Kit introuvable' };
 
-  const check = checkKitAvailability(kitId, quantity);
+  const check = checkKitAvailability(kitId, quantity, departmentId);
   if (!check.available) {
     const missingStr = check.missing.map(m => `${m.itemName}: besoin ${m.required}, dispo ${m.available}`).join('; ');
     return { success: false, error: `Stock insuffisant — ${missingStr}` };
@@ -1068,12 +1101,12 @@ export function sellKit(
 /** Use one or more kits for a training session — auto deduct all components from stock.
  * Returns success/failure + list of movements created. */
 export function useKitForTraining(
-  kitId: string, quantity: number, date: string, createdBy: string, parkName?: string,
+  kitId: string, quantity: number, date: string, createdBy: string, parkName?: string, departmentId: string = 'gaba',
 ): { success: boolean; error?: string; movements?: StockMovement[] } {
-  const kit = getStockKits().find(k => k.id === kitId);
+  const kit = getStockKits(departmentId).find(k => k.id === kitId);
   if (!kit) return { success: false, error: 'Kit introuvable' };
 
-  const check = checkKitAvailability(kitId, quantity);
+  const check = checkKitAvailability(kitId, quantity, departmentId);
   if (!check.available) {
     const missingStr = check.missing.map(m => `${m.itemName}: besoin ${m.required}, dispo ${m.available}`).join('; ');
     return { success: false, error: `Stock insuffisant — ${missingStr}` };

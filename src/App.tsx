@@ -76,6 +76,7 @@ const App = () => (
                     <Route path="/super-audit" element={<SuperAuditPage />} />
                     <Route path="/profile" element={<ProfilePage />} />
                     <Route path="/gaba/stock" element={<GabaStockPage />} />
+                    <Route path="/guims-academy/stock" element={<GabaStockPage departmentId="guims-academy" />} />
                     <Route path="/formations" element={<FormationsPage />} />
                     <Route path="/paiements" element={<PaymentTrackingPage />} />
                     <Route path="*" element={<NotFound />} />

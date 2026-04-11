@@ -96,7 +96,7 @@ export default function PaymentTrackingPage() {
   // Stats — include inscription fees in totals for full picture
   const activePlans = plans.filter(p => p.status === 'en_cours');
   const totalDue = activePlans.reduce((s, p) => s + p.totalAmount + (p.inscriptionFee || 0), 0);
-  const totalPaid = activePlans.reduce((s, p) => s + getPaidAmount(p) + (p.inscriptionPaid && p.inscriptionFee ? p.inscriptionFee : 0), 0);
+  const totalPaid = activePlans.reduce((s, p) => s + getPaidAmount(p) + (p.inscriptionPaidAmount || (p.inscriptionPaid && p.inscriptionFee ? p.inscriptionFee : 0)), 0);
   const totalRemaining = totalDue - totalPaid;
 
   const handleCreatePlan = () => {
@@ -463,17 +463,22 @@ export default function PaymentTrackingPage() {
                 </CardHeader>
                 <CardContent className="pt-0 space-y-3">
                   {/* Inscription fee info */}
-                  {plan.inscriptionFee && plan.inscriptionFee > 0 && (
-                    <div className={`flex items-center justify-between rounded-md px-2.5 py-1.5 text-xs ${plan.inscriptionPaid ? 'bg-green-50 dark:bg-green-950/20 text-green-700 dark:text-green-400' : 'bg-amber-50 dark:bg-amber-950/20 text-amber-700 dark:text-amber-400'}`}>
-                      <span className="flex items-center gap-1.5">
-                        <Receipt className="h-3.5 w-3.5 shrink-0" />
-                        Inscription : {formatCurrency(plan.inscriptionFee)}
-                      </span>
-                      <Badge variant="outline" className={`text-[10px] ${plan.inscriptionPaid ? 'border-green-400 text-green-600' : 'border-amber-400 text-amber-600'}`}>
-                        {plan.inscriptionPaid ? 'Payée ✓' : 'Non payée'}
-                      </Badge>
-                    </div>
-                  )}
+                  {plan.inscriptionFee && plan.inscriptionFee > 0 && (() => {
+                    const paidAmt = plan.inscriptionPaidAmount || (plan.inscriptionPaid ? plan.inscriptionFee : 0);
+                    const remaining = plan.inscriptionFee - paidAmt;
+                    const isFullyPaid = remaining <= 0;
+                    return (
+                      <div className={`flex items-center justify-between rounded-md px-2.5 py-1.5 text-xs ${isFullyPaid ? 'bg-green-50 dark:bg-green-950/20 text-green-700 dark:text-green-400' : 'bg-amber-50 dark:bg-amber-950/20 text-amber-700 dark:text-amber-400'}`}>
+                        <span className="flex items-center gap-1.5">
+                          <Receipt className="h-3.5 w-3.5 shrink-0" />
+                          Inscription : {formatCurrency(plan.inscriptionFee)}
+                        </span>
+                        <Badge variant="outline" className={`text-[10px] ${isFullyPaid ? 'border-green-400 text-green-600' : 'border-amber-400 text-amber-600'}`}>
+                          {isFullyPaid ? 'Payée ✓' : paidAmt > 0 ? `${formatCurrency(paidAmt)} payé — reste ${formatCurrency(remaining)}` : 'Non payée'}
+                        </Badge>
+                      </div>
+                    );
+                  })()}
 
                   {/* Total recap: inscription + formation */}
                   {plan.inscriptionFee && plan.inscriptionFee > 0 && (
@@ -605,21 +610,28 @@ export default function PaymentTrackingPage() {
                         </p>
                         <div className="space-y-1.5">
                           {/* Inscription row (if applicable) */}
-                          {plan.inscriptionFee && plan.inscriptionFee > 0 && (
-                            <div className={`flex items-center justify-between rounded-md border p-2 text-xs ${plan.inscriptionPaid ? 'bg-green-50 dark:bg-green-950/20 border-green-200 dark:border-green-800' : 'bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800'}`}>
-                              <div className="flex items-center gap-2">
-                                {plan.inscriptionPaid ? <CheckCircle2 className="h-3.5 w-3.5 text-green-600" /> : <Clock className="h-3.5 w-3.5 text-amber-600" />}
-                                <span className="font-medium">Inscription</span>
+                          {plan.inscriptionFee && plan.inscriptionFee > 0 && (() => {
+                            const paidAmt = plan.inscriptionPaidAmount || (plan.inscriptionPaid ? plan.inscriptionFee : 0);
+                            const remaining = plan.inscriptionFee - paidAmt;
+                            const isFullyPaid = remaining <= 0;
+                            return (
+                              <div className={`flex items-center justify-between rounded-md border p-2 text-xs ${isFullyPaid ? 'bg-green-50 dark:bg-green-950/20 border-green-200 dark:border-green-800' : 'bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800'}`}>
+                                <div className="flex items-center gap-2">
+                                  {isFullyPaid ? <CheckCircle2 className="h-3.5 w-3.5 text-green-600" /> : <Clock className="h-3.5 w-3.5 text-amber-600" />}
+                                  <span className="font-medium">Inscription</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-semibold">{formatCurrency(plan.inscriptionFee)}</span>
+                                  {isFullyPaid
+                                    ? <Badge className="text-[9px] bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 border-0">Payé</Badge>
+                                    : paidAmt > 0
+                                      ? <Badge className="text-[9px] bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 border-0">{formatCurrency(paidAmt)} payé — reste {formatCurrency(remaining)}</Badge>
+                                      : <Badge className="text-[9px] bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 border-0">Non payé</Badge>
+                                  }
+                                </div>
                               </div>
-                              <div className="flex items-center gap-2">
-                                <span className="font-semibold">{formatCurrency(plan.inscriptionFee)}</span>
-                                {plan.inscriptionPaid
-                                  ? <Badge className="text-[9px] bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 border-0">Payé</Badge>
-                                  : <Badge className="text-[9px] bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 border-0">Non payé</Badge>
-                                }
-                              </div>
-                            </div>
-                          )}
+                            );
+                          })()}
                         </div>
                       </div>
 
@@ -836,26 +848,35 @@ export default function PaymentTrackingPage() {
                     </div>
                   </div>
                   {/* Quick-select: Inscription button if applicable */}
-                  {plan.inscriptionFee && plan.inscriptionFee > 0 && !plan.inscriptionPaid && (
-                    <div className="space-y-2">
-                      <Label className="text-xs text-muted-foreground">Inscription</Label>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setInstallAmount(String(plan.inscriptionFee));
-                          setInstallNote('Inscription étudiant');
-                        }}
-                        className={`rounded-lg border-2 px-3 py-2 text-left text-xs transition-all w-full ${
-                          installNote === 'Inscription étudiant' ? 'border-primary bg-primary/10 ring-2 ring-primary' :
-                          'border-amber-300 bg-amber-50 dark:bg-amber-950/20 hover:border-primary/40'
-                        }`}
-                      >
-                        <p className="font-semibold">Inscription</p>
-                        <p>{formatCurrency(plan.inscriptionFee)}</p>
-                        <p className="text-[10px] text-amber-600">Non payée — sera comptée séparément des tranches</p>
-                      </button>
-                    </div>
-                  )}
+                  {plan.inscriptionFee && plan.inscriptionFee > 0 && (() => {
+                    const insPaid = plan.inscriptionPaidAmount || (plan.inscriptionPaid ? plan.inscriptionFee : 0);
+                    const insRemaining = plan.inscriptionFee - insPaid;
+                    if (insRemaining <= 0) return null;
+                    return (
+                      <div className="space-y-2">
+                        <Label className="text-xs text-muted-foreground">Inscription</Label>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setInstallAmount(String(insRemaining));
+                            setInstallNote('Inscription étudiant');
+                          }}
+                          className={`rounded-lg border-2 px-3 py-2 text-left text-xs transition-all w-full ${
+                            installNote === 'Inscription étudiant' ? 'border-primary bg-primary/10 ring-2 ring-primary' :
+                            'border-amber-300 bg-amber-50 dark:bg-amber-950/20 hover:border-primary/40'
+                          }`}
+                        >
+                          <p className="font-semibold">Inscription</p>
+                          <p>{formatCurrency(plan.inscriptionFee)}</p>
+                          {insPaid > 0 ? (
+                            <p className="text-[10px] text-amber-600">{formatCurrency(insPaid)} déjà payé — reste {formatCurrency(insRemaining)}</p>
+                          ) : (
+                            <p className="text-[10px] text-amber-600">Non payée — sera comptée séparément des tranches</p>
+                          )}
+                        </button>
+                      </div>
+                    );
+                  })()}
                   {plan.scheduledTranches && plan.scheduledTranches.length > 0 && (
                     <div className="space-y-2">
                       <Label className="text-xs text-muted-foreground">Sélectionner une tranche (ou saisir un montant libre)</Label>
