@@ -1314,8 +1314,8 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
       <ReportDialog
         open={stockReportOpen}
         onOpenChange={setStockReportOpen}
-        title="Rapport de stock — GABA"
-        onGenerate={(opts) => { downloadStockReport(opts); toast.success('Rapport PDF téléchargé'); }}
+        title={`Rapport de stock — ${departmentId === 'gaba' ? 'GABA' : 'Guims Academy'}`}
+        onGenerate={(opts) => { downloadStockReport(opts, departmentId); toast.success('Rapport PDF téléchargé'); }}
       />
 
       {/* New / Edit Kit dialog */}

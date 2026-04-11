@@ -236,15 +236,16 @@ export function downloadDepartmentReport(deptId: DepartmentId, opts?: ReportOpti
   doc.save(`rapport-${deptId}-${new Date().toISOString().slice(0, 10)}.pdf`);
 }
 
-// ==================== GABA STOCK REPORT ====================
+// ==================== STOCK REPORT ====================
 
-export function downloadStockReport(opts?: ReportOptions) {
-  const doc = setupDoc("Rapport de stock — GABA", opts);
-  const stats = getStockStats();
-  const items = getStockItems();
-  const allMovements = getStockMovements();
+export function downloadStockReport(opts?: ReportOptions, departmentId: string = 'gaba') {
+  const deptLabel = departmentId === 'gaba' ? 'GABA' : departments.find(d => d.id === departmentId)?.name ?? departmentId;
+  const doc = setupDoc(`Rapport de stock — ${deptLabel}`, opts);
+  const stats = getStockStats(departmentId);
+  const items = getStockItems(departmentId);
+  const allMovements = getStockMovements(departmentId);
   const movements = filterByPeriod(allMovements, opts);
-  const trainingsAll = getTrainings();
+  const trainingsAll = getTrainings(departmentId);
   const trainings = opts?.startDate || opts?.endDate
     ? trainingsAll.filter(t => (!opts.startDate || t.date >= opts.startDate) && (!opts.endDate || t.date <= opts.endDate))
     : trainingsAll;
@@ -273,7 +274,7 @@ export function downloadStockReport(opts?: ReportOptions) {
         .sort((a, b) => a.categoryId.localeCompare(b.categoryId))
         .map(i => [
           i.name,
-          getCategoryLabel(i.categoryId),
+          getCategoryLabel(i.categoryId, departmentId),
           String(i.currentQuantity),
           i.unit,
           fmtAmount(i.purchasePrice),
@@ -356,7 +357,7 @@ export function downloadStockReport(opts?: ReportOptions) {
     });
   }
 
-  doc.save(`rapport-stock-gaba-${new Date().toISOString().slice(0, 10)}.pdf`);
+  doc.save(`rapport-stock-${departmentId}-${new Date().toISOString().slice(0, 10)}.pdf`);
 }
 
 // ==================== FULL TRANSACTIONS REPORT ====================
