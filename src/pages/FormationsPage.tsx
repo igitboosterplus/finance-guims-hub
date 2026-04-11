@@ -14,11 +14,14 @@ import { getCurrentUser, hasPermission, hasDepartmentAccess } from "@/lib/auth";
 import {
   getFormationsCatalog, addFormationCatalog, updateFormationCatalog, deleteFormationCatalog,
   getStockItems, getStockKits,
+  getEnrollmentsByFormation, addEnrollment, updateEnrollment, deleteEnrollment,
   type FormationCatalog, type FormationPack, type FormationTranche, type PackAdvantage, type PackKitItem, type PackKitReference, type StockItem, type StockKit,
+  type FormationEnrollment,
 } from "@/lib/stock";
 import { toast } from "sonner";
 import {
   GraduationCap, Plus, Pencil, Trash2, Package, Star, Award, ChevronDown, ChevronUp, Search, Calendar, CreditCard, Boxes,
+  Users, UserPlus, Phone, Mail, MoreVertical, Eye, EyeOff,
 } from "lucide-react";
 
 // ==================== PACK EDITOR COMPONENT ====================
@@ -341,6 +344,21 @@ export default function FormationsPage() {
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [expandedFormation, setExpandedFormation] = useState<string | null>(null);
 
+  // Enrollments state
+  const [enrollmentDialogOpen, setEnrollmentDialogOpen] = useState(false);
+  const [enrollmentFormationId, setEnrollmentFormationId] = useState<string | null>(null);
+  const [enrollmentEditId, setEnrollmentEditId] = useState<string | null>(null);
+  const [enrollments, setEnrollments] = useState<Record<string, FormationEnrollment[]>>({});
+  const [showEnrollments, setShowEnrollments] = useState<string | null>(null);
+  const [deleteEnrollmentId, setDeleteEnrollmentId] = useState<string | null>(null);
+  // Enrollment form
+  const [enrFullName, setEnrFullName] = useState("");
+  const [enrPhone, setEnrPhone] = useState("");
+  const [enrEmail, setEnrEmail] = useState("");
+  const [enrNotes, setEnrNotes] = useState("");
+  const [enrPackId, setEnrPackId] = useState<string>("");
+  const [enrStatus, setEnrStatus] = useState<FormationEnrollment['status']>('inscrit');
+
   // Form state
   const [formName, setFormName] = useState("");
   const [formDescription, setFormDescription] = useState("");
@@ -358,9 +376,14 @@ export default function FormationsPage() {
   }, []);
 
   const refresh = () => {
-    setFormations(getFormationsCatalog());
+    const fms = getFormationsCatalog();
+    setFormations(fms);
     setStockItems(getStockItems());
     setStockKits(getStockKits());
+    // Load enrollments for all formations
+    const enrMap: Record<string, FormationEnrollment[]> = {};
+    fms.forEach(f => { enrMap[f.id] = getEnrollmentsByFormation(f.id); });
+    setEnrollments(enrMap);
   };
 
   const filtered = formations.filter(f => {
@@ -496,6 +519,82 @@ export default function FormationsPage() {
     setFormTranches(formTranches.filter((_, i) => i !== index));
   };
 
+  // ===== Enrollment handlers =====
+  const openAddEnrollment = (formationId: string) => {
+    setEnrollmentFormationId(formationId);
+    setEnrollmentEditId(null);
+    setEnrFullName("");
+    setEnrPhone("");
+    setEnrEmail("");
+    setEnrNotes("");
+    setEnrPackId("");
+    setEnrStatus('inscrit');
+    setEnrollmentDialogOpen(true);
+  };
+
+  const openEditEnrollment = (e: FormationEnrollment) => {
+    setEnrollmentFormationId(e.formationId);
+    setEnrollmentEditId(e.id);
+    setEnrFullName(e.fullName);
+    setEnrPhone(e.phone || "");
+    setEnrEmail(e.email || "");
+    setEnrNotes(e.notes || "");
+    setEnrPackId(e.packId || "");
+    setEnrStatus(e.status);
+    setEnrollmentDialogOpen(true);
+  };
+
+  const handleSaveEnrollment = () => {
+    if (!enrFullName.trim()) { toast.error("Le nom est obligatoire"); return; }
+    if (!enrollmentFormationId) return;
+    if (enrollmentEditId) {
+      updateEnrollment(enrollmentEditId, {
+        fullName: enrFullName.trim(),
+        phone: enrPhone.trim() || undefined,
+        email: enrEmail.trim() || undefined,
+        notes: enrNotes.trim() || undefined,
+        packId: enrPackId || undefined,
+        status: enrStatus,
+      });
+      toast.success("Inscription mise à jour");
+    } else {
+      addEnrollment({
+        formationId: enrollmentFormationId,
+        fullName: enrFullName.trim(),
+        phone: enrPhone.trim() || undefined,
+        email: enrEmail.trim() || undefined,
+        notes: enrNotes.trim() || undefined,
+        packId: enrPackId || undefined,
+        status: enrStatus,
+        enrolledBy: currentUser?.displayName ?? "Inconnu",
+      });
+      toast.success("Inscription enregistrée");
+    }
+    setEnrollmentDialogOpen(false);
+    refresh();
+  };
+
+  const handleDeleteEnrollment = () => {
+    if (!deleteEnrollmentId) return;
+    deleteEnrollment(deleteEnrollmentId);
+    toast.success("Inscription supprimée");
+    setDeleteEnrollmentId(null);
+    refresh();
+  };
+
+  const statusLabels: Record<FormationEnrollment['status'], string> = {
+    inscrit: 'Inscrit',
+    en_cours: 'En cours',
+    terminé: 'Terminé',
+    annulé: 'Annulé',
+  };
+  const statusColors: Record<FormationEnrollment['status'], string> = {
+    inscrit: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400',
+    en_cours: 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400',
+    terminé: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400',
+    annulé: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400',
+  };
+
   const getStockItemName = (id: string) => stockItems.find(s => s.id === id)?.name ?? "";
   const getDeptName = (id: string) => departments.find(d => d.id === id)?.name ?? id;
 
@@ -571,6 +670,11 @@ export default function FormationsPage() {
                               <Badge variant="outline" className="text-[10px]">{(f.tranches || []).length} tranche{(f.tranches || []).length > 1 ? 's' : ''}</Badge>
                               {f.totalPrice && <Badge className="text-[10px]">Total: {formatCurrency(f.totalPrice)}</Badge>}
                             </>
+                          )}
+                          {(enrollments[f.id] || []).length > 0 && (
+                            <Badge variant="secondary" className="text-[10px] gap-0.5 bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400">
+                              <Users className="h-2.5 w-2.5" />{(enrollments[f.id] || []).length} inscrit{(enrollments[f.id] || []).length > 1 ? 's' : ''}
+                            </Badge>
                           )}
                         </div>
                         {f.description && <p className="text-xs text-muted-foreground mt-1">{f.description}</p>}
@@ -764,6 +868,86 @@ export default function FormationsPage() {
                     </div>
                   )}
                 </CardContent>
+
+                {/* Enrollments section */}
+                <div className="px-6 pb-4">
+                  <Separator className="mb-3" />
+                  <div className="flex items-center justify-between mb-2">
+                    <button
+                      onClick={() => setShowEnrollments(showEnrollments === f.id ? null : f.id)}
+                      className="flex items-center gap-1.5 text-sm font-semibold hover:text-primary transition-colors"
+                    >
+                      <Users className="h-4 w-4" />
+                      Inscrits ({(enrollments[f.id] || []).length})
+                      {showEnrollments === f.id ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                    </button>
+                    {canCreate && (
+                      <Button variant="outline" size="sm" className="gap-1 h-7 text-xs" onClick={() => openAddEnrollment(f.id)}>
+                        <UserPlus className="h-3 w-3" /> Inscrire
+                      </Button>
+                    )}
+                  </div>
+                  {showEnrollments === f.id && (
+                    <div className="space-y-2 mt-2">
+                      {(enrollments[f.id] || []).length === 0 ? (
+                        <p className="text-xs text-muted-foreground text-center py-3">Aucun inscrit pour le moment</p>
+                      ) : (
+                        <div className="rounded-lg border overflow-hidden">
+                          <table className="w-full text-xs">
+                            <thead>
+                              <tr className="bg-muted/50 text-left">
+                                <th className="px-3 py-2 font-medium">Nom complet</th>
+                                <th className="px-3 py-2 font-medium hidden sm:table-cell">Téléphone</th>
+                                <th className="px-3 py-2 font-medium hidden md:table-cell">Pack</th>
+                                <th className="px-3 py-2 font-medium">Statut</th>
+                                <th className="px-3 py-2 font-medium hidden sm:table-cell">Date</th>
+                                {canEdit && <th className="px-3 py-2 font-medium w-16">Actions</th>}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {(enrollments[f.id] || []).map(enr => {
+                                const pack = f.packs.find(p => p.id === enr.packId);
+                                return (
+                                  <tr key={enr.id} className="border-t hover:bg-muted/30 transition-colors">
+                                    <td className="px-3 py-2">
+                                      <div>
+                                        <span className="font-medium">{enr.fullName}</span>
+                                        {enr.email && <span className="text-muted-foreground ml-1 hidden lg:inline">({enr.email})</span>}
+                                      </div>
+                                      <div className="sm:hidden text-muted-foreground">
+                                        {enr.phone && <span className="flex items-center gap-0.5"><Phone className="h-2.5 w-2.5" />{enr.phone}</span>}
+                                      </div>
+                                    </td>
+                                    <td className="px-3 py-2 hidden sm:table-cell text-muted-foreground">{enr.phone || '—'}</td>
+                                    <td className="px-3 py-2 hidden md:table-cell">{pack ? <Badge variant="outline" className="text-[10px]">{pack.name}</Badge> : '—'}</td>
+                                    <td className="px-3 py-2">
+                                      <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium ${statusColors[enr.status]}`}>
+                                        {statusLabels[enr.status]}
+                                      </span>
+                                    </td>
+                                    <td className="px-3 py-2 hidden sm:table-cell text-muted-foreground">{new Date(enr.enrolledAt).toLocaleDateString('fr-FR')}</td>
+                                    {canEdit && (
+                                      <td className="px-3 py-2">
+                                        <div className="flex gap-0.5">
+                                          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => openEditEnrollment(enr)}>
+                                            <Pencil className="h-3 w-3" />
+                                          </Button>
+                                          <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive" onClick={() => setDeleteEnrollmentId(enr.id)}>
+                                            <Trash2 className="h-3 w-3" />
+                                          </Button>
+                                        </div>
+                                      </td>
+                                    )}
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               </Card>
             );
           })}
@@ -1002,6 +1186,91 @@ export default function FormationsPage() {
           <AlertDialogFooter>
             <AlertDialogCancel>Annuler</AlertDialogCancel>
             <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              Supprimer
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Enrollment Dialog */}
+      <Dialog open={enrollmentDialogOpen} onOpenChange={setEnrollmentDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{enrollmentEditId ? "Modifier l'inscription" : "Nouvelle inscription"}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>Nom complet *</Label>
+              <Input placeholder="Ex: Jean Dupont" value={enrFullName} onChange={(e) => setEnrFullName(e.target.value)} maxLength={100} />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label>Téléphone</Label>
+                <Input placeholder="Ex: +237 6XX XXX XXX" value={enrPhone} onChange={(e) => setEnrPhone(e.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label>Email</Label>
+                <Input type="email" placeholder="email@exemple.com" value={enrEmail} onChange={(e) => setEnrEmail(e.target.value)} />
+              </div>
+            </div>
+            {enrollmentFormationId && (() => {
+              const fm = formations.find(f => f.id === enrollmentFormationId);
+              if (!fm || fm.packs.length === 0) return null;
+              return (
+                <div className="space-y-2">
+                  <Label>Pack choisi</Label>
+                  <Select value={enrPackId} onValueChange={setEnrPackId}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Sélectionner un pack..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">— Aucun —</SelectItem>
+                      {fm.packs.map(p => (
+                        <SelectItem key={p.id} value={p.id}>{p.name} — {formatCurrency(p.price)}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              );
+            })()}
+            <div className="space-y-2">
+              <Label>Statut</Label>
+              <Select value={enrStatus} onValueChange={(v) => setEnrStatus(v as FormationEnrollment['status'])}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="inscrit">Inscrit</SelectItem>
+                  <SelectItem value="en_cours">En cours</SelectItem>
+                  <SelectItem value="terminé">Terminé</SelectItem>
+                  <SelectItem value="annulé">Annulé</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Notes</Label>
+              <Textarea placeholder="Commentaires..." value={enrNotes} onChange={(e) => setEnrNotes(e.target.value)} maxLength={300} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEnrollmentDialogOpen(false)}>Annuler</Button>
+            <Button onClick={handleSaveEnrollment}>{enrollmentEditId ? "Enregistrer" : "Inscrire"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete enrollment confirmation */}
+      <AlertDialog open={!!deleteEnrollmentId} onOpenChange={(open) => !open && setDeleteEnrollmentId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Supprimer cette inscription ?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Cette action est irréversible.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Annuler</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDeleteEnrollment} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
               Supprimer
             </AlertDialogAction>
           </AlertDialogFooter>

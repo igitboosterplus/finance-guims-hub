@@ -54,6 +54,7 @@ export async function pullAllFromSupabase(): Promise<{ success: boolean; error?:
       pullTable(TABLES.formationsCatalog, "formations-catalog"),
       pullTable(TABLES.paymentPlans, "payment-plans"),
       pullTable(TABLES.stockKits, "gaba-stock-kits"),
+      pullTable(TABLES.enrollments, "formation-enrollments"),
     ]);
     console.log("[Sync] Pull complet depuis Supabase.");
     return { success: true };
@@ -113,6 +114,7 @@ export async function pushAllToSupabase(): Promise<{ success: boolean; error?: s
       [TABLES.formationsCatalog, "formations-catalog"],
       [TABLES.paymentPlans, "payment-plans"],
       [TABLES.stockKits, "gaba-stock-kits"],
+      [TABLES.enrollments, "formation-enrollments"],
     ];
 
     for (const [tableName, storageKey] of pairs) {
@@ -139,6 +141,7 @@ export async function purgeAllSupabase(): Promise<void> {
     TABLES.transactions, TABLES.users, TABLES.auditLog, TABLES.superAudit,
     TABLES.stockItems, TABLES.stockMovements, TABLES.trainings,
     TABLES.formationsCatalog, TABLES.paymentPlans, TABLES.stockKits,
+    TABLES.enrollments,
   ];
   for (const table of allTables) {
     const { error } = await sb.from(table).delete().neq('id', '___none___');

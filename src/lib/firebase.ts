@@ -47,6 +47,7 @@ export const TABLES = {
   formationsCatalog: "formations_catalog",
   paymentPlans: "payment_plans",
   stockKits: "stock_kits",
+  enrollments: "enrollments",
 } as const;
 
 // ==================== SQL À EXÉCUTER DANS SUPABASE ====================
@@ -162,5 +163,14 @@ ALTER TABLE stock_kits ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Allow all" ON formations_catalog FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all" ON payment_plans FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all" ON stock_kits FOR ALL USING (true) WITH CHECK (true);
+
+CREATE TABLE enrollments (
+  id UUID PRIMARY KEY,
+  data JSONB,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE enrollments ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all" ON enrollments FOR ALL USING (true) WITH CHECK (true);
 
 */

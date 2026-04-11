@@ -418,6 +418,66 @@ export function getFormationsByDepartment(departmentId: DepartmentId): Formation
   return getFormationsCatalog().filter(f => f.departmentId === departmentId);
 }
 
+// ==================== ENROLLMENTS (Inscriptions aux formations) ====================
+
+export interface FormationEnrollment {
+  id: string;
+  formationId: string;      // Ref to FormationCatalog
+  packId?: string;           // Ref to FormationPack (packs mode)
+  fullName: string;          // Nom complet de l'inscrit
+  phone?: string;            // Téléphone
+  email?: string;            // Email
+  notes?: string;            // Notes/commentaires
+  status: 'inscrit' | 'en_cours' | 'terminé' | 'annulé';
+  enrolledAt: string;        // Date d'inscription (ISO)
+  enrolledBy: string;        // Qui a enregistré
+}
+
+const ENROLLMENTS_KEY = 'formation-enrollments';
+
+export function getEnrollments(): FormationEnrollment[] {
+  const data = localStorage.getItem(ENROLLMENTS_KEY);
+  return data ? JSON.parse(data) : [];
+}
+
+function saveEnrollments(enrollments: FormationEnrollment[]) {
+  localStorage.setItem(ENROLLMENTS_KEY, JSON.stringify(enrollments));
+  syncFullCollection(TABLES.enrollments, ENROLLMENTS_KEY);
+}
+
+export function getEnrollmentsByFormation(formationId: string): FormationEnrollment[] {
+  return getEnrollments().filter(e => e.formationId === formationId);
+}
+
+export function addEnrollment(enrollment: Omit<FormationEnrollment, 'id' | 'enrolledAt'>): FormationEnrollment {
+  const enrollments = getEnrollments();
+  const newEnrollment: FormationEnrollment = {
+    ...enrollment,
+    id: crypto.randomUUID(),
+    enrolledAt: new Date().toISOString(),
+  };
+  enrollments.push(newEnrollment);
+  saveEnrollments(enrollments);
+  return newEnrollment;
+}
+
+export function updateEnrollment(id: string, updates: Partial<Omit<FormationEnrollment, 'id' | 'enrolledAt' | 'enrolledBy'>>): FormationEnrollment | null {
+  const enrollments = getEnrollments();
+  const idx = enrollments.findIndex(e => e.id === id);
+  if (idx === -1) return null;
+  enrollments[idx] = { ...enrollments[idx], ...updates };
+  saveEnrollments(enrollments);
+  return enrollments[idx];
+}
+
+export function deleteEnrollment(id: string): boolean {
+  const enrollments = getEnrollments();
+  const filtered = enrollments.filter(e => e.id !== id);
+  if (filtered.length === enrollments.length) return false;
+  saveEnrollments(filtered);
+  return true;
+}
+
 // ==================== PAYMENT PLANS (Suivi des paiements en tranches/avances) ====================
 
 /** An individual installment/payment recorded against a plan */
