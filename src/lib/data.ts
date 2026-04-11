@@ -2,7 +2,7 @@ import logoGaba from '@/assets/logo-gaba.png';
 import logoGuimsEduc from '@/assets/logo-guims-educ.jpg';
 import logoGuimsAcademy from '@/assets/logo-guims-academy.jpg';
 import logoDigitbooster from '@/assets/logo-digitbooster.png';
-import { syncSetDoc, syncFullCollection } from './sync';
+import { syncSetDoc, syncDeleteDoc, pushAllToSupabase } from './sync';
 import { TABLES } from './firebase';
 
 export type DepartmentId = 'gaba' | 'guims-educ' | 'guims-academy' | 'digitboosterplus';
@@ -138,8 +138,8 @@ export const deleteTransaction = (id: string) => {
   const tx = getTransactions().find(t => t.id === id);
   const transactions = getTransactions().filter(t => t.id !== id);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(transactions));
-  // Also sync to Supabase via full collection replace (more reliable than single delete)
-  syncFullCollection(TABLES.transactions, STORAGE_KEY);
+  // Supprimer de Supabase directement
+  syncDeleteDoc(TABLES.transactions, id);
   return tx;
 };
 
@@ -180,7 +180,8 @@ export const importDataJSON = (json: string): { success: boolean; count: number;
       }
     }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data.transactions));
-    syncFullCollection(TABLES.transactions, STORAGE_KEY);
+    // Bulk import → full push to sync everything to Supabase
+    pushAllToSupabase().catch(err => console.error('[Import] Sync error:', err));
     return { success: true, count: data.transactions.length };
   } catch {
     return { success: false, count: 0, error: 'JSON invalide' };

@@ -4,11 +4,24 @@ import { getSupabase, isSupabaseConfigured, TABLES } from "./firebase";
 // Stratégie : localStorage = source rapide, Supabase = persistance cloud.
 // - Au démarrage : Supabase → localStorage (si configuré)
 // - À chaque écriture : localStorage → Supabase (async, en arrière-plan)
+// RÈGLE CRITIQUE : ne JAMAIS écraser localStorage avec des données vides/moins complètes.
 
 type TableName = typeof TABLES[keyof typeof TABLES];
 
+// Départements qui ont des tables de stock dédiées
+const STOCK_DEPTS = ['gaba', 'guims-academy'] as const;
+
+function stockStorageKey(dept: string, suffix: string): string {
+  return `${dept === 'gaba' ? 'gaba' : dept}-${suffix}`;
+}
+
 // ==================== PULL (Supabase → localStorage) ====================
 
+/**
+ * Pull a non-departmental table from Supabase → localStorage.
+ * If Supabase has data → use it (authoritative).
+ * If Supabase empty + local has data → push local to Supabase (first-time seed).
+ */
 async function pullTable(tableName: TableName, storageKey: string): Promise<boolean> {
   const sb = getSupabase();
   if (!sb) return false;
@@ -17,7 +30,6 @@ async function pullTable(tableName: TableName, storageKey: string): Promise<bool
     if (error) throw error;
 
     if (data && data.length > 0) {
-      // Supabase a des données → c'est la référence cloud → écrire en local
       const items = data.map(row => row.data);
       localStorage.setItem(storageKey, JSON.stringify(items));
       return true;
@@ -38,38 +50,60 @@ async function pullTable(tableName: TableName, storageKey: string): Promise<bool
 }
 
 /**
- * Pull items for a specific department from a shared Supabase table.
- * Filters by _dept field stored in each item's data.
+ * Pull ALL stock tables (items, movements, trainings, kits) in one pass per table.
+ * Fetches once per Supabase table, then splits by _dept into per-department localStorage keys.
+ * This avoids duplicate fetches and ensures consistent _dept filtering.
  */
-async function pullTableForDept(tableName: TableName, storageKey: string, deptId: string): Promise<boolean> {
+async function pullStockTables(): Promise<void> {
   const sb = getSupabase();
-  if (!sb) return false;
-  try {
-    const { data, error } = await sb.from(tableName).select("data");
-    if (error) throw error;
+  if (!sb) return;
 
-    if (data && data.length > 0) {
-      // Filter items belonging to this department
-      const deptItems = data.map(row => row.data).filter(item => (item?._dept || 'gaba') === deptId);
-      if (deptItems.length > 0) {
-        localStorage.setItem(storageKey, JSON.stringify(deptItems));
-        return true;
+  const stockTableSuffixes: [TableName, string][] = [
+    [TABLES.stockItems, 'stock-items'],
+    [TABLES.stockMovements, 'stock-movements'],
+    [TABLES.trainings, 'trainings'],
+    [TABLES.stockKits, 'stock-kits'],
+  ];
+
+  for (const [tableName, suffix] of stockTableSuffixes) {
+    try {
+      const { data, error } = await sb.from(tableName).select("data");
+      if (error) throw error;
+
+      if (data && data.length > 0) {
+        const allItems = data.map(row => row.data);
+
+        for (const dept of STOCK_DEPTS) {
+          const storageKey = stockStorageKey(dept, suffix);
+          // Items without _dept default to 'gaba' (backward compat)
+          const deptItems = allItems.filter(item => (item?._dept || 'gaba') === dept);
+          if (deptItems.length > 0) {
+            localStorage.setItem(storageKey, JSON.stringify(deptItems));
+          } else {
+            // Supabase has no items for this dept → preserve local if exists, and push local
+            const localRaw = localStorage.getItem(storageKey);
+            const localItems: { id: string }[] = localRaw ? JSON.parse(localRaw) : [];
+            if (localItems.length > 0) {
+              const tagged = localItems.map(item => ({ ...item, _dept: dept }));
+              await pushArrayToSupabase(tableName, tagged);
+            }
+          }
+        }
+      } else {
+        // Supabase table completely empty → push all local data
+        for (const dept of STOCK_DEPTS) {
+          const storageKey = stockStorageKey(dept, suffix);
+          const localRaw = localStorage.getItem(storageKey);
+          const localItems: { id: string }[] = localRaw ? JSON.parse(localRaw) : [];
+          if (localItems.length > 0) {
+            const tagged = localItems.map(item => ({ ...item, _dept: dept }));
+            await pushArrayToSupabase(tableName, tagged);
+          }
+        }
       }
+    } catch (error) {
+      console.error(`[Sync] Erreur pull stock ${tableName}:`, error);
     }
-
-    // No Supabase data for this dept → push local data if exists
-    const localRaw = localStorage.getItem(storageKey);
-    const localItems: { id: string; _dept?: string }[] = localRaw ? JSON.parse(localRaw) : [];
-    if (Array.isArray(localItems) && localItems.length > 0) {
-      // Tag items with _dept before pushing
-      const tagged = localItems.map(item => ({ ...item, _dept: deptId }));
-      await pushArrayToSupabase(tableName, tagged);
-    }
-
-    return true;
-  } catch (error) {
-    console.error(`[Sync] Erreur pull ${tableName} (dept=${deptId}):`, error);
-    return false;
   }
 }
 
@@ -79,6 +113,7 @@ export async function pullAllFromSupabase(): Promise<{ success: boolean; error?:
   if (!sb) return { success: false, error: "Supabase non initialisé" };
 
   try {
+    // 1. Pull non-departmental tables in parallel
     await Promise.all([
       pullTable(TABLES.transactions, "finance-transactions"),
       pullTable(TABLES.users, "finance-users"),
@@ -89,16 +124,9 @@ export async function pullAllFromSupabase(): Promise<{ success: boolean; error?:
       pullTable(TABLES.enrollments, "formation-enrollments"),
     ]);
 
-    // Stock tables are shared across departments — pull per-department keys
-    // Each department stores items under its own localStorage key but same Supabase table
-    const STOCK_DEPTS = ['gaba', 'guims-academy'];
-    for (const dept of STOCK_DEPTS) {
-      const suffix = dept === 'gaba' ? 'gaba' : dept;
-      await pullTableForDept(TABLES.stockItems, `${suffix}-stock-items`, dept);
-      await pullTableForDept(TABLES.stockMovements, `${suffix}-stock-movements`, dept);
-      await pullTableForDept(TABLES.trainings, `${suffix}-trainings`, dept);
-      await pullTableForDept(TABLES.stockKits, `${suffix}-stock-kits`, dept);
-    }
+    // 2. Pull stock tables (single fetch per table, split by _dept)
+    await pullStockTables();
+
     console.log("[Sync] Pull complet depuis Supabase.");
     return { success: true };
   } catch (error) {
@@ -146,7 +174,7 @@ export async function pushAllToSupabase(): Promise<{ success: boolean; error?: s
   if (!sb) return { success: false, error: "Supabase non initialisé" };
 
   try {
-    // Non-departmental tables: safe to replaceCollection
+    // Non-departmental tables: safe to replaceCollection (cleans up Supabase)
     const sharedPairs: [TableName, string][] = [
       [TABLES.transactions, "finance-transactions"],
       [TABLES.users, "finance-users"],
@@ -165,26 +193,29 @@ export async function pushAllToSupabase(): Promise<{ success: boolean; error?: s
       }
     }
 
-    // Departmental stock tables: push (upsert) per department, never delete cross-dept
-    const STOCK_DEPTS = ['gaba', 'guims-academy'];
-    const stockTableKeys: [TableName, (d: string) => string][] = [
-      [TABLES.stockItems, d => `${d === 'gaba' ? 'gaba' : d}-stock-items`],
-      [TABLES.stockMovements, d => `${d === 'gaba' ? 'gaba' : d}-stock-movements`],
-      [TABLES.trainings, d => `${d === 'gaba' ? 'gaba' : d}-trainings`],
-      [TABLES.stockKits, d => `${d === 'gaba' ? 'gaba' : d}-stock-kits`],
+    // Departmental stock tables: gather ALL dept items, then replaceCollection per table
+    const stockSuffixes: [TableName, string][] = [
+      [TABLES.stockItems, 'stock-items'],
+      [TABLES.stockMovements, 'stock-movements'],
+      [TABLES.trainings, 'trainings'],
+      [TABLES.stockKits, 'stock-kits'],
     ];
-    for (const [tableName, keyFn] of stockTableKeys) {
+    for (const [tableName, suffix] of stockSuffixes) {
+      // Collect all items from all departments for this stock table
+      const allTagged: { id: string }[] = [];
       for (const dept of STOCK_DEPTS) {
-        const storageKey = keyFn(dept);
+        const storageKey = stockStorageKey(dept, suffix);
         const data = localStorage.getItem(storageKey);
         const items: { id: string }[] = data ? JSON.parse(data) : [];
         if (Array.isArray(items) && items.length > 0) {
-          // Tag with _dept for pull filtering
           const tagged = items.map(item => ({ ...item, _dept: dept }));
-          await pushArrayToSupabase(tableName, tagged);
+          allTagged.push(...tagged);
         }
       }
+      // replaceCollection with ALL dept items combined = safe (no cross-dept loss)
+      await replaceCollection(tableName, allTagged);
     }
+
     console.log("[Sync] Push complet vers Supabase.");
     return { success: true };
   } catch (error) {

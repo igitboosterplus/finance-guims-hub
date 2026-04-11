@@ -690,6 +690,7 @@ export function deletePaymentPlan(planId: string): boolean {
   const filtered = plans.filter(p => p.id !== planId);
   if (filtered.length === plans.length) return false;
   savePaymentPlans(filtered);
+  syncDeleteDoc(TABLES.paymentPlans, planId);
   return true;
 }
 
