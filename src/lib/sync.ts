@@ -29,15 +29,26 @@ async function pullTable(tableName: TableName, storageKey: string): Promise<bool
     const { data, error } = await sb.from(tableName).select("data");
     if (error) throw error;
 
+    const localRaw = localStorage.getItem(storageKey);
+    const localItems: { id: string }[] = localRaw ? JSON.parse(localRaw) : [];
+
     if (data && data.length > 0) {
-      const items = data.map(row => row.data);
-      localStorage.setItem(storageKey, JSON.stringify(items));
+      const supabaseItems = data.map(row => row.data);
+      // Merge: Supabase as base, local wins on conflict (local is freshest on this device)
+      const mergedMap = new Map(supabaseItems.map((item: any) => [item.id, item]));
+      for (const item of localItems) {
+        if (item.id) mergedMap.set(item.id, item); // local wins
+      }
+      const merged = Array.from(mergedMap.values());
+      localStorage.setItem(storageKey, JSON.stringify(merged));
+      // Push back merged result so local-only items reach Supabase
+      if (merged.length > supabaseItems.length) {
+        await pushArrayToSupabase(tableName, merged as { id: string }[]);
+      }
       return true;
     }
 
     // Supabase vide → pousser les données locales si elles existent
-    const localRaw = localStorage.getItem(storageKey);
-    const localItems: { id: string }[] = localRaw ? JSON.parse(localRaw) : [];
     if (Array.isArray(localItems) && localItems.length > 0) {
       await pushArrayToSupabase(tableName, localItems);
     }
@@ -77,16 +88,27 @@ async function pullStockTables(): Promise<void> {
           const storageKey = stockStorageKey(dept, suffix);
           // Items without _dept default to 'gaba' (backward compat)
           const deptItems = allItems.filter(item => (item?._dept || 'gaba') === dept);
+
+          // Merge: Supabase items + local items (local wins on conflict — it's the latest write)
+          const localRaw = localStorage.getItem(storageKey);
+          const localItems: { id: string }[] = localRaw ? JSON.parse(localRaw) : [];
+          const localMap = new Map(localItems.map(item => [item.id, item]));
+
           if (deptItems.length > 0) {
-            localStorage.setItem(storageKey, JSON.stringify(deptItems));
-          } else {
-            // Supabase has no items for this dept → preserve local if exists, and push local
-            const localRaw = localStorage.getItem(storageKey);
-            const localItems: { id: string }[] = localRaw ? JSON.parse(localRaw) : [];
-            if (localItems.length > 0) {
-              const tagged = localItems.map(item => ({ ...item, _dept: dept }));
-              await pushArrayToSupabase(tableName, tagged);
+            // Start with Supabase items, then overlay local items (local is fresher)
+            const mergedMap = new Map(deptItems.map((item: any) => [item.id, item]));
+            for (const [id, item] of localMap) {
+              mergedMap.set(id, item); // local wins
             }
+            const merged = Array.from(mergedMap.values());
+            localStorage.setItem(storageKey, JSON.stringify(merged));
+            // Push merged result back to Supabase so local-only items get synced
+            const tagged = merged.map((item: any) => ({ ...item, _dept: dept }));
+            await pushArrayToSupabase(tableName, tagged);
+          } else if (localItems.length > 0) {
+            // Supabase has no items for this dept → preserve local and push
+            const tagged = localItems.map(item => ({ ...item, _dept: dept }));
+            await pushArrayToSupabase(tableName, tagged);
           }
         }
       } else {
