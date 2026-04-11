@@ -26,7 +26,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { getCurrentUser, hasDepartmentAccess } from "@/lib/auth";
-import { formatCurrency, departments, type DepartmentId } from "@/lib/data";
+import { formatCurrency, departments, type DepartmentId, addTransaction, PAYMENT_METHODS, type PaymentMethod } from "@/lib/data";
 import { downloadStockReport } from "@/lib/reports";
 import type { ReportOptions } from "@/lib/reports";
 import { ReportDialog } from "@/components/ReportDialog";
@@ -111,7 +111,7 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
   const [kitForm, setKitForm] = useState({ name: '', description: '', sellingPrice: '', components: [] as { stockItemId: string; quantity: string }[] });
   const [sellKitDialog, setSellKitDialog] = useState(false);
   const [sellKitId, setSellKitId] = useState<string | null>(null);
-  const [sellKitForm, setSellKitForm] = useState({ quantity: '1', date: new Date().toISOString().slice(0, 10), clientName: '' });
+  const [sellKitForm, setSellKitForm] = useState({ quantity: '1', date: new Date().toISOString().slice(0, 10), clientName: '', phoneNumber: '', paymentMethod: 'especes' as PaymentMethod, description: '' });
   const [deleteKitId, setDeleteKitId] = useState<string | null>(null);
 
   // ==================== FILTERED DATA ====================
@@ -419,7 +419,7 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
 
   const openSellKit = (kitId: string) => {
     setSellKitId(kitId);
-    setSellKitForm({ quantity: '1', date: new Date().toISOString().slice(0, 10), clientName: '' });
+    setSellKitForm({ quantity: '1', date: new Date().toISOString().slice(0, 10), clientName: '', phoneNumber: '', paymentMethod: 'especes', description: '' });
     setSellKitDialog(true);
   };
 
@@ -427,9 +427,24 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
     if (!sellKitId) return;
     const qty = parseInt(sellKitForm.quantity);
     if (isNaN(qty) || qty <= 0) { toast.error('Quantité invalide'); return; }
+    const kit = kits.find(k => k.id === sellKitId);
+    if (!kit) { toast.error('Kit introuvable'); return; }
     const result = sellKit(sellKitId, qty, sellKitForm.date, user?.displayName ?? 'Inconnu', sellKitForm.clientName.trim() || undefined, departmentId);
     if (!result.success) { toast.error(result.error ?? 'Erreur'); return; }
-    toast.success(`Kit vendu — ${result.movements?.length ?? 0} déduction(s) automatiques`);
+    // Auto-create transaction for the kit sale
+    const totalAmount = kit.sellingPrice * qty;
+    addTransaction({
+      departmentId: departmentId as DepartmentId,
+      type: 'income',
+      paymentMethod: sellKitForm.paymentMethod,
+      category: 'Vente kit',
+      personName: sellKitForm.clientName.trim() || 'Client',
+      phoneNumber: sellKitForm.phoneNumber.trim() || undefined,
+      description: sellKitForm.description.trim() || `Vente kit "${kit.name}"${qty > 1 ? ` ×${qty}` : ''}`,
+      amount: totalAmount,
+      date: sellKitForm.date,
+    });
+    toast.success(`Kit vendu (${formatCurrency(totalAmount)}) — transaction enregistrée`);
     setSellKitDialog(false);
     refresh();
   };
@@ -1369,12 +1384,15 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
               {sellKitId && (() => {
                 const kit = kits.find(k => k.id === sellKitId);
                 if (!kit) return null;
+                const qty = parseInt(sellKitForm.quantity) || 1;
                 return (
                   <span className="block mt-1">
                     <strong>{kit.name}</strong> — {kit.components.map(c => {
                       const item = getItemById(c.stockItemId);
                       return `${item?.name ?? '?'} ×${c.quantity}`;
                     }).join(', ')}
+                    <br />
+                    <span className="text-primary font-semibold">Total: {formatCurrency(kit.sellingPrice * qty)}</span>
                   </span>
                 );
               })()}
@@ -1391,9 +1409,28 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
                 <Input type="date" value={sellKitForm.date} onChange={e => setSellKitForm(f => ({ ...f, date: e.target.value }))} />
               </div>
             </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Nom du client</Label>
+                <Input placeholder="Ex: Jean Dupont" value={sellKitForm.clientName} onChange={e => setSellKitForm(f => ({ ...f, clientName: e.target.value }))} />
+              </div>
+              <div className="space-y-2">
+                <Label>Téléphone (optionnel)</Label>
+                <Input placeholder="Ex: 6 99 00 00 00" value={sellKitForm.phoneNumber} onChange={e => setSellKitForm(f => ({ ...f, phoneNumber: e.target.value }))} />
+              </div>
+            </div>
             <div className="space-y-2">
-              <Label>Nom du client (optionnel)</Label>
-              <Input placeholder="Ex: Jean Dupont" value={sellKitForm.clientName} onChange={e => setSellKitForm(f => ({ ...f, clientName: e.target.value }))} />
+              <Label>Moyen de paiement</Label>
+              <Select value={sellKitForm.paymentMethod} onValueChange={v => setSellKitForm(f => ({ ...f, paymentMethod: v as PaymentMethod }))}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {PAYMENT_METHODS.map(m => <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Description (optionnel)</Label>
+              <Input placeholder="Note ou détail de la vente" value={sellKitForm.description} onChange={e => setSellKitForm(f => ({ ...f, description: e.target.value }))} />
             </div>
             {sellKitId && (() => {
               const qty = parseInt(sellKitForm.quantity) || 1;
@@ -1406,6 +1443,14 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
                   <ul className="mt-1 text-xs text-red-600 dark:text-red-300 list-disc list-inside">
                     {check.missing.map((m, i) => <li key={i}>{m.itemName}: besoin {m.required}, dispo {m.available}</li>)}
                   </ul>
+                </div>
+              );
+              const kit = kits.find(k => k.id === sellKitId);
+              if (kit) return (
+                <div className="rounded-md bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 p-3">
+                  <p className="text-xs text-green-700 dark:text-green-400 font-semibold">
+                    ✅ Stock disponible — une transaction de {formatCurrency(kit.sellingPrice * qty)} sera automatiquement enregistrée
+                  </p>
                 </div>
               );
               return null;

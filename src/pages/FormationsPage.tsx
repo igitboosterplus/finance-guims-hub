@@ -678,6 +678,12 @@ export default function FormationsPage() {
                           )}
                         </div>
                         {f.description && <p className="text-xs text-muted-foreground mt-1">{f.description}</p>}
+                        {f.createdBy && (
+                          <p className="text-[10px] text-muted-foreground mt-0.5">
+                            Créé par <span className="font-medium">{f.createdBy}</span>
+                            {f.createdAt && ` le ${new Date(f.createdAt).toLocaleDateString('fr-FR')} à ${new Date(f.createdAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`}
+                          </p>
+                        )}
                       </div>
                     </div>
                     <div className="flex gap-1 shrink-0">

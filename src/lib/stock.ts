@@ -1,6 +1,6 @@
 // ==================== STOCK MANAGEMENT (multi-department) ====================
 
-import { syncFullCollection } from './sync';
+import { syncFullCollection, syncDeleteDoc } from './sync';
 import { TABLES } from './firebase';
 
 export interface StockCategory {
@@ -134,7 +134,7 @@ export function getStockItems(departmentId: string = 'gaba'): StockItem[] {
 function saveStockItems(items: StockItem[], departmentId: string = 'gaba') {
   const key = stockItemsKey(departmentId);
   localStorage.setItem(key, JSON.stringify(items));
-  syncFullCollection(TABLES.stockItems, key);
+  syncFullCollection(TABLES.stockItems, key, departmentId);
 }
 
 export function addStockItem(item: Omit<StockItem, 'id' | 'createdAt' | 'currentQuantity' | 'unitPrice'>, departmentId: string = 'gaba'): StockItem {
@@ -164,9 +164,12 @@ export function deleteStockItem(id: string, departmentId: string = 'gaba'): bool
   const filtered = items.filter(i => i.id !== id);
   if (filtered.length === items.length) return false;
   saveStockItems(filtered, departmentId);
+  syncDeleteDoc(TABLES.stockItems, id);
   // Also clean movements for that item
+  const movementsToDelete = getStockMovements(departmentId).filter(m => m.itemId === id);
   const movements = getStockMovements(departmentId).filter(m => m.itemId !== id);
   saveStockMovements(movements, departmentId);
+  movementsToDelete.forEach(m => syncDeleteDoc(TABLES.stockMovements, m.id));
   return true;
 }
 
@@ -180,7 +183,7 @@ export function getStockMovements(departmentId: string = 'gaba'): StockMovement[
 function saveStockMovements(movements: StockMovement[], departmentId: string = 'gaba') {
   const key = stockMovementsKey(departmentId);
   localStorage.setItem(key, JSON.stringify(movements));
-  syncFullCollection(TABLES.stockMovements, key);
+  syncFullCollection(TABLES.stockMovements, key, departmentId);
 }
 
 export function addStockMovement(
@@ -303,7 +306,7 @@ export function getTrainings(departmentId: string = 'gaba'): Training[] {
 function saveTrainings(trainings: Training[], departmentId: string = 'gaba') {
   const key = trainingsKey(departmentId);
   localStorage.setItem(key, JSON.stringify(trainings));
-  syncFullCollection(TABLES.trainings, key);
+  syncFullCollection(TABLES.trainings, key, departmentId);
 }
 
 export function addTraining(training: Omit<Training, 'id' | 'createdAt'>, departmentId: string = 'gaba'): Training {
@@ -324,6 +327,7 @@ export function deleteTraining(id: string, departmentId: string = 'gaba'): boole
   const filtered = trainings.filter(t => t.id !== id);
   if (filtered.length === trainings.length) return false;
   saveTrainings(filtered, departmentId);
+  syncDeleteDoc(TABLES.trainings, id);
   return true;
 }
 
@@ -437,6 +441,7 @@ export function deleteFormationCatalog(id: string): boolean {
   const filtered = formations.filter(f => f.id !== id);
   if (filtered.length === formations.length) return false;
   saveFormationsCatalog(filtered);
+  syncDeleteDoc(TABLES.formationsCatalog, id);
   return true;
 }
 
@@ -501,6 +506,7 @@ export function deleteEnrollment(id: string): boolean {
   const filtered = enrollments.filter(e => e.id !== id);
   if (filtered.length === enrollments.length) return false;
   saveEnrollments(filtered);
+  syncDeleteDoc(TABLES.enrollments, id);
   return true;
 }
 
@@ -1010,7 +1016,7 @@ export function getStockKits(departmentId: string = 'gaba'): StockKit[] {
 function saveStockKits(kits: StockKit[], departmentId: string = 'gaba') {
   const key = stockKitsKey(departmentId);
   localStorage.setItem(key, JSON.stringify(kits));
-  syncFullCollection(TABLES.stockKits, key);
+  syncFullCollection(TABLES.stockKits, key, departmentId);
 }
 
 export function addStockKit(kit: Omit<StockKit, 'id' | 'createdAt'>, departmentId: string = 'gaba'): StockKit {
@@ -1039,6 +1045,7 @@ export function deleteStockKit(id: string, departmentId: string = 'gaba'): boole
   const filtered = kits.filter(k => k.id !== id);
   if (filtered.length === kits.length) return false;
   saveStockKits(filtered, departmentId);
+  syncDeleteDoc(TABLES.stockKits, id);
   return true;
 }
 

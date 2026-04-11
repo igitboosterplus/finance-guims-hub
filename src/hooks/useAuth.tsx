@@ -29,7 +29,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     (async () => {
       // 1. One-time force push: local → Supabase to fix corrupted cloud data
-      const FORCE_PUSH_FLAG = 'guims-force-push-v1';
+      const FORCE_PUSH_FLAG = 'guims-force-push-v2';
       if (isSupabaseConfigured() && localStorage.getItem(FORCE_PUSH_FLAG) !== '1') {
         try {
           await pushAllToSupabase();

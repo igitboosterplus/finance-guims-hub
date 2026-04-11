@@ -37,6 +37,42 @@ async function pullTable(tableName: TableName, storageKey: string): Promise<bool
   }
 }
 
+/**
+ * Pull items for a specific department from a shared Supabase table.
+ * Filters by _dept field stored in each item's data.
+ */
+async function pullTableForDept(tableName: TableName, storageKey: string, deptId: string): Promise<boolean> {
+  const sb = getSupabase();
+  if (!sb) return false;
+  try {
+    const { data, error } = await sb.from(tableName).select("data");
+    if (error) throw error;
+
+    if (data && data.length > 0) {
+      // Filter items belonging to this department
+      const deptItems = data.map(row => row.data).filter(item => (item?._dept || 'gaba') === deptId);
+      if (deptItems.length > 0) {
+        localStorage.setItem(storageKey, JSON.stringify(deptItems));
+        return true;
+      }
+    }
+
+    // No Supabase data for this dept → push local data if exists
+    const localRaw = localStorage.getItem(storageKey);
+    const localItems: { id: string; _dept?: string }[] = localRaw ? JSON.parse(localRaw) : [];
+    if (Array.isArray(localItems) && localItems.length > 0) {
+      // Tag items with _dept before pushing
+      const tagged = localItems.map(item => ({ ...item, _dept: deptId }));
+      await pushArrayToSupabase(tableName, tagged);
+    }
+
+    return true;
+  } catch (error) {
+    console.error(`[Sync] Erreur pull ${tableName} (dept=${deptId}):`, error);
+    return false;
+  }
+}
+
 export async function pullAllFromSupabase(): Promise<{ success: boolean; error?: string }> {
   if (!isSupabaseConfigured()) return { success: false, error: "Supabase non configuré" };
   const sb = getSupabase();
@@ -48,14 +84,21 @@ export async function pullAllFromSupabase(): Promise<{ success: boolean; error?:
       pullTable(TABLES.users, "finance-users"),
       pullTable(TABLES.auditLog, "finance-audit-log"),
       pullTable(TABLES.superAudit, "finance-super-audit"),
-      pullTable(TABLES.stockItems, "gaba-stock-items"),
-      pullTable(TABLES.stockMovements, "gaba-stock-movements"),
-      pullTable(TABLES.trainings, "gaba-trainings"),
       pullTable(TABLES.formationsCatalog, "formations-catalog"),
       pullTable(TABLES.paymentPlans, "payment-plans"),
-      pullTable(TABLES.stockKits, "gaba-stock-kits"),
       pullTable(TABLES.enrollments, "formation-enrollments"),
     ]);
+
+    // Stock tables are shared across departments — pull per-department keys
+    // Each department stores items under its own localStorage key but same Supabase table
+    const STOCK_DEPTS = ['gaba', 'guims-academy'];
+    for (const dept of STOCK_DEPTS) {
+      const suffix = dept === 'gaba' ? 'gaba' : dept;
+      await pullTableForDept(TABLES.stockItems, `${suffix}-stock-items`, dept);
+      await pullTableForDept(TABLES.stockMovements, `${suffix}-stock-movements`, dept);
+      await pullTableForDept(TABLES.trainings, `${suffix}-trainings`, dept);
+      await pullTableForDept(TABLES.stockKits, `${suffix}-stock-kits`, dept);
+    }
     console.log("[Sync] Pull complet depuis Supabase.");
     return { success: true };
   } catch (error) {
@@ -103,25 +146,43 @@ export async function pushAllToSupabase(): Promise<{ success: boolean; error?: s
   if (!sb) return { success: false, error: "Supabase non initialisé" };
 
   try {
-    const pairs: [TableName, string][] = [
+    // Non-departmental tables: safe to replaceCollection
+    const sharedPairs: [TableName, string][] = [
       [TABLES.transactions, "finance-transactions"],
       [TABLES.users, "finance-users"],
       [TABLES.auditLog, "finance-audit-log"],
       [TABLES.superAudit, "finance-super-audit"],
-      [TABLES.stockItems, "gaba-stock-items"],
-      [TABLES.stockMovements, "gaba-stock-movements"],
-      [TABLES.trainings, "gaba-trainings"],
       [TABLES.formationsCatalog, "formations-catalog"],
       [TABLES.paymentPlans, "payment-plans"],
-      [TABLES.stockKits, "gaba-stock-kits"],
       [TABLES.enrollments, "formation-enrollments"],
     ];
 
-    for (const [tableName, storageKey] of pairs) {
+    for (const [tableName, storageKey] of sharedPairs) {
       const data = localStorage.getItem(storageKey);
       const items = data ? JSON.parse(data) : [];
       if (Array.isArray(items)) {
         await replaceCollection(tableName, items);
+      }
+    }
+
+    // Departmental stock tables: push (upsert) per department, never delete cross-dept
+    const STOCK_DEPTS = ['gaba', 'guims-academy'];
+    const stockTableKeys: [TableName, (d: string) => string][] = [
+      [TABLES.stockItems, d => `${d === 'gaba' ? 'gaba' : d}-stock-items`],
+      [TABLES.stockMovements, d => `${d === 'gaba' ? 'gaba' : d}-stock-movements`],
+      [TABLES.trainings, d => `${d === 'gaba' ? 'gaba' : d}-trainings`],
+      [TABLES.stockKits, d => `${d === 'gaba' ? 'gaba' : d}-stock-kits`],
+    ];
+    for (const [tableName, keyFn] of stockTableKeys) {
+      for (const dept of STOCK_DEPTS) {
+        const storageKey = keyFn(dept);
+        const data = localStorage.getItem(storageKey);
+        const items: { id: string }[] = data ? JSON.parse(data) : [];
+        if (Array.isArray(items) && items.length > 0) {
+          // Tag with _dept for pull filtering
+          const tagged = items.map(item => ({ ...item, _dept: dept }));
+          await pushArrayToSupabase(tableName, tagged);
+        }
       }
     }
     console.log("[Sync] Push complet vers Supabase.");
@@ -170,14 +231,19 @@ export function syncDeleteDoc(tableName: TableName, itemId: string) {
     });
 }
 
-export function syncFullCollection(tableName: TableName, storageKey: string) {
+/**
+ * Sync a localStorage collection to Supabase (upsert only — safe for shared tables).
+ * Use syncDeleteDoc() for individual deletions.
+ */
+export function syncFullCollection(tableName: TableName, storageKey: string, deptId?: string) {
   const sb = getSupabase();
   if (!sb) return;
   const data = localStorage.getItem(storageKey);
   const items = data ? JSON.parse(data) : [];
-  if (!Array.isArray(items)) return;
-  // Remplacer entièrement : supprimer tout dans la table puis réinsérer
-  replaceCollection(tableName, items).catch(err =>
+  if (!Array.isArray(items) || items.length === 0) return;
+  // Upsert only — do NOT delete other rows (table may be shared across departments)
+  const tagged = deptId ? items.map((item: any) => ({ ...item, _dept: deptId })) : items;
+  pushArrayToSupabase(tableName, tagged).catch(err =>
     console.error(`[Sync] Erreur sync collection ${tableName}:`, err)
   );
 }

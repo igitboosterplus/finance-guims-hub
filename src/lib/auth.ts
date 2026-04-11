@@ -127,8 +127,13 @@ export function purgeAllData(): void {
     'gaba-stock-movements',
     'gaba-trainings',
     'gaba-stock-kits',
+    'guims-academy-stock-items',
+    'guims-academy-stock-movements',
+    'guims-academy-trainings',
+    'guims-academy-stock-kits',
     'formations-catalog',
     'payment-plans',
+    'formation-enrollments',
     'finance-seed-done',
   ];
   for (const key of ALL_KEYS) {
