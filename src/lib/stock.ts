@@ -23,8 +23,28 @@ export const ACADEMY_STOCK_CATEGORIES: StockCategory[] = [
   { id: 'autres', name: 'Autres', description: 'Autres articles du stock' },
 ];
 
+export const GUIMS_EDUC_STOCK_CATEGORIES: StockCategory[] = [
+  { id: 'manuels-scolaires', name: 'Manuels scolaires', description: 'Livres, cahiers d\'exercices, supports de cours' },
+  { id: 'materiel-pedagogique', name: 'Matériel pédagogique', description: 'Tableaux, marqueurs, matériel didactique' },
+  { id: 'equipements', name: 'Équipements', description: 'Ordinateurs, tablettes, vidéoprojecteurs' },
+  { id: 'fournitures', name: 'Fournitures', description: 'Stylos, cahiers, copies, etc.' },
+  { id: 'autres', name: 'Autres', description: 'Autres articles' },
+];
+
+export const DIGITBOOSTER_STOCK_CATEGORIES: StockCategory[] = [
+  { id: 'equipements-info', name: 'Équipements informatiques', description: 'Ordinateurs, serveurs, disques durs' },
+  { id: 'licences', name: 'Licences & Abonnements', description: 'Licences logicielles, hébergement, domaines' },
+  { id: 'materiel-marketing', name: 'Matériel marketing', description: 'Flyers, cartes de visite, goodies' },
+  { id: 'autres', name: 'Autres', description: 'Autres articles' },
+];
+
 export function getStockCategoriesForDept(departmentId: string): StockCategory[] {
-  return departmentId === 'guims-academy' ? ACADEMY_STOCK_CATEGORIES : STOCK_CATEGORIES;
+  switch (departmentId) {
+    case 'guims-academy': return ACADEMY_STOCK_CATEGORIES;
+    case 'guims-educ': return GUIMS_EDUC_STOCK_CATEGORIES;
+    case 'digitboosterplus': return DIGITBOOSTER_STOCK_CATEGORIES;
+    default: return STOCK_CATEGORIES;
+  }
 }
 
 export interface StockItem {

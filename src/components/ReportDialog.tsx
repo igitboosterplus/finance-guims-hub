@@ -31,6 +31,7 @@ export function ReportDialog({ open, onOpenChange, title, onGenerate }: ReportDi
   const [preset, setPreset] = useState<PeriodPreset>("all");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
+  const [personName, setPersonName] = useState("");
 
   const handleGenerate = () => {
     let opts: ReportOptions = {};
@@ -44,6 +45,7 @@ export function ReportDialog({ open, onOpenChange, title, onGenerate }: ReportDi
       if (startDate) opts.startDate = startDate;
       if (endDate) opts.endDate = endDate;
     }
+    if (personName.trim()) opts.personName = personName.trim();
     onGenerate(opts);
     onOpenChange(false);
   };
@@ -53,7 +55,7 @@ export function ReportDialog({ open, onOpenChange, title, onGenerate }: ReportDi
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>Choisissez la période du rapport à générer.</DialogDescription>
+          <DialogDescription>Choisissez la période et/ou la personne du rapport à générer.</DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-2">
           <div className="space-y-2">
@@ -80,6 +82,16 @@ export function ReportDialog({ open, onOpenChange, title, onGenerate }: ReportDi
               </div>
             </div>
           )}
+          <div className="space-y-2">
+            <Label>Filtrer par personne (optionnel)</Label>
+            <Input
+              placeholder="Nom de la personne..."
+              value={personName}
+              onChange={e => setPersonName(e.target.value)}
+              maxLength={100}
+            />
+            <p className="text-xs text-muted-foreground">Laissez vide pour inclure toutes les personnes</p>
+          </div>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Annuler</Button>

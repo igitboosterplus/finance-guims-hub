@@ -13,6 +13,7 @@ import { getAuditLog, buildHumanDiff } from "./auth";
 export interface ReportOptions {
   startDate?: string;
   endDate?: string;
+  personName?: string;
 }
 
 function filterByPeriod<T extends { date: string }>(items: T[], opts?: ReportOptions): T[] {
@@ -22,11 +23,23 @@ function filterByPeriod<T extends { date: string }>(items: T[], opts?: ReportOpt
   return result;
 }
 
+function filterTransactions(txs: Transaction[], opts?: ReportOptions): Transaction[] {
+  let result = filterByPeriod(txs, opts);
+  if (opts?.personName) {
+    const name = opts.personName.toLowerCase();
+    result = result.filter(t => (t.personName || '').toLowerCase().includes(name));
+  }
+  return result;
+}
+
 function periodLabel(opts?: ReportOptions): string {
-  if (opts?.startDate && opts?.endDate) return `Du ${new Date(opts.startDate).toLocaleDateString("fr-FR")} au ${new Date(opts.endDate).toLocaleDateString("fr-FR")}`;
-  if (opts?.startDate) return `À partir du ${new Date(opts.startDate).toLocaleDateString("fr-FR")}`;
-  if (opts?.endDate) return `Jusqu'au ${new Date(opts.endDate).toLocaleDateString("fr-FR")}`;
-  return "Toutes les dates";
+  let label = '';
+  if (opts?.startDate && opts?.endDate) label = `Du ${new Date(opts.startDate).toLocaleDateString("fr-FR")} au ${new Date(opts.endDate).toLocaleDateString("fr-FR")}`;
+  else if (opts?.startDate) label = `À partir du ${new Date(opts.startDate).toLocaleDateString("fr-FR")}`;
+  else if (opts?.endDate) label = `Jusqu'au ${new Date(opts.endDate).toLocaleDateString("fr-FR")}`;
+  else label = "Toutes les dates";
+  if (opts?.personName) label += ` · Personne : ${opts.personName}`;
+  return label;
 }
 
 function setupDoc(title: string, opts?: ReportOptions): jsPDF {
@@ -78,7 +91,7 @@ function computeStats(txs: Transaction[]) {
 
 export function downloadDashboardReport(opts?: ReportOptions) {
   const doc = setupDoc("Rapport global — Tableau de bord", opts);
-  const allTxs = filterByPeriod(getTransactions(), opts);
+  const allTxs = filterTransactions(getTransactions(), opts);
   const stats = computeStats(allTxs);
   const txs = allTxs.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   let y = 44;
@@ -170,7 +183,7 @@ export function downloadDashboardReport(opts?: ReportOptions) {
 export function downloadDepartmentReport(deptId: DepartmentId, opts?: ReportOptions) {
   const dept = getDepartment(deptId);
   const doc = setupDoc(`Rapport — ${dept.name}`, opts);
-  const allTxs = filterByPeriod(getTransactionsByDepartment(deptId), opts);
+  const allTxs = filterTransactions(getTransactionsByDepartment(deptId), opts);
   const stats = computeStats(allTxs);
   const txs = allTxs.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   let y = 44;
@@ -364,7 +377,7 @@ export function downloadStockReport(opts?: ReportOptions, departmentId: string =
 
 export function downloadTransactionsReport(opts?: ReportOptions) {
   const doc = setupDoc("Rapport de toutes les transactions", opts);
-  const txs = filterByPeriod(getTransactions(), opts).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  const txs = filterTransactions(getTransactions(), opts).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   let y = 44;
 
   y = addSectionTitle(doc, `Total : ${txs.length} transactions`, y);

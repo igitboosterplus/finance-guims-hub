@@ -174,6 +174,21 @@ export default function NewTransaction() {
       return;
     }
 
+    // Validate date is not more than 3 days in the past
+    const selectedDate = new Date(date);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const threeDaysAgo = new Date(today);
+    threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
+    if (selectedDate < threeDaysAgo) {
+      toast.error("La date ne peut pas dépasser 3 jours dans le passé");
+      return;
+    }
+    if (selectedDate > today) {
+      toast.error("La date ne peut pas être dans le futur");
+      return;
+    }
+
     if (!personName.trim()) {
       toast.error("Veuillez saisir le nom de la personne");
       return;
@@ -490,7 +505,8 @@ export default function NewTransaction() {
 
               <div className="space-y-2">
                 <Label>Date *</Label>
-                <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+                <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} min={(() => { const d = new Date(); d.setDate(d.getDate() - 3); return d.toISOString().split('T')[0]; })()} max={new Date().toISOString().split('T')[0]} />
+                <p className="text-xs text-muted-foreground">Maximum 3 jours dans le passé</p>
               </div>
             </div>
 

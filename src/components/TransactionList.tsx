@@ -8,11 +8,13 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { Trash2, ArrowUpRight, ArrowDownRight, Search, Pencil, ChevronLeft, ChevronRight, Download } from "lucide-react";
+import { Trash2, ArrowUpRight, ArrowDownRight, Search, Pencil, ChevronLeft, ChevronRight, Download, FileDown } from "lucide-react";
 import { formatCurrency, type Transaction, type PaymentMethod, getDepartment, deleteTransaction, updateTransaction, departments, exportTransactionsCSV, PAYMENT_METHODS, getPaymentMethodLabel } from "@/lib/data";
 import { addAuditEntry, getCurrentUser, isSuperAdmin, hasPermission, buildHumanDiff } from "@/lib/auth";
 import { syncInstallmentFromTransaction, removeInstallmentFromTransaction, syncEditedTransaction } from "@/lib/stock";
 import { toast } from "sonner";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 
 interface TransactionListProps {
   transactions: Transaction[];
@@ -166,6 +168,76 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
     toast.success("Export CSV téléchargé");
   };
 
+  const handleExportPDF = () => {
+    const doc = new jsPDF({ orientation: "landscape" });
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(20);
+    doc.setTextColor(34, 87, 122);
+    doc.text("Guims Group — Transactions", 14, 18);
+    doc.setDrawColor(34, 87, 122);
+    doc.setLineWidth(0.5);
+    doc.line(14, 22, 283, 22);
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(80);
+    doc.text(`Généré le ${new Date().toLocaleDateString("fr-FR")} à ${new Date().toLocaleTimeString("fr-FR")} · ${filtered.length} transaction(s)`, 14, 28);
+    doc.setTextColor(0);
+
+    const fmtAmt = (n: number) => {
+      const abs = Math.abs(Math.round(n));
+      return abs.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".") + " FCFA";
+    };
+
+    const income = filtered.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
+    const expenses = filtered.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
+
+    autoTable(doc, {
+      startY: 34,
+      head: [["Total revenus", "Total dépenses", "Solde"]],
+      body: [[fmtAmt(income), fmtAmt(expenses), fmtAmt(income - expenses)]],
+      theme: "grid",
+      headStyles: { fillColor: [34, 87, 122], fontSize: 9 },
+      bodyStyles: { fontSize: 10, fontStyle: "bold" },
+      margin: { left: 14 },
+    });
+
+    let y = (doc as any).lastAutoTable.finalY + 8;
+
+    if (filtered.length > 0) {
+      autoTable(doc, {
+        startY: y,
+        head: [["N°", "Date", "Département", "Nom", "Type", "Catégorie", "Description", "Caisse", "Montant"]],
+        body: filtered.map((tx, i) => {
+          const dept = getDepartment(tx.departmentId);
+          return [
+            String(i + 1),
+            new Date(tx.date).toLocaleDateString("fr-FR"),
+            dept.name,
+            tx.personName || "—",
+            tx.type === "income" ? "Revenu" : "Dépense",
+            tx.category,
+            tx.description || "—",
+            getPaymentMethodLabel(tx.paymentMethod || "especes"),
+            tx.type === "income" ? "+" + fmtAmt(tx.amount) : "-" + fmtAmt(tx.amount),
+          ];
+        }),
+        theme: "striped",
+        headStyles: { fillColor: [34, 87, 122], fontSize: 8 },
+        margin: { left: 14 },
+        styles: { fontSize: 8 },
+        columnStyles: {
+          0: { cellWidth: 12 },
+          6: { cellWidth: 55 },
+          8: { halign: "right", fontStyle: "bold" },
+        },
+        alternateRowStyles: { fillColor: [245, 247, 250] },
+      });
+    }
+
+    doc.save(`transactions_${new Date().toISOString().split("T")[0]}.pdf`);
+    toast.success("Export PDF téléchargé");
+  };
+
   const editDept = editTx ? getDepartment(editTx.departmentId) : null;
   const editCategories = editDept
     ? editType === "income" ? editDept.incomeCategories : editDept.expenseCategories
@@ -206,10 +278,16 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
           </SelectContent>
         </Select>
         {hasPermission(getCurrentUser(), 'canExportData') && (
+          <>
+          <Button variant="outline" size="sm" onClick={handleExportPDF} className="gap-2">
+            <FileDown className="h-4 w-4" />
+            PDF
+          </Button>
           <Button variant="outline" size="sm" onClick={handleExportCSV} className="gap-2">
             <Download className="h-4 w-4" />
             CSV
           </Button>
+          </>
         )}
       </div>
 

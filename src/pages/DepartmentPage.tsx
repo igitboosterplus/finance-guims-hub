@@ -62,7 +62,7 @@ export default function DepartmentPage() {
               <span className="hidden sm:inline">Nouvelle transaction</span><span className="sm:hidden">Nouveau</span>
             </Button>
           )}
-          {(dept.id === 'gaba' || dept.id === 'guims-academy') && (
+          {(dept.id === 'gaba' || dept.id === 'guims-academy' || dept.id === 'guims-educ' || dept.id === 'digitboosterplus') && (
             <Button variant="outline" size="sm" onClick={() => navigate(`/${dept.id}/stock`)} className="shadow-md">
               <Package className="h-4 w-4 mr-1 sm:mr-2" />
               <span className="hidden sm:inline">Gestion des stocks</span><span className="sm:hidden">Stocks</span>
