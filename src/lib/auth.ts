@@ -9,6 +9,9 @@ export interface UserPermissions {
   canEditTransaction: boolean;
   canExportData: boolean;
   canImportData: boolean;
+  canManageUsers: boolean;
+  canViewAudit: boolean;
+  canViewSuperAudit: boolean;
 }
 
 export const DEFAULT_PERMISSIONS: UserPermissions = {
@@ -17,6 +20,9 @@ export const DEFAULT_PERMISSIONS: UserPermissions = {
   canEditTransaction: false,
   canExportData: false,
   canImportData: false,
+  canManageUsers: false,
+  canViewAudit: false,
+  canViewSuperAudit: false,
 };
 
 export const FULL_PERMISSIONS: UserPermissions = {
@@ -25,6 +31,9 @@ export const FULL_PERMISSIONS: UserPermissions = {
   canEditTransaction: true,
   canExportData: true,
   canImportData: true,
+  canManageUsers: true,
+  canViewAudit: true,
+  canViewSuperAudit: true,
 };
 
 export interface User {
