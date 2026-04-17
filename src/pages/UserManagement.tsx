@@ -14,7 +14,7 @@ import { getAllUsers, approveUser, rejectUser, deleteUser, createUser, resetUser
 import { departments } from "@/lib/data";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
-import { UserPlus, Check, X, Trash2, KeyRound, Shield, ShieldCheck, Settings2, Building2, Plus, PenLine, Download, Upload } from "lucide-react";
+import { UserPlus, Check, X, Trash2, KeyRound, Shield, ShieldCheck, Settings2, Building2, Plus, PenLine, Download, Upload, Package } from "lucide-react";
 
 export default function UserManagement() {
   const { user: currentUser } = useAuth();
@@ -103,6 +103,15 @@ export default function UserManagement() {
       departments: prev.departments.includes(deptId)
         ? prev.departments.filter(d => d !== deptId)
         : [...prev.departments, deptId],
+    }));
+  };
+
+  const toggleStockDept = (deptId: string) => {
+    setPermsEdit(prev => ({
+      ...prev,
+      stockDepartments: (prev.stockDepartments ?? []).includes(deptId)
+        ? (prev.stockDepartments ?? []).filter(d => d !== deptId)
+        : [...(prev.stockDepartments ?? []), deptId],
     }));
   };
 
@@ -359,6 +368,34 @@ export default function UserManagement() {
                   Tout sélectionner
                 </Button>
                 <Button type="button" variant="outline" size="sm" className="text-xs" onClick={() => setPermsEdit(p => ({ ...p, departments: [] }))}>
+                  Tout désélectionner
+                </Button>
+              </div>
+            </div>
+
+            {/* Stock Departments */}
+            <div className="space-y-3">
+              <Label className="flex items-center gap-2 text-sm font-semibold">
+                <Package className="h-4 w-4" /> Accès aux stocks
+              </Label>
+              <p className="text-[11px] text-muted-foreground">Indépendant de l'accès au département. Une personne peut voir un département sans accéder à son stock.</p>
+              <div className="grid grid-cols-1 gap-2">
+                {departments.map(dept => (
+                  <label key={dept.id} className="flex items-center gap-3 p-2.5 rounded-lg border cursor-pointer hover:bg-accent/50 transition-colors">
+                    <Checkbox
+                      checked={(permsEdit.stockDepartments ?? []).includes(dept.id)}
+                      onCheckedChange={() => toggleStockDept(dept.id)}
+                    />
+                    <Package className="h-4 w-4 text-muted-foreground" />
+                    <span className="text-sm font-medium">Stock {dept.name}</span>
+                  </label>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <Button type="button" variant="outline" size="sm" className="text-xs" onClick={() => setPermsEdit(p => ({ ...p, stockDepartments: departments.map(d => d.id) }))}>
+                  Tout sélectionner
+                </Button>
+                <Button type="button" variant="outline" size="sm" className="text-xs" onClick={() => setPermsEdit(p => ({ ...p, stockDepartments: [] }))}>
                   Tout désélectionner
                 </Button>
               </div>

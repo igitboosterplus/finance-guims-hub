@@ -3,7 +3,7 @@ import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
 import { departments } from "@/lib/data";
 import { useAuth } from "@/hooks/useAuth";
-import { getUnseenAuditCount, getAllUsers, hasDepartmentAccess, hasPermission } from "@/lib/auth";
+import { getUnseenAuditCount, getAllUsers, hasDepartmentAccess, hasPermission, hasStockAccess } from "@/lib/auth";
 import logoGuimsGroup from "@/assets/logo-guims-group.jpg";
 import {
   Sidebar,
@@ -89,7 +89,7 @@ export function AppSidebar() {
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               ))}
-              {accessibleDepts.some(d => d.id === 'gaba') && (
+              {accessibleDepts.some(d => d.id === 'gaba') && hasStockAccess(user, 'gaba') && (
                 <SidebarMenuItem>
                   <SidebarMenuButton asChild>
                     <NavLink

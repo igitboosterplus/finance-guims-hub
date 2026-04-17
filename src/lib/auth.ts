@@ -5,6 +5,7 @@ import { TABLES } from './firebase';
 
 export interface UserPermissions {
   departments: string[];       // IDs des départements accessibles (vide = aucun)
+  stockDepartments: string[];  // IDs des départements dont le stock est accessible
   canCreateTransaction: boolean;
   canEditTransaction: boolean;
   canExportData: boolean;
@@ -16,6 +17,7 @@ export interface UserPermissions {
 
 export const DEFAULT_PERMISSIONS: UserPermissions = {
   departments: [],
+  stockDepartments: [],
   canCreateTransaction: false,
   canEditTransaction: false,
   canExportData: false,
@@ -27,6 +29,7 @@ export const DEFAULT_PERMISSIONS: UserPermissions = {
 
 export const FULL_PERMISSIONS: UserPermissions = {
   departments: ['gaba', 'guims-educ', 'guims-academy', 'digitboosterplus'],
+  stockDepartments: ['gaba', 'guims-educ', 'guims-academy', 'digitboosterplus'],
   canCreateTransaction: true,
   canEditTransaction: true,
   canExportData: true,
@@ -285,6 +288,13 @@ export function hasDepartmentAccess(user: User | null, departmentId: string): bo
   if (user.role === 'superadmin') return true;
   const perms = user.permissions ?? DEFAULT_PERMISSIONS;
   return perms.departments.includes(departmentId);
+}
+
+export function hasStockAccess(user: User | null, departmentId: string): boolean {
+  if (!user) return false;
+  if (user.role === 'superadmin') return true;
+  const perms = user.permissions ?? DEFAULT_PERMISSIONS;
+  return (perms.stockDepartments ?? []).includes(departmentId);
 }
 
 export function updateUserPermissions(userId: string, permissions: UserPermissions): { success: boolean; error?: string } {

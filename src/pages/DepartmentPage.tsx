@@ -7,7 +7,7 @@ import { TransactionList } from "@/components/TransactionList";
 import { FinanceChart } from "@/components/FinanceChart";
 import { ReportDialog } from "@/components/ReportDialog";
 import { getDepartment, getDepartmentStats, getTransactionsByDepartment, type DepartmentId } from "@/lib/data";
-import { getCurrentUser, hasDepartmentAccess, hasPermission } from "@/lib/auth";
+import { getCurrentUser, hasDepartmentAccess, hasPermission, hasStockAccess } from "@/lib/auth";
 import { downloadDepartmentReport } from "@/lib/reports";
 import type { ReportOptions } from "@/lib/reports";
 import { toast } from "sonner";
@@ -62,7 +62,7 @@ export default function DepartmentPage() {
               <span className="hidden sm:inline">Nouvelle transaction</span><span className="sm:hidden">Nouveau</span>
             </Button>
           )}
-          {(dept.id === 'gaba' || dept.id === 'guims-academy' || dept.id === 'guims-educ' || dept.id === 'digitboosterplus') && (
+          {(dept.id === 'gaba' || dept.id === 'guims-academy' || dept.id === 'guims-educ' || dept.id === 'digitboosterplus') && hasStockAccess(getCurrentUser(), dept.id) && (
             <Button variant="outline" size="sm" onClick={() => navigate(`/${dept.id}/stock`)} className="shadow-md">
               <Package className="h-4 w-4 mr-1 sm:mr-2" />
               <span className="hidden sm:inline">Gestion des stocks</span><span className="sm:hidden">Stocks</span>

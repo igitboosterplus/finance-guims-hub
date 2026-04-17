@@ -18,7 +18,7 @@ import FormationsPage from "@/pages/FormationsPage";
 import PaymentTrackingPage from "@/pages/PaymentTrackingPage";
 import NotFound from "./pages/NotFound.tsx";
 import { initSupabase, isSupabaseConfigured } from "@/lib/firebase";
-import { hasDepartmentAccess, hasPermission } from "@/lib/auth";
+import { hasDepartmentAccess, hasPermission, hasStockAccess } from "@/lib/auth";
 
 // Initialize Supabase on app load — sync is done in AuthProvider
 if (isSupabaseConfigured()) {
@@ -41,6 +41,12 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
 function DeptGuard({ departmentId, children }: { departmentId: string; children: React.ReactNode }) {
   const { user } = useAuth();
   if (!hasDepartmentAccess(user, departmentId)) return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
+
+function StockGuard({ departmentId, children }: { departmentId: string; children: React.ReactNode }) {
+  const { user } = useAuth();
+  if (!hasStockAccess(user, departmentId)) return <Navigate to="/" replace />;
   return <>{children}</>;
 }
 
@@ -70,10 +76,10 @@ const App = () => (
                     <Route path="/audit" element={<PermGuard perm="canViewAudit"><AuditLogPage /></PermGuard>} />
                     <Route path="/super-audit" element={<PermGuard perm="canViewSuperAudit"><SuperAuditPage /></PermGuard>} />
                     <Route path="/profile" element={<ProfilePage />} />
-                    <Route path="/gaba/stock" element={<DeptGuard departmentId="gaba"><GabaStockPage key="gaba" /></DeptGuard>} />
-                    <Route path="/guims-academy/stock" element={<DeptGuard departmentId="guims-academy"><GabaStockPage key="guims-academy" departmentId="guims-academy" /></DeptGuard>} />
-                    <Route path="/guims-educ/stock" element={<DeptGuard departmentId="guims-educ"><GabaStockPage key="guims-educ" departmentId="guims-educ" /></DeptGuard>} />
-                    <Route path="/digitboosterplus/stock" element={<DeptGuard departmentId="digitboosterplus"><GabaStockPage key="digitboosterplus" departmentId="digitboosterplus" /></DeptGuard>} />
+                    <Route path="/gaba/stock" element={<StockGuard departmentId="gaba"><GabaStockPage key="gaba" /></StockGuard>} />
+                    <Route path="/guims-academy/stock" element={<StockGuard departmentId="guims-academy"><GabaStockPage key="guims-academy" departmentId="guims-academy" /></StockGuard>} />
+                    <Route path="/guims-educ/stock" element={<StockGuard departmentId="guims-educ"><GabaStockPage key="guims-educ" departmentId="guims-educ" /></StockGuard>} />
+                    <Route path="/digitboosterplus/stock" element={<StockGuard departmentId="digitboosterplus"><GabaStockPage key="digitboosterplus" departmentId="digitboosterplus" /></StockGuard>} />
                     <Route path="/formations" element={<FormationsPage />} />
                     <Route path="/paiements" element={<PaymentTrackingPage />} />
                     <Route path="*" element={<NotFound />} />
