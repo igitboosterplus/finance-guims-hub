@@ -9,12 +9,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Separator } from "@/components/ui/separator";
-import { departments, type DepartmentId, formatCurrency } from "@/lib/data";
-import { getCurrentUser, hasPermission, hasDepartmentAccess } from "@/lib/auth";
+import { departments, type DepartmentId, formatCurrency, addTransaction, PAYMENT_METHODS, type PaymentMethod } from "@/lib/data";
+import { getCurrentUser, hasPermission, hasDepartmentAccess, addAuditEntry } from "@/lib/auth";
 import {
   getFormationsCatalog, addFormationCatalog, updateFormationCatalog, deleteFormationCatalog,
   getStockItems, getStockKits,
   getEnrollmentsByFormation, addEnrollment, updateEnrollment, deleteEnrollment,
+  addPaymentPlan,
   type FormationCatalog, type FormationPack, type FormationTranche, type PackAdvantage, type PackKitItem, type PackKitReference, type StockItem, type StockKit,
   type FormationEnrollment,
 } from "@/lib/stock";
@@ -358,6 +359,9 @@ export default function FormationsPage() {
   const [enrNotes, setEnrNotes] = useState("");
   const [enrPackId, setEnrPackId] = useState<string>("");
   const [enrStatus, setEnrStatus] = useState<FormationEnrollment['status']>('inscrit');
+  const [enrPaymentMethod, setEnrPaymentMethod] = useState<PaymentMethod>('especes');
+  const [enrInscriptionAmount, setEnrInscriptionAmount] = useState<string>("");
+  const [enrCreatePlan, setEnrCreatePlan] = useState(true);
 
   // Form state
   const [formName, setFormName] = useState("");
@@ -521,6 +525,7 @@ export default function FormationsPage() {
 
   // ===== Enrollment handlers =====
   const openAddEnrollment = (formationId: string) => {
+    const fm = formations.find(f => f.id === formationId);
     setEnrollmentFormationId(formationId);
     setEnrollmentEditId(null);
     setEnrFullName("");
@@ -529,6 +534,9 @@ export default function FormationsPage() {
     setEnrNotes("");
     setEnrPackId("");
     setEnrStatus('inscrit');
+    setEnrPaymentMethod('especes');
+    setEnrInscriptionAmount(fm?.inscriptionFee ? String(fm.inscriptionFee) : "");
+    setEnrCreatePlan(true);
     setEnrollmentDialogOpen(true);
   };
 
@@ -547,6 +555,9 @@ export default function FormationsPage() {
   const handleSaveEnrollment = () => {
     if (!enrFullName.trim()) { toast.error("Le nom est obligatoire"); return; }
     if (!enrollmentFormationId) return;
+    const fm = formations.find(f => f.id === enrollmentFormationId);
+    if (!fm) return;
+
     if (enrollmentEditId) {
       updateEnrollment(enrollmentEditId, {
         fullName: enrFullName.trim(),
@@ -558,7 +569,8 @@ export default function FormationsPage() {
       });
       toast.success("Inscription mise à jour");
     } else {
-      addEnrollment({
+      // 1. Create enrollment record
+      const enrollment = addEnrollment({
         formationId: enrollmentFormationId,
         fullName: enrFullName.trim(),
         phone: enrPhone.trim() || undefined,
@@ -568,7 +580,69 @@ export default function FormationsPage() {
         status: enrStatus,
         enrolledBy: currentUser?.displayName ?? "Inconnu",
       });
-      toast.success("Inscription enregistrée");
+
+      // 2. Auto-create payment plan if enabled
+      if (enrCreatePlan) {
+        const selectedPack = enrPackId && enrPackId !== 'none' ? fm.packs.find(p => p.id === enrPackId) : null;
+        const packPrice = selectedPack?.price ?? 0;
+        const inscrFee = fm.inscriptionFee ?? 0;
+        const inscriptionAmount = parseInt(enrInscriptionAmount) || 0;
+
+        // Determine the formation total (pack price or 0 if no pack chosen)
+        const formationTotal = packPrice;
+
+        // Build label
+        const packLabel = selectedPack ? ` — ${selectedPack.name}` : '';
+        const planLabel = `${fm.name}${packLabel}`;
+
+        // Create the payment plan linked to the formation
+        const plan = addPaymentPlan({
+          departmentId: fm.departmentId,
+          clientName: enrFullName.trim(),
+          planType: 'formation',
+          label: planLabel,
+          description: enrNotes.trim() || undefined,
+          totalAmount: formationTotal,
+          createdBy: currentUser?.displayName ?? "Inconnu",
+          formationId: fm.id,
+          packId: selectedPack?.id,
+          inscriptionFee: inscrFee,
+          inscriptionPaid: inscriptionAmount >= inscrFee && inscrFee > 0,
+          inscriptionPaidAmount: inscriptionAmount > 0 ? inscriptionAmount : undefined,
+        });
+
+        // 3. Auto-create inscription transaction if amount > 0
+        if (inscriptionAmount > 0) {
+          const tx = addTransaction({
+            departmentId: fm.departmentId,
+            type: 'income',
+            paymentMethod: enrPaymentMethod,
+            category: 'Inscriptions formation',
+            personName: enrFullName.trim(),
+            phoneNumber: enrPhone.trim() || undefined,
+            description: `Inscription ${planLabel}`,
+            amount: inscriptionAmount,
+            date: new Date().toISOString().slice(0, 10),
+          });
+
+          if (currentUser) {
+            addAuditEntry({
+              userId: currentUser.id,
+              username: currentUser.username,
+              action: 'create',
+              entityType: 'transaction',
+              entityId: tx.id,
+              details: `Création: Inscriptions formation - ${enrFullName.trim()} - ${inscriptionAmount} FCFA (${fm.departmentId})`,
+              previousData: '',
+              newData: JSON.stringify({ type: 'income', amount: inscriptionAmount, category: 'Inscriptions formation', date: tx.date, paymentMethod: enrPaymentMethod }),
+            });
+          }
+        }
+
+        toast.success("Inscription + plan de paiement + transaction créés automatiquement");
+      } else {
+        toast.success("Inscription enregistrée");
+      }
     }
     setEnrollmentDialogOpen(false);
     refresh();
@@ -1258,6 +1332,93 @@ export default function FormationsPage() {
               <Label>Notes</Label>
               <Textarea placeholder="Commentaires..." value={enrNotes} onChange={(e) => setEnrNotes(e.target.value)} maxLength={300} />
             </div>
+
+            {/* Auto-create payment plan + transaction (new enrollment only) */}
+            {!enrollmentEditId && enrollmentFormationId && (() => {
+              const fm = formations.find(f => f.id === enrollmentFormationId);
+              if (!fm) return null;
+              const selectedPack = enrPackId && enrPackId !== 'none' ? fm.packs.find(p => p.id === enrPackId) : null;
+              const inscrFee = fm.inscriptionFee ?? 0;
+              const packPrice = selectedPack?.price ?? 0;
+              const inscriptionAmount = parseInt(enrInscriptionAmount) || 0;
+
+              return (
+                <div className="rounded-lg border bg-blue-50 dark:bg-blue-950/20 p-3 space-y-3">
+                  <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
+                    <input type="checkbox" checked={enrCreatePlan} onChange={(e) => setEnrCreatePlan(e.target.checked)} className="rounded" />
+                    <CreditCard className="h-4 w-4" />
+                    Créer automatiquement le suivi de paiement
+                  </label>
+
+                  {enrCreatePlan && (
+                    <div className="space-y-3 pl-6">
+                      {/* Summary */}
+                      <div className="text-xs space-y-1 rounded-md bg-white dark:bg-background p-2">
+                        {inscrFee > 0 && (
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">Frais d'inscription :</span>
+                            <span className="font-semibold">{formatCurrency(inscrFee)}</span>
+                          </div>
+                        )}
+                        {packPrice > 0 && (
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">Formation ({selectedPack!.name}) :</span>
+                            <span className="font-semibold">{formatCurrency(packPrice)}</span>
+                          </div>
+                        )}
+                        {(inscrFee > 0 || packPrice > 0) && (
+                          <div className="flex justify-between border-t pt-1 mt-1">
+                            <span className="font-medium">Total :</span>
+                            <span className="font-bold">{formatCurrency(inscrFee + packPrice)}</span>
+                          </div>
+                        )}
+                        {!selectedPack && fm.packs.length > 0 && (
+                          <p className="text-amber-600 dark:text-amber-400 text-[11px]">
+                            ⚠ Aucun pack sélectionné — le montant formation sera 0 FCFA. Vous pourrez le modifier plus tard dans le suivi.
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Inscription payment */}
+                      {inscrFee > 0 && (
+                        <div className="space-y-2">
+                          <Label className="text-xs">Montant inscription payé maintenant (FCFA)</Label>
+                          <Input
+                            type="number"
+                            min="0"
+                            max={inscrFee}
+                            placeholder={String(inscrFee)}
+                            value={enrInscriptionAmount}
+                            onChange={(e) => setEnrInscriptionAmount(e.target.value)}
+                            className="h-8 text-sm"
+                          />
+                          {inscriptionAmount > 0 && inscriptionAmount < inscrFee && (
+                            <p className="text-[11px] text-amber-600">Paiement partiel : reste {formatCurrency(inscrFee - inscriptionAmount)}</p>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Payment method */}
+                      {(inscriptionAmount > 0 || inscrFee === 0) && (
+                        <div className="space-y-2">
+                          <Label className="text-xs">Mode de paiement</Label>
+                          <Select value={enrPaymentMethod} onValueChange={(v) => setEnrPaymentMethod(v as PaymentMethod)}>
+                            <SelectTrigger className="h-8 text-sm">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {PAYMENT_METHODS.map(m => (
+                                <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEnrollmentDialogOpen(false)}>Annuler</Button>

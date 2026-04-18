@@ -76,6 +76,7 @@ export interface StockMovement {
   createdBy: string;
   parkName?: string;       // Parc de formation (for training/gift)
   traineeName?: string;    // Nom du formé (for gift)
+  transactionId?: string;  // Lien vers la transaction (pour les ventes)
 }
 
 // ==================== TRAINING / FORMATION ====================
@@ -217,6 +218,7 @@ export function addStockMovement(
   parkName?: string,
   traineeName?: string,
   departmentId: string = 'gaba',
+  transactionId?: string,
 ): { success: boolean; movement?: StockMovement; error?: string } {
   const items = getStockItems(departmentId);
   const idx = items.findIndex(i => i.id === itemId);
@@ -260,6 +262,7 @@ export function addStockMovement(
     createdBy,
     ...(parkName ? { parkName } : {}),
     ...(traineeName ? { traineeName } : {}),
+    ...(transactionId ? { transactionId } : {}),
   };
   movements.push(movement);
   saveStockMovements(movements, departmentId);

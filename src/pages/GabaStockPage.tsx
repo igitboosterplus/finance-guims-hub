@@ -26,7 +26,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { getCurrentUser, hasDepartmentAccess } from "@/lib/auth";
-import { formatCurrency, departments, type DepartmentId, addTransaction, PAYMENT_METHODS, type PaymentMethod } from "@/lib/data";
+import { formatCurrency, departments, type DepartmentId, addTransaction, PAYMENT_METHODS, type PaymentMethod, getTransactionsByDepartment } from "@/lib/data";
 import { downloadStockReport } from "@/lib/reports";
 import type { ReportOptions } from "@/lib/reports";
 import { ReportDialog } from "@/components/ReportDialog";
@@ -80,7 +80,7 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
   const [moveDialog, setMoveDialog] = useState(false);
   const [moveType, setMoveType] = useState<MovementType>('entry');
   const [moveItemId, setMoveItemId] = useState('');
-  const [moveForm, setMoveForm] = useState({ quantity: '', unitPrice: '', reason: '', date: new Date().toISOString().slice(0, 10), parkName: '', traineeName: '' });
+  const [moveForm, setMoveForm] = useState({ quantity: '', unitPrice: '', reason: '', date: new Date().toISOString().slice(0, 10), parkName: '', traineeName: '', transactionId: '' });
 
   // --- Training dialog ---
   const [trainingDialog, setTrainingDialog] = useState(false);
@@ -222,7 +222,7 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
     setMoveType(type);
     setMoveItemId(itemId ?? (items.length > 0 ? items[0].id : ''));
     const defaultReason = type === 'entry' ? ENTRY_REASONS[0] : type === 'training' ? TRAINING_REASONS[0] : type === 'gift' ? GIFT_REASONS[0] : EXIT_REASONS[0];
-    setMoveForm({ quantity: '', unitPrice: '', reason: defaultReason, date: new Date().toISOString().slice(0, 10), parkName: '', traineeName: '' });
+    setMoveForm({ quantity: '', unitPrice: '', reason: defaultReason, date: new Date().toISOString().slice(0, 10), parkName: '', traineeName: '', transactionId: '' });
     setMoveDialog(true);
   };
 
@@ -245,6 +245,7 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
       moveForm.parkName.trim() || undefined,
       moveForm.traineeName.trim() || undefined,
       departmentId,
+      moveForm.transactionId || undefined,
     );
 
     if (!result.success) {
@@ -652,6 +653,7 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
                     <TableHead className="text-right">Avant</TableHead>
                     <TableHead className="text-right">Après</TableHead>
                     <TableHead className="text-right">Prix unit.</TableHead>
+                    <TableHead>Transaction</TableHead>
                     <TableHead>Par</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -676,6 +678,16 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
                         <TableCell className="text-right text-muted-foreground">{mv.previousQuantity}</TableCell>
                         <TableCell className="text-right font-semibold">{mv.newQuantity}</TableCell>
                         <TableCell className="text-right">{mv.unitPrice > 0 ? formatCurrency(mv.unitPrice) : '—'}</TableCell>
+                        <TableCell className="text-sm">
+                          {mv.transactionId ? (() => {
+                            const tx = getTransactionsByDepartment(departmentId as DepartmentId).find(t => t.id === mv.transactionId);
+                            return tx ? (
+                              <span className="text-blue-600 dark:text-blue-400" title={`${tx.description || tx.category} — ${formatCurrency(tx.amount)}`}>
+                                {new Date(tx.date).toLocaleDateString('fr-FR')} — {formatCurrency(tx.amount)}
+                              </span>
+                            ) : <span className="text-muted-foreground">—</span>;
+                          })() : '—'}
+                        </TableCell>
                         <TableCell className="text-muted-foreground text-sm">{mv.createdBy}</TableCell>
                       </TableRow>
                     );
@@ -966,7 +978,7 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
             )}
             <div className="space-y-2">
               <Label>Motif</Label>
-              <Select value={moveForm.reason} onValueChange={v => setMoveForm(f => ({ ...f, reason: v }))}>
+              <Select value={moveForm.reason} onValueChange={v => setMoveForm(f => ({ ...f, reason: v, transactionId: '' }))}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {(moveType === 'entry' ? ENTRY_REASONS : moveType === 'training' ? TRAINING_REASONS : moveType === 'gift' ? GIFT_REASONS : EXIT_REASONS).map(r => (
@@ -975,6 +987,28 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
                 </SelectContent>
               </Select>
             </div>
+            {moveType === 'exit' && moveForm.reason === 'Vente' && (() => {
+              const deptTransactions = getTransactionsByDepartment(departmentId as DepartmentId)
+                .filter(t => t.type === 'income')
+                .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+                .slice(0, 50);
+              return (
+                <div className="space-y-2">
+                  <Label>Transaction liée (optionnel)</Label>
+                  <Select value={moveForm.transactionId || '__none__'} onValueChange={v => setMoveForm(f => ({ ...f, transactionId: v === '__none__' ? '' : v }))}>
+                    <SelectTrigger><SelectValue placeholder="Sélectionner une transaction" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">Aucune</SelectItem>
+                      {deptTransactions.map(t => (
+                        <SelectItem key={t.id} value={t.id}>
+                          {new Date(t.date).toLocaleDateString('fr-FR')} — {t.description || t.category} — {formatCurrency(t.amount)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              );
+            })()}
             <div className="space-y-2">
               <Label>Date</Label>
               <Input type="date" value={moveForm.date} onChange={e => setMoveForm(f => ({ ...f, date: e.target.value }))} />
