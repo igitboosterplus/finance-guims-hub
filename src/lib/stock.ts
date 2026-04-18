@@ -745,9 +745,11 @@ export function removeInstallmentFromTransaction(personName: string, date: strin
   const plans = getPaymentPlans();
   for (const plan of plans) {
     if (plan.clientName.toLowerCase() !== personName.toLowerCase()) continue;
-    // If this was an inscription payment, reset the inscription flag
-    if (isInscription && plan.inscriptionPaid) {
-      plan.inscriptionPaid = false;
+    // If this was an inscription payment, decrement the paid amount
+    if (isInscription) {
+      const currentPaid = plan.inscriptionPaidAmount || 0;
+      plan.inscriptionPaidAmount = Math.max(0, currentPaid - amount);
+      plan.inscriptionPaid = plan.inscriptionPaidAmount >= (plan.inscriptionFee || 0);
       savePaymentPlans(plans);
       return true;
     }

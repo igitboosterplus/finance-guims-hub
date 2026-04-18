@@ -197,7 +197,8 @@ export default function PaymentTrackingPage() {
 
     if (isInscriptionPayment) {
       // Inscription: track separately, not as a formation installment
-      updatePlanInscription(installPlanId, true, amount);
+      // Pass amount as 4th param (paidAmount) to accumulate, not overwrite the fee
+      updatePlanInscription(installPlanId, false, undefined, amount);
       const tx = addTransaction({
         departmentId: plan.departmentId,
         type: 'income',
