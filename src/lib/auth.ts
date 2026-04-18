@@ -1,6 +1,6 @@
 export type UserRole = 'superadmin' | 'admin';
 
-import { syncFullCollection } from './sync';
+import { syncFullCollection, syncDeleteDoc } from './sync';
 import { TABLES } from './firebase';
 
 export interface UserPermissions {
@@ -229,6 +229,7 @@ export function approveUser(userId: string) {
 export function rejectUser(userId: string) {
   const users = getUsers();
   saveUsers(users.filter(u => u.id !== userId));
+  syncDeleteDoc(TABLES.users, userId);
 }
 
 export async function resetUserPassword(userId: string, newPassword: string) {
@@ -243,6 +244,7 @@ export async function resetUserPassword(userId: string, newPassword: string) {
 export function deleteUser(userId: string) {
   const users = getUsers();
   saveUsers(users.filter(u => u.id !== userId));
+  syncDeleteDoc(TABLES.users, userId);
 }
 
 export function getUserById(id: string): User | undefined {
