@@ -10,7 +10,7 @@ import { getSupabase, isSupabaseConfigured, TABLES } from "./firebase";
 type TableName = typeof TABLES[keyof typeof TABLES];
 
 // Départements qui ont des tables de stock dédiées
-const STOCK_DEPTS = ['gaba', 'guims-academy'] as const;
+const STOCK_DEPTS = ['gaba', 'guims-academy', 'guims-educ', 'digitboosterplus'] as const;
 
 function stockStorageKey(dept: string, suffix: string): string {
   return `${dept === 'gaba' ? 'gaba' : dept}-${suffix}`;

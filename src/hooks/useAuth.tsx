@@ -7,29 +7,54 @@ import { migrateInscriptionInstallments, cleanupOrphanedInstallments } from '@/l
 interface AuthContextValue {
   user: User | null;
   loading: boolean;
+  syncing: boolean;
   refresh: () => void;
   logout: () => void;
+  forceSync: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue>({
   user: null,
   loading: true,
+  syncing: false,
   refresh: () => {},
   logout: () => {},
+  forceSync: async () => {},
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
 
   const refresh = () => {
     setUser(getCurrentUser());
   };
 
+  const doSync = async () => {
+    if (!isSupabaseConfigured()) return;
+    try {
+      const result = await pullAllFromSupabase();
+      if (result.success) console.log("[Sync] Auto-sync OK");
+      else console.warn("[Sync] Auto-sync échouée:", result.error);
+    } catch (err) {
+      console.error("[Sync] Erreur auto-sync:", err);
+    }
+  };
+
+  const forceSync = async () => {
+    setSyncing(true);
+    try {
+      await doSync();
+      refresh();
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   useEffect(() => {
     (async () => {
       // 1. Pull from Supabase (get accounts/data created on other devices)
-      // Pull is always safe: if Supabase has data → use it; if empty → local data preserved + pushed
       if (isSupabaseConfigured()) {
         try {
           const result = await pullAllFromSupabase();
@@ -51,6 +76,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       refresh();
       setLoading(false);
     })();
+
+    // 5. Periodic sync every 30 seconds + sync when tab becomes visible
+    if (isSupabaseConfigured()) {
+      const interval = setInterval(doSync, 30_000);
+      const onVisibilityChange = () => {
+        if (document.visibilityState === 'visible') doSync();
+      };
+      document.addEventListener('visibilitychange', onVisibilityChange);
+      return () => {
+        clearInterval(interval);
+        document.removeEventListener('visibilitychange', onVisibilityChange);
+      };
+    }
   }, []);
 
   const logout = () => {
@@ -83,7 +121,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [user]);
 
   return (
-    <AuthContext.Provider value={{ user, loading, refresh, logout }}>
+    <AuthContext.Provider value={{ user, loading, syncing, refresh, logout, forceSync }}>
       {children}
     </AuthContext.Provider>
   );

@@ -4,12 +4,18 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { LogOut, ShieldCheck, Shield, UserCircle } from "lucide-react";
+import { LogOut, ShieldCheck, Shield, UserCircle, RefreshCw } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { toast } from "sonner";
 
 export default function Layout({ children }: { children: React.ReactNode }) {
-  const { user, logout } = useAuth();
+  const { user, syncing, logout, forceSync } = useAuth();
   const navigate = useNavigate();
+
+  const handleSync = async () => {
+    await forceSync();
+    toast.success("Synchronisation terminée");
+  };
 
   return (
     <SidebarProvider>
@@ -35,6 +41,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                 </div>
                 <Button variant="ghost" size="icon" className="h-7 w-7 sm:h-8 sm:w-8 text-muted-foreground" onClick={() => navigate('/profile')} title="Mon profil">
                   <UserCircle className="h-4 w-4" />
+                </Button>
+                <Button variant="ghost" size="icon" className="h-7 w-7 sm:h-8 sm:w-8 text-muted-foreground" onClick={handleSync} disabled={syncing} title="Synchroniser les données">
+                  <RefreshCw className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
                 </Button>
                 <Button variant="ghost" size="icon" className="h-7 w-7 sm:h-8 sm:w-8 text-muted-foreground" onClick={logout} title="Déconnexion">
                   <LogOut className="h-4 w-4" />
