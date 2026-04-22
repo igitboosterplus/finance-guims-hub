@@ -14,6 +14,14 @@ import type { ReportOptions } from "@/lib/reports";
 import logoGuimsGroup from "@/assets/logo-guims-group.jpg";
 
 export default function Dashboard() {
+  const sortTransactionsByRecency = <T extends { date: string; createdAt?: string }>(items: T[]) => {
+    return [...items].sort((a, b) => {
+      const ta = new Date(a.createdAt || a.date).getTime();
+      const tb = new Date(b.createdAt || b.date).getTime();
+      return tb - ta;
+    });
+  };
+
   const [stats, setStats] = useState(getGlobalStats());
   const [transactions, setTransactions] = useState(getTransactions());
   const [paymentStats, setPaymentStats] = useState(getStatsByPaymentMethod());
@@ -94,7 +102,7 @@ export default function Dashboard() {
 
       <div>
         <h3 className="text-lg font-semibold text-foreground mb-4">Dernières transactions</h3>
-        <TransactionList transactions={transactions.slice(-10)} onDelete={refresh} showDepartment />
+        <TransactionList transactions={sortTransactionsByRecency(transactions).slice(0, 10)} onDelete={refresh} showDepartment />
       </div>
     </div>
   );

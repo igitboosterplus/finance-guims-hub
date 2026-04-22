@@ -99,7 +99,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
     setEditPersonName(tx.personName || '');
     setEditDescription(tx.description);
     setEditAmount(String(tx.amount));
-    setEditDate(tx.date);
+    setEditDate(tx.date.includes('T') ? tx.date.slice(0, 10) : tx.date);
     setEditType(tx.type);
     setEditPaymentMethod(tx.paymentMethod || 'especes');
     setEditJustification("");
@@ -128,7 +128,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
       personName: editPersonName.trim(),
       description: editDescription,
       amount: parsedAmount,
-      date: editDate,
+      date: editTx.date,
       type: editType,
       paymentMethod: editPaymentMethod,
     });
@@ -136,7 +136,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
     if (editTx.personName && (editTx.amount !== parsedAmount || editTx.category !== editCategory)) {
       syncEditedTransaction(editTx.personName, editTx.date, editTx.amount, parsedAmount, editTx.category, editCategory);
     }
-    const newData = JSON.stringify({ type: editType, amount: parsedAmount, category: editCategory, personName: editPersonName, date: editDate, paymentMethod: editPaymentMethod, description: editDescription });
+    const newData = JSON.stringify({ type: editType, amount: parsedAmount, category: editCategory, personName: editPersonName, date: editTx.date, paymentMethod: editPaymentMethod, description: editDescription });
     const readableDetails = buildHumanDiff(previousData, newData);
     if (currentUser) {
       addAuditEntry({
@@ -461,7 +461,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
               </div>
               <div className="space-y-2">
                 <Label>Date</Label>
-                <Input type="date" value={editDate} onChange={(e) => setEditDate(e.target.value)} />
+                <Input type="text" value={new Date(editDate).toLocaleString('fr-FR')} readOnly disabled />
               </div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

@@ -71,6 +71,10 @@ const USERS_KEY = 'finance-users';
 const SESSION_KEY = 'finance-session';
 const AUDIT_KEY = 'finance-audit-log';
 
+function normalizeUsername(username: string): string {
+  return username.trim().toLowerCase();
+}
+
 // Simple hash — not cryptographic, but sufficient for a localStorage-based app.
 // In a real app this would use bcrypt on a server.
 async function hashPassword(password: string): Promise<string> {
@@ -97,7 +101,7 @@ export async function initDefaultSuperAdmin() {
   // Deduplicate users with the same username (keep first occurrence)
   const seen = new Set<string>();
   const deduped = users.filter(u => {
-    const key = u.username.toLowerCase();
+    const key = normalizeUsername(u.username);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -111,6 +115,13 @@ export async function initDefaultSuperAdmin() {
   // Create default superadmin only if NO users exist (after Supabase pull)
   if (users.length === 0 || !users.some(u => u.role === 'superadmin')) {
     const hash = await hashPassword('Yvan2000@');
+
+    // Re-read users after async hashing to avoid duplicate creation in concurrent startup calls.
+    const latestUsers = getUsers();
+    if (latestUsers.some(u => u.role === 'superadmin')) {
+      return;
+    }
+
     const superAdmin: User = {
       id: crypto.randomUUID(),
       username: 'Guimtsop',
@@ -120,7 +131,7 @@ export async function initDefaultSuperAdmin() {
       approved: true,
       createdAt: new Date().toISOString(),
     };
-    const final = users.filter(u => u.role !== 'superadmin');
+    const final = latestUsers.filter(u => u.role !== 'superadmin');
     final.push(superAdmin);
     saveUsers(final);
   }
@@ -157,7 +168,8 @@ export function purgeAllData(): void {
 
 export async function login(username: string, password: string): Promise<{ success: boolean; user?: User; error?: string }> {
   const users = getUsers();
-  const user = users.find(u => u.username.toLowerCase() === username.toLowerCase());
+  const normalized = normalizeUsername(username);
+  const user = users.find(u => normalizeUsername(u.username) === normalized);
   if (!user) return { success: false, error: 'Nom d\'utilisateur inconnu' };
 
   const hash = await hashPassword(password);
@@ -191,17 +203,19 @@ export function isSuperAdmin(user: User | null): boolean {
 
 export async function createUser(username: string, password: string, displayName: string, role: UserRole = 'admin'): Promise<{ success: boolean; error?: string }> {
   const users = getUsers();
-  if (users.some(u => u.username.toLowerCase() === username.toLowerCase())) {
+  const cleanUsername = username.trim();
+  const normalized = normalizeUsername(cleanUsername);
+  if (users.some(u => normalizeUsername(u.username) === normalized)) {
     return { success: false, error: 'Ce nom d\'utilisateur existe déjà' };
   }
-  if (username.length < 3) return { success: false, error: 'Nom d\'utilisateur trop court (min 3 caractères)' };
+  if (cleanUsername.length < 3) return { success: false, error: 'Nom d\'utilisateur trop court (min 3 caractères)' };
   if (password.length < 6) return { success: false, error: 'Mot de passe trop court (min 6 caractères)' };
 
   const hash = await hashPassword(password);
   const currentUser = getCurrentUser();
   const newUser: User = {
     id: crypto.randomUUID(),
-    username,
+    username: cleanUsername,
     passwordHash: hash,
     displayName,
     role,

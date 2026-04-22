@@ -10,7 +10,7 @@ import { departments, addTransaction, PAYMENT_METHODS, isEnrollmentCategory, isI
 import { addAuditEntry, getCurrentUser, hasPermission, hasDepartmentAccess } from "@/lib/auth";
 import { getStockItems, addStockMovement, getFormationsByDepartment, addPaymentPlan, addInstallment, getPaymentPlans, getEnrolledStudents, buildAllocationMessage, updatePlanInscription, getAllocationSummary, getRemainingAmount, addEnrollment, getEnrollmentsByFormation, updateEnrollment, type StockItem, type FormationCatalog, type FormationPack } from "@/lib/stock";
 import { toast } from "sonner";
-import { ArrowLeft, ShieldAlert, Package, GraduationCap, Star, Award, Calendar, CreditCard, Phone } from "lucide-react";
+import { ArrowLeft, ShieldAlert, Package, GraduationCap, Star, Award, CreditCard } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 
@@ -30,7 +30,6 @@ export default function NewTransaction() {
   const [phoneNumber, setPhoneNumber] = useState('');
   const [description, setDescription] = useState('');
   const [amount, setAmount] = useState('');
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [quantity, setQuantity] = useState('');
   const [stockItemId, setStockItemId] = useState('');
   const [formationName, setFormationName] = useState('');
@@ -169,25 +168,12 @@ export default function NewTransaction() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!departmentId || !category || !amount || !date) {
+    if (!departmentId || !category || !amount) {
       toast.error("Veuillez remplir tous les champs obligatoires");
       return;
     }
 
-    // Validate date is not more than 3 days in the past
-    const selectedDate = new Date(date);
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const threeDaysAgo = new Date(today);
-    threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
-    if (selectedDate < threeDaysAgo) {
-      toast.error("La date ne peut pas dépasser 3 jours dans le passé");
-      return;
-    }
-    if (selectedDate > today) {
-      toast.error("La date ne peut pas être dans le futur");
-      return;
-    }
+    const transactionTimestamp = new Date().toISOString();
 
     if (!personName.trim()) {
       toast.error("Veuillez saisir le nom de la personne");
@@ -230,7 +216,7 @@ export default function NewTransaction() {
         parsedQty,
         unitPrice,
         reason,
-        date,
+        transactionTimestamp,
         currentUser?.displayName ?? 'Inconnu',
         undefined,
         undefined,
@@ -251,7 +237,7 @@ export default function NewTransaction() {
       phoneNumber: phoneNumber.trim() || undefined,
       description,
       amount: parsedAmount,
-      date,
+      date: transactionTimestamp,
       ...(isStockCategory && parsedQty > 0 ? { quantity: parsedQty, stockItemId } : {}),
       ...(isEnrollmentCategory(category) ? { enrollmentDate: new Date().toISOString() } : {}),
       ...(isTranche(category) ? { tranche: category.replace('Frais de formation - ', '') } : {}),
@@ -319,7 +305,7 @@ export default function NewTransaction() {
           const shortNote = isTranche(category) ? category.replace('Frais de formation - ', '') : category;
           const updatedPlan = addInstallment(existingPlan.id, {
             amount: parsedAmount,
-            date,
+            date: transactionTimestamp,
             paymentMethod,
             note: shortNote,
             recordedBy: currentUser?.displayName ?? 'Inconnu',
@@ -358,7 +344,7 @@ export default function NewTransaction() {
           const shortNote = isTranche(category) ? category.replace('Frais de formation - ', '') : category;
           const updatedPlan = addInstallment(plan.id, {
             amount: parsedAmount,
-            date,
+            date: transactionTimestamp,
             paymentMethod,
             note: shortNote,
             recordedBy: currentUser?.displayName ?? 'Inconnu',
@@ -407,7 +393,7 @@ export default function NewTransaction() {
         entityId: '',
         details: `Création: ${category} - ${personName.trim()} - ${parsedAmount} FCFA (${departmentId})`,
         previousData: '',
-        newData: JSON.stringify({ departmentId, type, paymentMethod, category, personName: personName.trim(), description, amount: parsedAmount, date }),
+        newData: JSON.stringify({ departmentId, type, paymentMethod, category, personName: personName.trim(), description, amount: parsedAmount, date: transactionTimestamp }),
       });
     }
 
@@ -504,9 +490,9 @@ export default function NewTransaction() {
               </div>
 
               <div className="space-y-2">
-                <Label>Date *</Label>
-                <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} min={(() => { const d = new Date(); d.setDate(d.getDate() - 3); return d.toISOString().split('T')[0]; })()} max={new Date().toISOString().split('T')[0]} />
-                <p className="text-xs text-muted-foreground">Maximum 3 jours dans le passé</p>
+                <Label>Date et heure</Label>
+                <Input type="text" value={new Date().toLocaleString('fr-FR')} readOnly disabled />
+                <p className="text-xs text-muted-foreground">Attribuées automatiquement à l'enregistrement.</p>
               </div>
             </div>
 
