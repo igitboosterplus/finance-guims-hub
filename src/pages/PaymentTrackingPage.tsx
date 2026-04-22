@@ -19,7 +19,7 @@ import {
 } from "@/lib/stock";
 import { toast } from "sonner";
 import {
-  CreditCard, Plus, Search, ChevronDown, ChevronUp, CheckCircle2, Clock, XCircle, Archive, ArchiveRestore, Receipt, User, CalendarDays, Banknote, AlertTriangle, Bell, Trash2,
+  CreditCard, Plus, Search, ChevronDown, ChevronUp, CheckCircle2, Clock, XCircle, Archive, ArchiveRestore, Receipt, User, Users, CalendarDays, Banknote, AlertTriangle, Bell, Trash2,
 } from "lucide-react";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -92,6 +92,31 @@ export default function PaymentTrackingPage() {
     if (order[a.status] !== order[b.status]) return order[a.status] - order[b.status];
     return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
   });
+
+  const getFormationName = (plan: PaymentPlan) => {
+    if (plan.formationId) return (plan.label.split(' — ')[0] || plan.label).trim();
+    return (plan.label.split(' — ')[0] || plan.label).trim();
+  };
+
+  const formationPlans = filtered.filter(p => p.planType === 'formation');
+  const servicePlans = filtered.filter(p => p.planType === 'service');
+
+  const formationGroups = Object.values(
+    formationPlans.reduce((acc, plan) => {
+      const formationName = getFormationName(plan);
+      const key = `${plan.departmentId}::${plan.formationId ?? formationName.toLowerCase()}`;
+      if (!acc[key]) {
+        acc[key] = {
+          key,
+          formationName,
+          departmentId: plan.departmentId,
+          plans: [] as PaymentPlan[],
+        };
+      }
+      acc[key].plans.push(plan);
+      return acc;
+    }, {} as Record<string, { key: string; formationName: string; departmentId: DepartmentId; plans: PaymentPlan[] }>),
+  ).sort((a, b) => a.formationName.localeCompare(b.formationName));
 
   // Stats — include inscription fees in totals for full picture
   const activePlans = plans.filter(p => p.status === 'en_cours');
@@ -425,306 +450,209 @@ export default function PaymentTrackingPage() {
           <p className="text-sm">{search ? "Essayez une autre recherche" : "Créez un plan pour suivre les paiements en tranches ou avances"}</p>
         </div>
       ) : (
-        <div className="space-y-4">
-          {filtered.map(plan => {
-            const paid = getPaidAmount(plan);
-            const remaining = getRemainingAmount(plan);
-            const progress = plan.totalAmount > 0 ? Math.round((paid / plan.totalAmount) * 100) : 0;
-            const isExpanded = expandedPlan === plan.id;
-            const dept = departments.find(d => d.id === plan.departmentId);
-            const statusCfg = STATUS_CONFIG[plan.status];
-            const StatusIcon = statusCfg.icon;
+        <div className="space-y-6">
+          {formationGroups.length > 0 && (
+            <div className="space-y-4">
+              <div className="flex items-center gap-2">
+                <Users className="h-4 w-4 text-primary" />
+                <p className="text-sm font-semibold">Fiches par formation</p>
+              </div>
 
-            return (
-              <Card key={plan.id} className="border-0 shadow-md overflow-hidden">
-                <CardHeader className="pb-2">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-start gap-3 min-w-0">
-                      {dept && <img src={dept.logo} alt={dept.name} className="h-10 w-10 rounded-xl object-cover shadow-sm shrink-0 mt-0.5" />}
-                      <div className="min-w-0">
-                        <CardTitle className="text-base sm:text-lg truncate">{plan.label}</CardTitle>
-                        <div className="flex items-center gap-2 flex-wrap mt-0.5">
-                          <Badge variant="secondary" className="text-[10px]">{getDeptName(plan.departmentId)}</Badge>
-                          <Badge variant="outline" className="text-[10px]">{plan.planType === 'formation' ? 'Formation' : 'Service'}</Badge>
-                          <Badge className={`text-[10px] ${statusCfg.color} border-0`}>
-                            <StatusIcon className="h-3 w-3 mr-0.5" />{statusCfg.label}
-                          </Badge>
+              {formationGroups.map(group => {
+                const groupPaid = group.plans.reduce((s, p) => s + getPaidAmount(p), 0);
+                const groupTotal = group.plans.reduce((s, p) => s + p.totalAmount, 0);
+                const groupRemaining = groupTotal - groupPaid;
+
+                return (
+                  <Card key={group.key} className="border-0 shadow-md overflow-hidden">
+                    <CardHeader className="pb-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <CardTitle className="text-base sm:text-lg">{group.formationName}</CardTitle>
+                          <div className="flex items-center gap-2 mt-1">
+                            <Badge variant="secondary" className="text-[10px]">{getDeptName(group.departmentId)}</Badge>
+                            <Badge variant="outline" className="text-[10px]">{group.plans.length} étudiant{group.plans.length > 1 ? 's' : ''}</Badge>
+                          </div>
                         </div>
-                        <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
-                          <User className="h-3 w-3" /> {plan.clientName}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex gap-1 shrink-0">
-                      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setExpandedPlan(isExpanded ? null : plan.id)}>
-                        {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                      </Button>
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent className="pt-0 space-y-3">
-                  {/* Inscription fee info */}
-                  {plan.inscriptionFee && plan.inscriptionFee > 0 && (() => {
-                    const paidAmt = plan.inscriptionPaidAmount || (plan.inscriptionPaid ? plan.inscriptionFee : 0);
-                    const remaining = plan.inscriptionFee - paidAmt;
-                    const isFullyPaid = remaining <= 0;
-                    return (
-                      <div className={`flex items-center justify-between rounded-md px-2.5 py-1.5 text-xs ${isFullyPaid ? 'bg-green-50 dark:bg-green-950/20 text-green-700 dark:text-green-400' : 'bg-amber-50 dark:bg-amber-950/20 text-amber-700 dark:text-amber-400'}`}>
-                        <span className="flex items-center gap-1.5">
-                          <Receipt className="h-3.5 w-3.5 shrink-0" />
-                          Inscription : {formatCurrency(plan.inscriptionFee)}
-                        </span>
-                        <Badge variant="outline" className={`text-[10px] ${isFullyPaid ? 'border-green-400 text-green-600' : 'border-amber-400 text-amber-600'}`}>
-                          {isFullyPaid ? 'Payée ✓' : paidAmt > 0 ? `${formatCurrency(paidAmt)} payé — reste ${formatCurrency(remaining)}` : 'Non payée'}
-                        </Badge>
-                      </div>
-                    );
-                  })()}
-
-                  {/* Total recap: inscription + formation */}
-                  {plan.inscriptionFee && plan.inscriptionFee > 0 && (
-                    <div className="flex items-center justify-between rounded-md bg-muted/50 px-2.5 py-1.5 text-xs">
-                      <span className="text-muted-foreground font-medium">Coût total (inscription + formation)</span>
-                      <span className="font-bold">{formatCurrency(plan.inscriptionFee + plan.totalAmount)}</span>
-                    </div>
-                  )}
-
-                  {/* Progress bar — formation fees only */}
-                  <div className="space-y-1.5">
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="text-muted-foreground">Formation</span>
-                      <span className="font-semibold">{progress}%</span>
-                    </div>
-                    <Progress value={progress} className="h-2.5" />
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="text-success font-medium">Payé : {formatCurrency(paid)}</span>
-                      <span className="text-muted-foreground">/ {formatCurrency(plan.totalAmount)}</span>
-                    </div>
-                    {remaining > 0 && plan.status === 'en_cours' && (
-                      <p className="text-xs text-destructive font-medium">Reste : {formatCurrency(remaining)}</p>
-                    )}
-                  </div>
-
-                  {/* Next tranche + last payment info */}
-                  {plan.status === 'en_cours' && (
-                    <div className="flex flex-col gap-2 text-xs">
-                      {/* Allocation per tranche */}
-                      {plan.scheduledTranches && plan.scheduledTranches.length > 0 && (() => {
-                        const alloc = getAllocationSummary(plan);
-                        const nextUnpaid = alloc.find(a => a.status !== 'paid');
-                        if (!nextUnpaid) return null;
-                        const trancheObj = plan.scheduledTranches!.find(t => t.name === nextUnpaid.name);
-                        const today = new Date().toISOString().split('T')[0];
-                        const isOverdue = trancheObj?.dueDate ? trancheObj.dueDate < today : false;
-                        return (
-                          <div className="space-y-1.5">
-                            <div className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 ${isOverdue ? 'bg-red-50 dark:bg-red-950/20 text-red-700 dark:text-red-400' : 'bg-blue-50 dark:bg-blue-950/20 text-blue-700 dark:text-blue-400'}`}>
-                              <CalendarDays className="h-3.5 w-3.5 shrink-0" />
-                              <span>
-                                <strong>{nextUnpaid.name}</strong> — {formatCurrency(nextUnpaid.expected)}
-                                {nextUnpaid.status === 'partial' && ` (avance: ${formatCurrency(nextUnpaid.paid)}, reste: ${formatCurrency(nextUnpaid.remaining)})`}
-                                {trancheObj?.dueDate && (isOverdue
-                                  ? ` · en retard (${new Date(trancheObj.dueDate).toLocaleDateString('fr-FR')})`
-                                  : ` · échéance le ${new Date(trancheObj.dueDate).toLocaleDateString('fr-FR')}`
-                                )}
-                              </span>
-                            </div>
-                            {alloc.filter(a => a.status === 'paid').length > 0 && (
-                              <div className="flex flex-wrap gap-1.5 pl-1">
-                                {alloc.filter(a => a.status === 'paid').map(a => (
-                                  <Badge key={a.name} variant="outline" className="text-[10px] border-green-300 text-green-600 dark:text-green-400">
-                                    {a.name} ✓
-                                  </Badge>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })()}
-                      {/* Last payment date */}
-                      {plan.installments.length > 0 && (() => {
-                        const last = [...plan.installments].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())[0];
-                        return (
-                          <div className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 bg-green-50 dark:bg-green-950/20 text-green-700 dark:text-green-400">
-                            <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
-                            <span>Dernier paiement : {formatCurrency(last.amount)} le {new Date(last.date).toLocaleDateString('fr-FR')}</span>
-                          </div>
-                        );
-                      })()}
-                    </div>
-                  )}
-
-                  {/* Action buttons */}
-                  {plan.status === 'en_cours' && canEdit && (
-                    <div className="flex gap-2 flex-wrap">
-                      <Button size="sm" onClick={() => openInstallDialog(plan.id)} className="gap-1 text-xs">
-                        <Banknote className="h-3.5 w-3.5" /> Enregistrer un paiement
-                      </Button>
-                      {progress >= 100 && (
-                        <Button size="sm" variant="outline" onClick={() => handleMarkComplete(plan.id)} className="gap-1 text-xs text-success">
-                          <CheckCircle2 className="h-3.5 w-3.5" /> Marquer terminé
-                        </Button>
-                      )}
-                      <Button size="sm" variant="ghost" onClick={() => handleArchive(plan.id)} className="gap-1 text-xs text-muted-foreground">
-                        <Archive className="h-3.5 w-3.5" /> Archiver
-                      </Button>
-                    </div>
-                  )}
-                  {(plan.status === 'termine' || plan.status === 'annule' || plan.status === 'archive') && canEdit && (
-                    <div className="flex gap-2 flex-wrap">
-                      <Button size="sm" variant="outline" onClick={() => handleReopen(plan.id)} className="gap-1 text-xs">
-                        <ArchiveRestore className="h-3.5 w-3.5" /> Restaurer
-                      </Button>
-                      <AlertDialog>
-                        <AlertDialogTrigger asChild>
-                          <Button size="sm" variant="ghost" className="gap-1 text-xs text-destructive hover:text-destructive">
-                            <Trash2 className="h-3.5 w-3.5" /> Supprimer
-                          </Button>
-                        </AlertDialogTrigger>
-                        <AlertDialogContent>
-                          <AlertDialogHeader>
-                            <AlertDialogTitle>Supprimer ce plan de suivi ?</AlertDialogTitle>
-                            <AlertDialogDescription>
-                              Cette action est irréversible. Le plan de suivi de <strong>{plan.clientName}</strong> sera définitivement supprimé. L'action sera enregistrée dans le Super Audit.
-                            </AlertDialogDescription>
-                          </AlertDialogHeader>
-                          <AlertDialogFooter>
-                            <AlertDialogCancel>Annuler</AlertDialogCancel>
-                            <AlertDialogAction onClick={() => handleDelete(plan)} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-                              Supprimer
-                            </AlertDialogAction>
-                          </AlertDialogFooter>
-                        </AlertDialogContent>
-                      </AlertDialog>
-                    </div>
-                  )}
-
-                  {/* Expanded: scheduled tranches + payment history */}
-                  {isExpanded && (
-                    <>
-                      {/* Full breakdown: inscription + scheduled tranches */}
-                      <Separator />
-                      <div className="space-y-2">
-                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
-                          <CalendarDays className="h-3 w-3" />
-                          Détail des paiements
-                        </p>
-                        <div className="space-y-1.5">
-                          {/* Inscription row (if applicable) */}
-                          {plan.inscriptionFee && plan.inscriptionFee > 0 && (() => {
-                            const paidAmt = plan.inscriptionPaidAmount || (plan.inscriptionPaid ? plan.inscriptionFee : 0);
-                            const remaining = plan.inscriptionFee - paidAmt;
-                            const isFullyPaid = remaining <= 0;
-                            return (
-                              <div className={`flex items-center justify-between rounded-md border p-2 text-xs ${isFullyPaid ? 'bg-green-50 dark:bg-green-950/20 border-green-200 dark:border-green-800' : 'bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800'}`}>
-                                <div className="flex items-center gap-2">
-                                  {isFullyPaid ? <CheckCircle2 className="h-3.5 w-3.5 text-green-600" /> : <Clock className="h-3.5 w-3.5 text-amber-600" />}
-                                  <span className="font-medium">Inscription</span>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <span className="font-semibold">{formatCurrency(plan.inscriptionFee)}</span>
-                                  {isFullyPaid
-                                    ? <Badge className="text-[9px] bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 border-0">Payé</Badge>
-                                    : paidAmt > 0
-                                      ? <Badge className="text-[9px] bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 border-0">{formatCurrency(paidAmt)} payé — reste {formatCurrency(remaining)}</Badge>
-                                      : <Badge className="text-[9px] bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 border-0">Non payé</Badge>
-                                  }
-                                </div>
-                              </div>
-                            );
-                          })()}
+                        <div className="text-right text-xs">
+                          <p className="text-success font-semibold">Encaissé: {formatCurrency(groupPaid)}</p>
+                          <p className="text-muted-foreground">Reste: {formatCurrency(groupRemaining)}</p>
                         </div>
                       </div>
+                    </CardHeader>
 
-                      {/* Scheduled tranches timeline */}
-                      {plan.scheduledTranches && plan.scheduledTranches.length > 0 && (
-                        <div className="space-y-2">
-                          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
-                            <CalendarDays className="h-3 w-3" />
-                            Échéancier ({plan.scheduledTranches.length} tranche{plan.scheduledTranches.length > 1 ? 's' : ''})
-                          </p>
-                            <div className="space-y-1.5">
-                              {(() => {
-                                const alloc = getAllocationSummary(plan);
-                                return plan.scheduledTranches!.map((tr) => {
-                                  const today = new Date().toISOString().split('T')[0];
-                                  const isPast = tr.dueDate < today;
-                                  const trAlloc = alloc.find(a => a.name === tr.name);
-                                  const isPaid = trAlloc?.status === 'paid';
-                                  const isPartial = trAlloc?.status === 'partial';
-                                  const isOverdue = isPast && !isPaid;
-                                  return (
-                                    <div key={tr.id} className={`flex items-center justify-between rounded-md border p-2 text-xs ${isPaid ? 'bg-green-50 dark:bg-green-950/20 border-green-200 dark:border-green-800' : isOverdue ? 'bg-red-50 dark:bg-red-950/20 border-red-200 dark:border-red-800' : isPartial ? 'bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800' : 'bg-muted/30'}`}>
-                                      <div className="flex items-center gap-2">
-                                        {isPaid ? <CheckCircle2 className="h-3.5 w-3.5 text-green-600" /> : isOverdue ? <AlertTriangle className="h-3.5 w-3.5 text-red-600" /> : isPartial ? <Clock className="h-3.5 w-3.5 text-amber-600" /> : <Clock className="h-3.5 w-3.5 text-muted-foreground" />}
-                                        <span className="font-medium">{tr.name}</span>
-                                      </div>
-                                      <div className="flex items-center gap-2">
-                                        <span className="font-semibold">{formatCurrency(tr.amount)}</span>
-                                        {isPartial && trAlloc && (
-                                          <span className="text-amber-600 dark:text-amber-400 font-medium">
-                                            avance {formatCurrency(trAlloc.paid)}
-                                          </span>
-                                        )}
-                                        <span className={`${isOverdue ? 'text-red-600 font-semibold' : 'text-muted-foreground'}`}>
-                                          {new Date(tr.dueDate).toLocaleDateString('fr-FR')}
-                                        </span>
-                                        {isPaid && <Badge className="text-[9px] bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 border-0">Payé</Badge>}
-                                        {isPartial && <Badge className="text-[9px] bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 border-0">Avance</Badge>}
-                                        {isOverdue && !isPartial && <Badge className="text-[9px] bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 border-0">Retard</Badge>}
-                                      </div>
-                                    </div>
-                                  );
-                                });
-                              })()}
-                            </div>
-                          </div>
-                      )}
-                      <Separator />
-                      <div className="space-y-2">
-                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
-                          <Receipt className="h-3 w-3" />
-                          Historique des paiements ({plan.installments.length})
-                        </p>
-                        {plan.installments.length === 0 ? (
-                          <p className="text-xs text-muted-foreground italic">Aucun paiement enregistré</p>
-                        ) : (
-                          <div className="space-y-2">
-                            {plan.installments.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map((inst, idx) => (
-                              <div key={inst.id} className="rounded-md border bg-muted/30 p-2.5 flex items-center justify-between gap-3">
+                    <CardContent className="space-y-3">
+                      {group.plans
+                        .slice()
+                        .sort((a, b) => a.clientName.localeCompare(b.clientName))
+                        .map(plan => {
+                          const paid = getPaidAmount(plan);
+                          const remaining = getRemainingAmount(plan);
+                          const progress = plan.totalAmount > 0 ? Math.round((paid / plan.totalAmount) * 100) : 0;
+                          const isExpanded = expandedPlan === plan.id;
+                          const statusCfg = STATUS_CONFIG[plan.status];
+                          const StatusIcon = statusCfg.icon;
+
+                          return (
+                            <div key={plan.id} className="rounded-lg border bg-card p-3 space-y-3">
+                              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                                 <div className="min-w-0">
-                                  <div className="flex items-center gap-2 flex-wrap">
-                                    <span className="text-sm font-semibold text-success">{formatCurrency(inst.amount)}</span>
-                                    <Badge variant="outline" className="text-[10px]">{getMethodLabel(inst.paymentMethod)}</Badge>
+                                  <p className="text-sm font-semibold truncate">{plan.clientName}</p>
+                                  <div className="flex items-center gap-2 mt-1 flex-wrap">
+                                    <Badge className={`text-[10px] ${statusCfg.color} border-0`}>
+                                      <StatusIcon className="h-3 w-3 mr-0.5" />{statusCfg.label}
+                                    </Badge>
+                                    <Badge variant="outline" className="text-[10px]">{formatCurrency(paid)} / {formatCurrency(plan.totalAmount)}</Badge>
                                   </div>
-                                  <p className="text-[11px] text-muted-foreground flex items-center gap-1 mt-0.5">
-                                    <CalendarDays className="h-3 w-3" />
-                                    {new Date(inst.date).toLocaleDateString('fr-FR')}
-                                    {inst.note && <span className="ml-1">— {inst.note}</span>}
-                                  </p>
-                                  <p className="text-[10px] text-muted-foreground">Par {inst.recordedBy}</p>
                                 </div>
-                                <span className="text-xs text-muted-foreground shrink-0">#{plan.installments.length - idx}</span>
+                                <div className="flex items-center gap-2">
+                                  {canEdit && plan.status === 'en_cours' && (
+                                    <Button size="sm" onClick={() => openInstallDialog(plan.id)} className="gap-1 text-xs">
+                                      <Banknote className="h-3.5 w-3.5" /> Paiement
+                                    </Button>
+                                  )}
+                                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setExpandedPlan(isExpanded ? null : plan.id)}>
+                                    {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                                  </Button>
+                                </div>
                               </div>
-                            ))}
-                          </div>
-                        )}
+
+                              <div className="space-y-1">
+                                <Progress value={progress} className="h-2" />
+                                <p className="text-[11px] text-muted-foreground">Reste: {formatCurrency(remaining)}</p>
+                              </div>
+
+                              {isExpanded && (
+                                <div className="space-y-3">
+                                  <Separator />
+
+                                  {plan.scheduledTranches && plan.scheduledTranches.length > 0 && (
+                                    <div className="space-y-1.5">
+                                      <p className="text-xs font-semibold text-muted-foreground">Échéancier</p>
+                                      {(() => {
+                                        const alloc = getAllocationSummary(plan);
+                                        return plan.scheduledTranches.map(tr => {
+                                          const trAlloc = alloc.find(a => a.name === tr.name);
+                                          const state = trAlloc?.status ?? 'unpaid';
+                                          return (
+                                            <div key={tr.id} className="flex items-center justify-between text-xs rounded-md border px-2 py-1.5">
+                                              <span>{tr.name}</span>
+                                              <span className="text-muted-foreground">
+                                                {state === 'paid' ? 'Payé' : state === 'partial' ? `Avance ${formatCurrency(trAlloc?.paid || 0)}` : 'Non payé'}
+                                                {' · '}
+                                                {new Date(tr.dueDate).toLocaleDateString('fr-FR')}
+                                              </span>
+                                            </div>
+                                          );
+                                        });
+                                      })()}
+                                    </div>
+                                  )}
+
+                                  <div className="space-y-1.5">
+                                    <p className="text-xs font-semibold text-muted-foreground">Historique ({plan.installments.length})</p>
+                                    {plan.installments.length === 0 ? (
+                                      <p className="text-xs text-muted-foreground italic">Aucun paiement enregistré</p>
+                                    ) : (
+                                      plan.installments
+                                        .slice()
+                                        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+                                        .map(inst => (
+                                          <div key={inst.id} className="flex items-center justify-between text-xs rounded-md border px-2 py-1.5">
+                                            <span className="font-medium text-success">{formatCurrency(inst.amount)}</span>
+                                            <span className="text-muted-foreground">{new Date(inst.date).toLocaleDateString('fr-FR')} · {getMethodLabel(inst.paymentMethod)}</span>
+                                          </div>
+                                        ))
+                                    )}
+                                  </div>
+
+                                  {canEdit && (
+                                    <div className="flex gap-2 flex-wrap">
+                                      {plan.status === 'en_cours' && progress >= 100 && (
+                                        <Button size="sm" variant="outline" onClick={() => handleMarkComplete(plan.id)} className="gap-1 text-xs text-success">
+                                          <CheckCircle2 className="h-3.5 w-3.5" /> Marquer terminé
+                                        </Button>
+                                      )}
+                                      {plan.status === 'en_cours' && (
+                                        <Button size="sm" variant="ghost" onClick={() => handleArchive(plan.id)} className="gap-1 text-xs text-muted-foreground">
+                                          <Archive className="h-3.5 w-3.5" /> Archiver
+                                        </Button>
+                                      )}
+                                      {(plan.status === 'termine' || plan.status === 'annule' || plan.status === 'archive') && (
+                                        <Button size="sm" variant="outline" onClick={() => handleReopen(plan.id)} className="gap-1 text-xs">
+                                          <ArchiveRestore className="h-3.5 w-3.5" /> Restaurer
+                                        </Button>
+                                      )}
+                                      {(plan.status === 'termine' || plan.status === 'annule' || plan.status === 'archive') && (
+                                        <AlertDialog>
+                                          <AlertDialogTrigger asChild>
+                                            <Button size="sm" variant="ghost" className="gap-1 text-xs text-destructive hover:text-destructive">
+                                              <Trash2 className="h-3.5 w-3.5" /> Supprimer
+                                            </Button>
+                                          </AlertDialogTrigger>
+                                          <AlertDialogContent>
+                                            <AlertDialogHeader>
+                                              <AlertDialogTitle>Supprimer ce plan de suivi ?</AlertDialogTitle>
+                                              <AlertDialogDescription>
+                                                Cette action est irréversible. Le plan de suivi de <strong>{plan.clientName}</strong> sera définitivement supprimé. L'action sera enregistrée dans le Super Audit.
+                                              </AlertDialogDescription>
+                                            </AlertDialogHeader>
+                                            <AlertDialogFooter>
+                                              <AlertDialogCancel>Annuler</AlertDialogCancel>
+                                              <AlertDialogAction onClick={() => handleDelete(plan)} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                                                Supprimer
+                                              </AlertDialogAction>
+                                            </AlertDialogFooter>
+                                          </AlertDialogContent>
+                                        </AlertDialog>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
+
+          {servicePlans.length > 0 && (
+            <div className="space-y-3">
+              <p className="text-sm font-semibold text-muted-foreground">Plans de service</p>
+              {servicePlans.map(plan => {
+                const paid = getPaidAmount(plan);
+                const remaining = getRemainingAmount(plan);
+                const statusCfg = STATUS_CONFIG[plan.status];
+                const StatusIcon = statusCfg.icon;
+                return (
+                  <Card key={plan.id} className="border-0 shadow-sm">
+                    <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div>
+                        <p className="font-semibold text-sm">{plan.label}</p>
+                        <p className="text-xs text-muted-foreground">{plan.clientName} · {getDeptName(plan.departmentId)}</p>
                       </div>
-                      {plan.description && (
-                        <>
-                          <Separator />
-                          <p className="text-xs text-muted-foreground">{plan.description}</p>
-                        </>
-                      )}
-                      <p className="text-[10px] text-muted-foreground">
-                        Créé le {new Date(plan.createdAt).toLocaleDateString('fr-FR')} par {plan.createdBy}
-                      </p>
-                    </>
-                  )}
-                </CardContent>
-              </Card>
-            );
-          })}
+                      <div className="flex items-center gap-2">
+                        <Badge className={`text-[10px] ${statusCfg.color} border-0`}>
+                          <StatusIcon className="h-3 w-3 mr-0.5" />{statusCfg.label}
+                        </Badge>
+                        <Badge variant="outline" className="text-[10px]">{formatCurrency(paid)} / {formatCurrency(plan.totalAmount)}</Badge>
+                        {canEdit && plan.status === 'en_cours' && (
+                          <Button size="sm" onClick={() => openInstallDialog(plan.id)} className="gap-1 text-xs">
+                            <Banknote className="h-3.5 w-3.5" /> Paiement
+                          </Button>
+                        )}
+                        <span className="text-xs text-muted-foreground">Reste: {formatCurrency(remaining)}</span>
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
