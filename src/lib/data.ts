@@ -145,17 +145,18 @@ export const deleteTransaction = (id: string) => {
 
 export const exportTransactionsCSV = (): string => {
   const txs = getTransactions();
-  const headers = ['Date', 'Département', 'Type', 'Caisse', 'Nom', 'Catégorie', 'Description', 'Montant (FCFA)'];
+  const headers = ['Date/Heure', 'Département', 'Type', 'Caisse', 'Nom', 'Téléphone', 'Catégorie', 'Description', 'Montant (FCFA)'];
   const rows = txs
     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
     .map(tx => {
       const dept = getDepartment(tx.departmentId);
       return [
-        tx.date,
+        new Date(tx.date).toLocaleString('fr-FR'),
         dept.name,
         tx.type === 'income' ? 'Revenu' : 'Dépense',
         getPaymentMethodLabel(tx.paymentMethod || 'especes'),
         `"${(tx.personName || '').replace(/"/g, '""')}"`,
+        `"${(tx.phoneNumber || '').replace(/"/g, '""')}"`,
         tx.category,
         `"${tx.description.replace(/"/g, '""')}"`,
         tx.type === 'income' ? tx.amount : -tx.amount,

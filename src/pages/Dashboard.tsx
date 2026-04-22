@@ -9,7 +9,7 @@ import { ReportDialog } from "@/components/ReportDialog";
 import { departments, getGlobalStats, getTransactions, getStatsByPaymentMethod } from "@/lib/data";
 import { getCurrentUser, hasPermission, hasDepartmentAccess } from "@/lib/auth";
 import { toast } from "sonner";
-import { downloadDashboardReport } from "@/lib/reports";
+import { downloadDashboardReport, downloadTransactionsReport } from "@/lib/reports";
 import type { ReportOptions } from "@/lib/reports";
 import logoGuimsGroup from "@/assets/logo-guims-group.jpg";
 
@@ -33,8 +33,33 @@ export default function Dashboard() {
     setPaymentStats(getStatsByPaymentMethod());
   };
 
+  const generateCurrentMonthReport = () => {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = now.getMonth();
+    const startDate = new Date(y, m, 1).toISOString().slice(0, 10);
+    const endDate = new Date(y, m + 1, 0).toISOString().slice(0, 10);
+    downloadTransactionsReport({ startDate, endDate });
+    toast.success(`Rapport mensuel (${now.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' })}) téléchargé`);
+  };
+
+  const autoGenerateEndOfMonthReport = () => {
+    if (!hasPermission(getCurrentUser(), 'canExportData')) return;
+    const now = new Date();
+    const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    if (now.getDate() !== lastDayOfMonth) return;
+
+    const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const storageKey = `monthly-report-generated-${monthKey}`;
+    if (localStorage.getItem(storageKey)) return;
+
+    generateCurrentMonthReport();
+    localStorage.setItem(storageKey, now.toISOString());
+  };
+
   useEffect(() => {
     refresh();
+    autoGenerateEndOfMonthReport();
   }, []);
 
   return (
@@ -47,6 +72,12 @@ export default function Dashboard() {
           <p className="text-muted-foreground text-sm">Vue globale des finances de Guims Group</p>
         </div>
         <div className="flex gap-2">
+          {hasPermission(getCurrentUser(), 'canExportData') && (
+            <Button variant="outline" size="sm" className="gap-2" onClick={generateCurrentMonthReport}>
+              <FileDown className="h-4 w-4" />
+              <span className="hidden sm:inline">Rapport mensuel</span>
+            </Button>
+          )}
           <Button variant="outline" size="sm" className="gap-2" onClick={() => setReportOpen(true)}>
             <FileDown className="h-4 w-4" />
             <span className="hidden sm:inline">Rapport PDF</span>

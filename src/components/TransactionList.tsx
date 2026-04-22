@@ -35,6 +35,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
   // Edit form state
   const [editCategory, setEditCategory] = useState("");
   const [editPersonName, setEditPersonName] = useState("");
+  const [editPhoneNumber, setEditPhoneNumber] = useState("");
   const [editDescription, setEditDescription] = useState("");
   const [editAmount, setEditAmount] = useState("");
   const [editDate, setEditDate] = useState("");
@@ -48,6 +49,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
       const matchSearch = !q ||
         tx.category.toLowerCase().includes(q) ||
         (tx.personName || '').toLowerCase().includes(q) ||
+        (tx.phoneNumber || '').toLowerCase().includes(q) ||
         tx.description.toLowerCase().includes(q) ||
         getDepartment(tx.departmentId).name.toLowerCase().includes(q) ||
         getPaymentMethodLabel(tx.paymentMethod || 'especes').toLowerCase().includes(q) ||
@@ -97,6 +99,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
     setEditTx(tx);
     setEditCategory(tx.category);
     setEditPersonName(tx.personName || '');
+    setEditPhoneNumber(tx.phoneNumber || '');
     setEditDescription(tx.description);
     setEditAmount(String(tx.amount));
     setEditDate(tx.date.includes('T') ? tx.date.slice(0, 10) : tx.date);
@@ -122,10 +125,11 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
       toast.error("Veuillez saisir la justification de la modification");
       return;
     }
-    const previousData = JSON.stringify({ type: editTx.type, amount: editTx.amount, category: editTx.category, personName: editTx.personName, date: editTx.date, paymentMethod: editTx.paymentMethod, description: editTx.description });
+    const previousData = JSON.stringify({ type: editTx.type, amount: editTx.amount, category: editTx.category, personName: editTx.personName, phoneNumber: editTx.phoneNumber, date: editTx.date, paymentMethod: editTx.paymentMethod, description: editTx.description });
     updateTransaction(editTx.id, {
       category: editCategory,
       personName: editPersonName.trim(),
+      phoneNumber: editPhoneNumber.trim() || undefined,
       description: editDescription,
       amount: parsedAmount,
       date: editTx.date,
@@ -136,7 +140,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
     if (editTx.personName && (editTx.amount !== parsedAmount || editTx.category !== editCategory)) {
       syncEditedTransaction(editTx.personName, editTx.date, editTx.amount, parsedAmount, editTx.category, editCategory);
     }
-    const newData = JSON.stringify({ type: editType, amount: parsedAmount, category: editCategory, personName: editPersonName, date: editTx.date, paymentMethod: editPaymentMethod, description: editDescription });
+    const newData = JSON.stringify({ type: editType, amount: parsedAmount, category: editCategory, personName: editPersonName, phoneNumber: editPhoneNumber.trim() || undefined, date: editTx.date, paymentMethod: editPaymentMethod, description: editDescription });
     const readableDetails = buildHumanDiff(previousData, newData);
     if (currentUser) {
       addAuditEntry({
@@ -206,14 +210,15 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
     if (filtered.length > 0) {
       autoTable(doc, {
         startY: y,
-        head: [["N°", "Date", "Département", "Nom", "Type", "Catégorie", "Description", "Caisse", "Montant"]],
+        head: [["N°", "Date/Heure", "Département", "Nom", "Téléphone", "Type", "Catégorie", "Description", "Caisse", "Montant"]],
         body: filtered.map((tx, i) => {
           const dept = getDepartment(tx.departmentId);
           return [
             String(i + 1),
-            new Date(tx.date).toLocaleDateString("fr-FR"),
+            new Date(tx.date).toLocaleString("fr-FR"),
             dept.name,
             tx.personName || "—",
+            tx.phoneNumber || "—",
             tx.type === "income" ? "Revenu" : "Dépense",
             tx.category,
             tx.description || "—",
@@ -227,8 +232,9 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
         styles: { fontSize: 8 },
         columnStyles: {
           0: { cellWidth: 12 },
-          6: { cellWidth: 55 },
-          8: { halign: "right", fontStyle: "bold" },
+          1: { cellWidth: 34 },
+          7: { cellWidth: 48 },
+          9: { halign: "right", fontStyle: "bold" },
         },
         alternateRowStyles: { fillColor: [245, 247, 250] },
       });
@@ -302,13 +308,13 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
             <Table className="min-w-[700px]">
               <TableHeader>
                 <TableRow>
-                  <TableHead>Date</TableHead>
+                  <TableHead>Date/Heure</TableHead>
                   <TableHead>Type</TableHead>
                   <TableHead>Caisse</TableHead>
                   {showDepartment && <TableHead>Département</TableHead>}
                   <TableHead>Nom</TableHead>
                   <TableHead>Catégorie</TableHead>
-                  <TableHead>Description</TableHead>
+                  <TableHead>Détails</TableHead>
                   <TableHead className="text-right">Montant</TableHead>
                   <TableHead className="w-20"></TableHead>
                 </TableRow>
@@ -319,7 +325,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
                   return (
                     <TableRow key={tx.id}>
                       <TableCell className="text-sm">
-                        {new Date(tx.date).toLocaleDateString('fr-FR')}
+                        {new Date(tx.date).toLocaleString('fr-FR')}
                       </TableCell>
                       <TableCell>
                         {tx.type === 'income' ? (
@@ -349,7 +355,12 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
                       )}
                       <TableCell className="text-sm font-medium">{tx.personName || '—'}</TableCell>
                       <TableCell className="text-sm">{tx.category}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground max-w-[200px] truncate">{tx.description}</TableCell>
+                      <TableCell className="text-sm text-muted-foreground max-w-[260px]">
+                        <div className="space-y-1">
+                          <p className="truncate">{tx.description || '—'}</p>
+                          <p className="text-xs">Numéro: {tx.phoneNumber || '—'}</p>
+                        </div>
+                      </TableCell>
                       <TableCell className={`text-right font-semibold ${tx.type === 'income' ? 'text-success' : 'text-destructive'}`}>
                         {tx.type === 'income' ? '+' : '-'}{formatCurrency(tx.amount)}
                       </TableCell>
@@ -473,6 +484,15 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
                 <Label>Nom de la personne</Label>
                 <Input placeholder="Nom..." value={editPersonName} onChange={(e) => setEditPersonName(e.target.value)} maxLength={100} />
               </div>
+            </div>
+            <div className="space-y-2">
+              <Label>Numéro de téléphone</Label>
+              <Input
+                placeholder="Ex: 6 99 00 00 00"
+                value={editPhoneNumber}
+                onChange={(e) => setEditPhoneNumber(e.target.value)}
+                maxLength={30}
+              />
             </div>
             <div className="space-y-2">
               <Label>Description</Label>

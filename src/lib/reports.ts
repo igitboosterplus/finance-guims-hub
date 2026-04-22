@@ -385,14 +385,15 @@ export function downloadTransactionsReport(opts?: ReportOptions) {
   if (txs.length > 0) {
     autoTable(doc, {
       startY: y,
-      head: [["N°", "Date", "Département", "Nom", "Type", "Catégorie", "Description", "Caisse", "Montant"]],
+      head: [["N°", "Date/Heure", "Département", "Nom", "Téléphone", "Type", "Catégorie", "Description", "Caisse", "Montant"]],
       body: txs.map((tx, i) => {
         const dept = getDepartment(tx.departmentId);
         return [
           String(i + 1),
-          new Date(tx.date).toLocaleDateString("fr-FR"),
+          new Date(tx.date).toLocaleString("fr-FR"),
           dept.name,
           tx.personName || "—",
+          tx.phoneNumber || "—",
           tx.type === "income" ? "Revenu" : "Dépense",
           tx.category,
           tx.description || "—",
@@ -406,8 +407,9 @@ export function downloadTransactionsReport(opts?: ReportOptions) {
       styles: { fontSize: 8 },
       columnStyles: {
         0: { cellWidth: 12 },
-        6: { cellWidth: 55 },
-        8: { halign: "right", fontStyle: "bold" },
+        1: { cellWidth: 34 },
+        7: { cellWidth: 48 },
+        9: { halign: "right", fontStyle: "bold" },
       },
       alternateRowStyles: { fillColor: [245, 247, 250] },
     });
