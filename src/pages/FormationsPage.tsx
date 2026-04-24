@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Separator } from "@/components/ui/separator";
-import { departments, type DepartmentId, formatCurrency, addTransaction, PAYMENT_METHODS, type PaymentMethod } from "@/lib/data";
+import { departments, type DepartmentId, formatCurrency, addTransaction, getPaymentMethodsForDepartment, type PaymentMethod } from "@/lib/data";
 import { getCurrentUser, hasPermission, hasDepartmentAccess, addAuditEntry } from "@/lib/auth";
 import {
   getFormationsCatalog, addFormationCatalog, updateFormationCatalog, deleteFormationCatalog,
@@ -1407,7 +1407,7 @@ export default function FormationsPage() {
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
-                              {PAYMENT_METHODS.map(m => (
+                              {getPaymentMethodsForDepartment(fm.departmentId).map(m => (
                                 <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
                               ))}
                             </SelectContent>

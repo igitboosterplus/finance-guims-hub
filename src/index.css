@@ -68,6 +68,8 @@ body {
     --dept-guims-academy-light: 280 65% 95%;
     --dept-digitbooster: 25 95% 53%;
     --dept-digitbooster-light: 25 95% 95%;
+    --dept-charges-entreprise: 352 72% 46%;
+    --dept-charges-entreprise-light: 352 72% 96%;
 
     --sidebar-background: 222 47% 11%;
     --sidebar-foreground: 220 14% 96%;
@@ -149,6 +151,9 @@ body {
   .dept-digitbooster {
     color: hsl(var(--dept-digitbooster));
   }
+  .dept-charges-entreprise {
+    color: hsl(var(--dept-charges-entreprise));
+  }
   .bg-dept-gaba {
     background-color: hsl(var(--dept-gaba));
   }
@@ -161,6 +166,9 @@ body {
   .bg-dept-digitbooster {
     background-color: hsl(var(--dept-digitbooster));
   }
+  .bg-dept-charges-entreprise {
+    background-color: hsl(var(--dept-charges-entreprise));
+  }
   .bg-dept-gaba-light {
     background-color: hsl(var(--dept-gaba-light));
   }
@@ -172,5 +180,8 @@ body {
   }
   .bg-dept-digitbooster-light {
     background-color: hsl(var(--dept-digitbooster-light));
+  }
+  .bg-dept-charges-entreprise-light {
+    background-color: hsl(var(--dept-charges-entreprise-light));
   }
 }

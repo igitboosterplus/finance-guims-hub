@@ -26,7 +26,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { getCurrentUser, hasDepartmentAccess } from "@/lib/auth";
-import { formatCurrency, departments, type DepartmentId, addTransaction, PAYMENT_METHODS, type PaymentMethod, getTransactionsByDepartment } from "@/lib/data";
+import { formatCurrency, departments, type DepartmentId, addTransaction, getPaymentMethodsForDepartment, type PaymentMethod, getTransactionsByDepartment } from "@/lib/data";
 import { downloadStockReport } from "@/lib/reports";
 import type { ReportOptions } from "@/lib/reports";
 import { ReportDialog } from "@/components/ReportDialog";
@@ -1349,7 +1349,7 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
         open={stockReportOpen}
         onOpenChange={setStockReportOpen}
         title={`Rapport de stock — ${departmentId === 'gaba' ? 'GABA' : 'Guims Academy'}`}
-        onGenerate={(opts) => { downloadStockReport(opts, departmentId); toast.success('Rapport PDF téléchargé'); }}
+        onGenerate={async (opts) => { await downloadStockReport(opts, departmentId); toast.success('Rapport généré'); }}
       />
 
       {/* New / Edit Kit dialog */}
@@ -1458,7 +1458,7 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
               <Select value={sellKitForm.paymentMethod} onValueChange={v => setSellKitForm(f => ({ ...f, paymentMethod: v as PaymentMethod }))}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {PAYMENT_METHODS.map(m => <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>)}
+                  {getPaymentMethodsForDepartment(departmentId).map(m => <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>

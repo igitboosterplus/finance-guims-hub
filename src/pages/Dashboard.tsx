@@ -33,17 +33,17 @@ export default function Dashboard() {
     setPaymentStats(getStatsByPaymentMethod());
   };
 
-  const generateCurrentMonthReport = () => {
+  const generateCurrentMonthReport = async () => {
     const now = new Date();
     const y = now.getFullYear();
     const m = now.getMonth();
     const startDate = new Date(y, m, 1).toISOString().slice(0, 10);
     const endDate = new Date(y, m + 1, 0).toISOString().slice(0, 10);
-    downloadTransactionsReport({ startDate, endDate });
+    await downloadTransactionsReport({ startDate, endDate });
     toast.success(`Rapport mensuel (${now.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' })}) téléchargé`);
   };
 
-  const autoGenerateEndOfMonthReport = () => {
+  const autoGenerateEndOfMonthReport = async () => {
     if (!hasPermission(getCurrentUser(), 'canExportData')) return;
     const now = new Date();
     const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
@@ -53,13 +53,13 @@ export default function Dashboard() {
     const storageKey = `monthly-report-generated-${monthKey}`;
     if (localStorage.getItem(storageKey)) return;
 
-    generateCurrentMonthReport();
+    await generateCurrentMonthReport();
     localStorage.setItem(storageKey, now.toISOString());
   };
 
   useEffect(() => {
     refresh();
-    autoGenerateEndOfMonthReport();
+    void autoGenerateEndOfMonthReport();
   }, []);
 
   return (
@@ -89,7 +89,7 @@ export default function Dashboard() {
         open={reportOpen}
         onOpenChange={setReportOpen}
         title="Rapport global"
-        onGenerate={(opts) => { downloadDashboardReport(opts); toast.success('Rapport PDF téléchargé'); }}
+        onGenerate={async (opts) => { await downloadDashboardReport(opts); toast.success('Rapport généré'); }}
       />
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">

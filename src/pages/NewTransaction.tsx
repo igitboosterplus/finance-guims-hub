@@ -6,9 +6,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { departments, addTransaction, PAYMENT_METHODS, isEnrollmentCategory, isInscriptionCategory, isTranche, type DepartmentId, type PaymentMethod, formatCurrency } from "@/lib/data";
+import { departments, addTransaction, getPaymentMethodsForDepartment, isEnrollmentCategory, isInscriptionCategory, isTranche, type DepartmentId, type PaymentMethod, formatCurrency } from "@/lib/data";
 import { addAuditEntry, getCurrentUser, hasPermission, hasDepartmentAccess } from "@/lib/auth";
 import { getStockItems, addStockMovement, getFormationsByDepartment, addPaymentPlan, addInstallment, getPaymentPlans, getEnrolledStudents, buildAllocationMessage, updatePlanInscription, getAllocationSummary, getRemainingAmount, addEnrollment, getEnrollmentsByFormation, updateEnrollment, type StockItem, type FormationCatalog, type FormationPack } from "@/lib/stock";
+import { findEmployeeByName, getActiveEmployeesByDepartment } from "@/lib/employees";
 import { toast } from "sonner";
 import { ArrowLeft, ShieldAlert, Package, GraduationCap, Star, Award, CreditCard } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -40,6 +41,7 @@ export default function NewTransaction() {
   const categories = selectedDept
     ? type === 'income' ? selectedDept.incomeCategories : selectedDept.expenseCategories
     : [];
+  const paymentMethods = getPaymentMethodsForDepartment(selectedDept?.id);
 
   // Categories that involve stock movements (multi-department)
   const STOCK_CATEGORIES_MAP: Record<string, Record<string, 'entry' | 'exit'>> = {
@@ -72,6 +74,10 @@ export default function NewTransaction() {
   const enrolledStudents = (isTranche(category) && selectedFormation)
     ? getEnrolledStudents(selectedFormation.id)
     : [];
+  const companyEmployees = departmentId === 'charges-entreprise'
+    ? getActiveEmployeesByDepartment('charges-entreprise')
+    : [];
+  const isEmployeePayment = departmentId === 'charges-entreprise' && category === 'Paiement employés';
 
   const handleFormationChange = (name: string) => {
     setFormationName(name);
@@ -430,7 +436,7 @@ export default function NewTransaction() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Département *</Label>
-                <Select value={departmentId} onValueChange={(v) => { setDepartmentId(v); setCategory(''); setStockItemId(''); setQuantity(''); setFormationName(''); setFormationPackId(''); setDesiredTrainingDate(''); setPhoneNumber(''); }}>
+                <Select value={departmentId} onValueChange={(v) => { setDepartmentId(v); setPaymentMethod(getPaymentMethodsForDepartment(v as DepartmentId)[0]?.value || 'especes'); setCategory(''); setStockItemId(''); setQuantity(''); setFormationName(''); setFormationPackId(''); setDesiredTrainingDate(''); setPhoneNumber(''); }}>
                   <SelectTrigger>
                     <SelectValue placeholder="Choisir un département" />
                   </SelectTrigger>
@@ -469,7 +475,7 @@ export default function NewTransaction() {
                     <SelectValue placeholder="Choisir une caisse" />
                   </SelectTrigger>
                   <SelectContent>
-                    {PAYMENT_METHODS.map((m) => (
+                    {paymentMethods.map((m) => (
                       <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
                     ))}
                   </SelectContent>
@@ -561,9 +567,18 @@ export default function NewTransaction() {
                 <Input
                   placeholder="Ex: Jean Dupont, Marie Kamga..."
                   value={personName}
-                  onChange={(e) => setPersonName(e.target.value)}
+                  onChange={(e) => {
+                    const nextName = e.target.value;
+                    setPersonName(nextName);
+                    if (isEmployeePayment) {
+                      const employee = findEmployeeByName('charges-entreprise', nextName);
+                      if (employee?.phoneNumber) {
+                        setPhoneNumber(prev => prev || employee.phoneNumber || '');
+                      }
+                    }
+                  }}
                   maxLength={100}
-                  list={enrolledStudents.length > 0 ? "enrolled-students-list" : undefined}
+                  list={enrolledStudents.length > 0 ? "enrolled-students-list" : isEmployeePayment && companyEmployees.length > 0 ? "employee-list" : undefined}
                 />
                 {enrolledStudents.length > 0 && (
                   <datalist id="enrolled-students-list">
@@ -572,9 +587,18 @@ export default function NewTransaction() {
                     ))}
                   </datalist>
                 )}
+                {isEmployeePayment && companyEmployees.length > 0 && (
+                  <datalist id="employee-list">
+                    {companyEmployees.map((employee) => (
+                      <option key={employee.id} value={employee.fullName} />
+                    ))}
+                  </datalist>
+                )}
                 <p className="text-xs text-muted-foreground">
                   {enrolledStudents.length > 0
                     ? `${enrolledStudents.length} étudiant(s) inscrit(s) — commencez à taper pour voir les suggestions`
+                    : isEmployeePayment && companyEmployees.length > 0
+                      ? `${companyEmployees.length} employé(s) actif(s) — commencez à taper pour voir les suggestions`
                     : 'Client, fournisseur, formé, élève, etc.'}
                 </p>
               </div>

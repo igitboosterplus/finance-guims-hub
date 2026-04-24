@@ -2,10 +2,11 @@ import logoGaba from '@/assets/logo-gaba.png';
 import logoGuimsEduc from '@/assets/logo-guims-educ.jpg';
 import logoGuimsAcademy from '@/assets/logo-guims-academy.jpg';
 import logoDigitbooster from '@/assets/logo-digitbooster.png';
+import logoGuimsGroup from '@/assets/logo-guims-group.jpg';
 import { syncSetDoc, syncDeleteDoc, pushAllToSupabase } from './sync';
 import { TABLES } from './firebase';
 
-export type DepartmentId = 'gaba' | 'guims-educ' | 'guims-academy' | 'digitboosterplus';
+export type DepartmentId = 'gaba' | 'guims-educ' | 'guims-academy' | 'digitboosterplus' | 'charges-entreprise';
 
 export interface Department {
   id: DepartmentId;
@@ -19,17 +20,73 @@ export interface Department {
   expenseCategories: string[];
 }
 
-export type PaymentMethod = 'especes' | 'momo' | 'om' | 'banque';
+export type PaymentMethod =
+  | 'especes'
+  | 'banque'
+  | 'momo'
+  | 'om'
+  | 'momo-gaba'
+  | 'om-gaba'
+  | 'momo-guims-educ'
+  | 'om-guims-educ'
+  | 'momo-guims-academy'
+  | 'om-guims-academy'
+  | 'momo-digitboosterplus'
+  | 'om-digitboosterplus';
 
 export const PAYMENT_METHODS: { value: PaymentMethod; label: string }[] = [
   { value: 'especes', label: 'Espèces' },
-  { value: 'momo', label: 'MoMo' },
-  { value: 'om', label: 'OM' },
   { value: 'banque', label: 'Banque' },
+  { value: 'momo', label: 'MoMo Direction Générale' },
+  { value: 'om', label: 'OM Direction Générale' },
+  { value: 'momo-gaba', label: 'MoMo GABA' },
+  { value: 'om-gaba', label: 'OM GABA' },
+  { value: 'momo-guims-educ', label: 'MoMo Guims Educ' },
+  { value: 'om-guims-educ', label: 'OM Guims Educ' },
+  { value: 'momo-guims-academy', label: 'MoMo Guims Academy' },
+  { value: 'om-guims-academy', label: 'OM Guims Academy' },
+  { value: 'momo-digitboosterplus', label: 'MoMo DigitBoosterPlus' },
+  { value: 'om-digitboosterplus', label: 'OM DigitBoosterPlus' },
 ];
 
-export const getPaymentMethodLabel = (method: PaymentMethod): string => {
-  return PAYMENT_METHODS.find(m => m.value === method)?.label ?? method;
+const DEPARTMENT_PAYMENT_METHODS: Record<DepartmentId, PaymentMethod[]> = {
+  'gaba': ['especes', 'banque', 'momo-gaba', 'om-gaba'],
+  'guims-educ': ['especes', 'banque', 'momo-guims-educ', 'om-guims-educ'],
+  'guims-academy': ['especes', 'banque', 'momo-guims-academy', 'om-guims-academy'],
+  'digitboosterplus': ['especes', 'banque', 'momo-digitboosterplus', 'om-digitboosterplus'],
+  'charges-entreprise': ['especes', 'banque', 'momo', 'om'],
+};
+
+export const getPaymentMethodsForDepartment = (departmentId?: DepartmentId): { value: PaymentMethod; label: string }[] => {
+  const methods = departmentId ? DEPARTMENT_PAYMENT_METHODS[departmentId] : ['especes', 'banque', 'momo', 'om'];
+  return methods.map(method => ({ value: method, label: getPaymentMethodLabel(method, departmentId) }));
+};
+
+export const normalizePaymentMethod = (method: PaymentMethod, departmentId?: DepartmentId): PaymentMethod => {
+  if (method === 'momo' && departmentId && departmentId !== 'charges-entreprise') {
+    const mapped = {
+      'gaba': 'momo-gaba',
+      'guims-educ': 'momo-guims-educ',
+      'guims-academy': 'momo-guims-academy',
+      'digitboosterplus': 'momo-digitboosterplus',
+    } as const;
+    return mapped[departmentId] ?? method;
+  }
+  if (method === 'om' && departmentId && departmentId !== 'charges-entreprise') {
+    const mapped = {
+      'gaba': 'om-gaba',
+      'guims-educ': 'om-guims-educ',
+      'guims-academy': 'om-guims-academy',
+      'digitboosterplus': 'om-digitboosterplus',
+    } as const;
+    return mapped[departmentId] ?? method;
+  }
+  return method;
+};
+
+export const getPaymentMethodLabel = (method: PaymentMethod, departmentId?: DepartmentId): string => {
+  const normalized = normalizePaymentMethod(method, departmentId);
+  return PAYMENT_METHODS.find(m => m.value === normalized)?.label ?? normalized;
 };
 
 export interface Transaction {
@@ -99,7 +156,20 @@ export const departments: Department[] = [
     incomeCategories: ['Création site web', 'Boost Facebook', 'Publication Facebook', 'Community management', 'Autres services digitaux'],
     expenseCategories: ['Hébergement', 'Outils digitaux', 'Publicité', 'Autres dépenses'],
   },
+  {
+    id: 'charges-entreprise',
+    name: 'Direction Générale',
+    description: 'Charges communes, coordination générale, salaires et frais généraux de l\'entreprise',
+    logo: logoGuimsGroup,
+    colorClass: 'dept-charges-entreprise',
+    bgClass: 'bg-dept-charges-entreprise',
+    bgLightClass: 'bg-dept-charges-entreprise-light',
+    incomeCategories: ['Apport de trésorerie', 'Remboursement de charges', 'Autres revenus'],
+    expenseCategories: ['Paiement employés', 'Connexion internet', 'Loyer et charges locatives', 'Transport et missions', 'Impôts et taxes', 'Fournitures et services', 'Autres dépenses'],
+  },
 ];
+
+export const STOCK_ENABLED_DEPARTMENT_IDS: DepartmentId[] = ['gaba', 'guims-educ', 'guims-academy', 'digitboosterplus'];
 
 export const getDepartment = (id: DepartmentId) => departments.find(d => d.id === id)!;
 
@@ -154,7 +224,7 @@ export const exportTransactionsCSV = (): string => {
         new Date(tx.date).toLocaleString('fr-FR'),
         dept.name,
         tx.type === 'income' ? 'Revenu' : 'Dépense',
-        getPaymentMethodLabel(tx.paymentMethod || 'especes'),
+        getPaymentMethodLabel(tx.paymentMethod || 'especes', tx.departmentId),
         `"${(tx.personName || '').replace(/"/g, '""')}"`,
         `"${(tx.phoneNumber || '').replace(/"/g, '""')}"`,
         tx.category,
@@ -209,13 +279,27 @@ export const getGlobalStats = () => {
 
 export const getStatsByPaymentMethod = (txs?: Transaction[]) => {
   const all = txs ?? getTransactions();
-  const methods: PaymentMethod[] = ['especes', 'momo', 'om', 'banque'];
-  return methods.map(method => {
-    const filtered = all.filter(t => (t.paymentMethod || 'especes') === method);
-    const income = filtered.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
-    const expenses = filtered.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
-    return { method, label: getPaymentMethodLabel(method), income, expenses, balance: income - expenses, count: filtered.length };
-  }).filter(s => s.count > 0);
+  const grouped = new Map<PaymentMethod, { income: number; expenses: number; count: number; departmentId?: DepartmentId }>();
+
+  for (const tx of all) {
+    const method = normalizePaymentMethod(tx.paymentMethod || 'especes', tx.departmentId);
+    const current = grouped.get(method) || { income: 0, expenses: 0, count: 0, departmentId: tx.departmentId };
+    if (tx.type === 'income') current.income += tx.amount;
+    else current.expenses += tx.amount;
+    current.count += 1;
+    grouped.set(method, current);
+  }
+
+  return [...grouped.entries()]
+    .map(([method, value]) => ({
+      method,
+      label: getPaymentMethodLabel(method, value.departmentId),
+      income: value.income,
+      expenses: value.expenses,
+      balance: value.income - value.expenses,
+      count: value.count,
+    }))
+    .sort((a, b) => b.count - a.count);
 };
 
 export const formatCurrency = (amount: number) => {

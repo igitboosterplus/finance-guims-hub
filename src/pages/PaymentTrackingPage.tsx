@@ -9,7 +9,7 @@ import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
-import { departments, type DepartmentId, type PaymentMethod, formatCurrency, PAYMENT_METHODS, addTransaction, isInscriptionCategory } from "@/lib/data";
+import { departments, type DepartmentId, type PaymentMethod, formatCurrency, getPaymentMethodLabel, getPaymentMethodsForDepartment, addTransaction, isInscriptionCategory } from "@/lib/data";
 import { addAuditEntry, addSuperAuditEntry, getCurrentUser, hasPermission, hasDepartmentAccess } from "@/lib/auth";
 import {
   getPaymentPlans, addPaymentPlan, addInstallment, updatePaymentPlanStatus, deletePaymentPlan,
@@ -69,6 +69,7 @@ export default function PaymentTrackingPage() {
   // Archive (no delete from suivi)
 
   const accessibleDepts = departments.filter(d => hasDepartmentAccess(currentUser, d.id));
+  const installPaymentMethods = getPaymentMethodsForDepartment(plans.find(p => p.id === installPlanId)?.departmentId);
 
   useEffect(() => { refresh(); }, []);
 
@@ -310,7 +311,7 @@ export default function PaymentTrackingPage() {
   };
 
   const getDeptName = (id: string) => departments.find(d => d.id === id)?.name ?? id;
-  const getMethodLabel = (m: string) => PAYMENT_METHODS.find(pm => pm.value === m)?.label ?? m;
+  const getMethodLabel = (m: PaymentMethod, departmentId?: DepartmentId) => getPaymentMethodLabel(m, departmentId);
 
   return (
     <div className="space-y-6">
@@ -560,7 +561,7 @@ export default function PaymentTrackingPage() {
                                         .map(inst => (
                                           <div key={inst.id} className="flex items-center justify-between text-xs rounded-md border px-2 py-1.5">
                                             <span className="font-medium text-success">{formatCurrency(inst.amount)}</span>
-                                            <span className="text-muted-foreground">{new Date(inst.date).toLocaleDateString('fr-FR')} · {getMethodLabel(inst.paymentMethod)}</span>
+                                            <span className="text-muted-foreground">{new Date(inst.date).toLocaleDateString('fr-FR')} · {getMethodLabel(inst.paymentMethod, plan.departmentId)}</span>
                                           </div>
                                         ))
                                     )}
@@ -865,7 +866,7 @@ export default function PaymentTrackingPage() {
                 <Select value={installMethod} onValueChange={setInstallMethod}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {PAYMENT_METHODS.map(m => (
+                    {installPaymentMethods.map(m => (
                       <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
                     ))}
                   </SelectContent>

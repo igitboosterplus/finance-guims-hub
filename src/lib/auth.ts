@@ -2,6 +2,7 @@ export type UserRole = 'superadmin' | 'admin';
 
 import { syncFullCollection, syncDeleteDoc } from './sync';
 import { TABLES } from './firebase';
+import { STOCK_ENABLED_DEPARTMENT_IDS } from './data';
 
 export interface UserPermissions {
   departments: string[];       // IDs des départements accessibles (vide = aucun)
@@ -28,8 +29,8 @@ export const DEFAULT_PERMISSIONS: UserPermissions = {
 };
 
 export const FULL_PERMISSIONS: UserPermissions = {
-  departments: ['gaba', 'guims-educ', 'guims-academy', 'digitboosterplus'],
-  stockDepartments: ['gaba', 'guims-educ', 'guims-academy', 'digitboosterplus'],
+  departments: ['gaba', 'guims-educ', 'guims-academy', 'digitboosterplus', 'charges-entreprise'],
+  stockDepartments: STOCK_ENABLED_DEPARTMENT_IDS,
   canCreateTransaction: true,
   canEditTransaction: true,
   canExportData: true,
@@ -146,6 +147,7 @@ export function purgeAllData(): void {
     'finance-audit-log',
     'finance-super-audit',
     'finance-transactions',
+    'finance-employees',
     'gaba-stock-items',
     'gaba-stock-movements',
     'gaba-trainings',

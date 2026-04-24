@@ -6,7 +6,8 @@ import { StatsCard } from "@/components/StatsCard";
 import { TransactionList } from "@/components/TransactionList";
 import { FinanceChart } from "@/components/FinanceChart";
 import { ReportDialog } from "@/components/ReportDialog";
-import { getDepartment, getDepartmentStats, getTransactionsByDepartment, type DepartmentId } from "@/lib/data";
+import { EmployeeDirectory } from "@/components/EmployeeDirectory";
+import { getDepartment, getDepartmentStats, getTransactionsByDepartment, STOCK_ENABLED_DEPARTMENT_IDS, type DepartmentId } from "@/lib/data";
 import { getCurrentUser, hasDepartmentAccess, hasPermission, hasStockAccess } from "@/lib/auth";
 import { downloadDepartmentReport } from "@/lib/reports";
 import type { ReportOptions } from "@/lib/reports";
@@ -62,7 +63,7 @@ export default function DepartmentPage() {
               <span className="hidden sm:inline">Nouvelle transaction</span><span className="sm:hidden">Nouveau</span>
             </Button>
           )}
-          {(dept.id === 'gaba' || dept.id === 'guims-academy' || dept.id === 'guims-educ' || dept.id === 'digitboosterplus') && hasStockAccess(getCurrentUser(), dept.id) && (
+          {STOCK_ENABLED_DEPARTMENT_IDS.includes(dept.id) && hasStockAccess(getCurrentUser(), dept.id) && (
             <Button variant="outline" size="sm" onClick={() => navigate(`/${dept.id}/stock`)} className="shadow-md">
               <Package className="h-4 w-4 mr-1 sm:mr-2" />
               <span className="hidden sm:inline">Gestion des stocks</span><span className="sm:hidden">Stocks</span>
@@ -80,7 +81,7 @@ export default function DepartmentPage() {
         open={reportOpen}
         onOpenChange={setReportOpen}
         title={`Rapport — ${dept.name}`}
-        onGenerate={(opts) => { downloadDepartmentReport(dept.id, opts); toast.success('Rapport PDF téléchargé'); }}
+        onGenerate={async (opts) => { await downloadDepartmentReport(dept.id, opts); toast.success('Rapport généré'); }}
       />
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -89,6 +90,8 @@ export default function DepartmentPage() {
         <StatsCard title="Solde" value={stats.balance} icon={TrendingUp} colorClass={stats.balance >= 0 ? "text-success" : "text-destructive"} />
         <StatsCard title="Transactions" value={stats.count} icon={Receipt} isCurrency={false} />
       </div>
+
+      {dept.id === 'charges-entreprise' && <EmployeeDirectory departmentId={dept.id} />}
 
       <FinanceChart transactions={transactions} title={`Analyse - ${dept.name}`} />
 

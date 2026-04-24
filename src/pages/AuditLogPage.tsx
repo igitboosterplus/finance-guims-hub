@@ -78,9 +78,9 @@ export default function AuditLogPage() {
   const currentPage = Math.min(page, totalPages);
   const paginated = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
 
-  const handleExport = () => {
-    downloadAuditReport();
-    toast.success("Rapport d'audit PDF téléchargé");
+  const handleExport = async () => {
+    await downloadAuditReport();
+    toast.success("Rapport d'audit généré");
   };
 
   const handleDelete = (entryId: string) => {

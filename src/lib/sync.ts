@@ -285,6 +285,7 @@ export async function pullAllFromSupabase(): Promise<{ success: boolean; error?:
     await Promise.all([
       pullTable(TABLES.transactions, "finance-transactions"),
       pullTable(TABLES.users, "finance-users"),
+      pullTable(TABLES.employees, "finance-employees"),
       pullTable(TABLES.auditLog, "finance-audit-log"),
       pullTable(TABLES.superAudit, "finance-super-audit"),
       pullTable(TABLES.formationsCatalog, "formations-catalog"),
@@ -349,6 +350,7 @@ export async function pushAllToSupabase(): Promise<{ success: boolean; error?: s
     const sharedPairs: [TableName, string][] = [
       [TABLES.transactions, "finance-transactions"],
       [TABLES.users, "finance-users"],
+      [TABLES.employees, "finance-employees"],
       [TABLES.auditLog, "finance-audit-log"],
       [TABLES.superAudit, "finance-super-audit"],
       [TABLES.formationsCatalog, "formations-catalog"],
@@ -401,7 +403,7 @@ export async function purgeAllSupabase(): Promise<void> {
   const sb = getSupabase();
   if (!sb) return;
   const allTables: TableName[] = [
-    TABLES.transactions, TABLES.users, TABLES.auditLog, TABLES.superAudit,
+    TABLES.transactions, TABLES.users, TABLES.employees, TABLES.auditLog, TABLES.superAudit,
     TABLES.stockItems, TABLES.stockMovements, TABLES.trainings,
     TABLES.formationsCatalog, TABLES.paymentPlans, TABLES.stockKits,
     TABLES.enrollments,

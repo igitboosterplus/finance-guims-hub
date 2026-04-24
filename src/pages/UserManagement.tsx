@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { getAllUsers, approveUser, rejectUser, deleteUser, createUser, resetUserPassword, updateUserPermissions, getUserPermissions, type User, type UserRole, type UserPermissions, DEFAULT_PERMISSIONS } from "@/lib/auth";
-import { departments } from "@/lib/data";
+import { departments, STOCK_ENABLED_DEPARTMENT_IDS } from "@/lib/data";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import { UserPlus, Check, X, Trash2, KeyRound, Shield, ShieldCheck, Settings2, Building2, Plus, PenLine, Download, Upload, Package } from "lucide-react";
@@ -380,7 +380,7 @@ export default function UserManagement() {
               </Label>
               <p className="text-[11px] text-muted-foreground">Indépendant de l'accès au département. Une personne peut voir un département sans accéder à son stock.</p>
               <div className="grid grid-cols-1 gap-2">
-                {departments.map(dept => (
+                {departments.filter(dept => STOCK_ENABLED_DEPARTMENT_IDS.includes(dept.id)).map(dept => (
                   <label key={dept.id} className="flex items-center gap-3 p-2.5 rounded-lg border cursor-pointer hover:bg-accent/50 transition-colors">
                     <Checkbox
                       checked={(permsEdit.stockDepartments ?? []).includes(dept.id)}
@@ -392,7 +392,7 @@ export default function UserManagement() {
                 ))}
               </div>
               <div className="flex gap-2">
-                <Button type="button" variant="outline" size="sm" className="text-xs" onClick={() => setPermsEdit(p => ({ ...p, stockDepartments: departments.map(d => d.id) }))}>
+                <Button type="button" variant="outline" size="sm" className="text-xs" onClick={() => setPermsEdit(p => ({ ...p, stockDepartments: STOCK_ENABLED_DEPARTMENT_IDS }))}>
                   Tout sélectionner
                 </Button>
                 <Button type="button" variant="outline" size="sm" className="text-xs" onClick={() => setPermsEdit(p => ({ ...p, stockDepartments: [] }))}>

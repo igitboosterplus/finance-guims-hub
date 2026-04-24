@@ -36,6 +36,7 @@ export function getSupabase(): SupabaseClient | null {
 export const TABLES = {
   transactions: "transactions",
   users: "users",
+  employees: "employees",
   stockItems: "stock_items",
   stockMovements: "stock_movements",
   trainings: "trainings",
@@ -76,6 +77,12 @@ CREATE TABLE users (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   permissions JSONB,
   data JSONB
+);
+
+CREATE TABLE employees (
+  id UUID PRIMARY KEY,
+  data JSONB,
+  created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE TABLE stock_items (
@@ -123,12 +130,14 @@ CREATE TABLE audit_log (
 -- Désactiver RLS pour commencer (mode test)
 ALTER TABLE transactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE employees ENABLE ROW LEVEL SECURITY;
 ALTER TABLE stock_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE stock_movements ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit_log ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Allow all" ON transactions FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all" ON users FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all" ON employees FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all" ON stock_items FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all" ON stock_movements FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all" ON audit_log FOR ALL USING (true) WITH CHECK (true);

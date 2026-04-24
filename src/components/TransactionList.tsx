@@ -9,7 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Trash2, ArrowUpRight, ArrowDownRight, Search, Pencil, ChevronLeft, ChevronRight, Download, FileDown } from "lucide-react";
-import { formatCurrency, type Transaction, type PaymentMethod, getDepartment, deleteTransaction, updateTransaction, departments, exportTransactionsCSV, PAYMENT_METHODS, getPaymentMethodLabel } from "@/lib/data";
+import { formatCurrency, type Transaction, type PaymentMethod, getDepartment, deleteTransaction, updateTransaction, departments, exportTransactionsCSV, getPaymentMethodsForDepartment, getPaymentMethodLabel } from "@/lib/data";
 import { addAuditEntry, getCurrentUser, isSuperAdmin, hasPermission, buildHumanDiff } from "@/lib/auth";
 import { syncInstallmentFromTransaction, removeInstallmentFromTransaction, syncEditedTransaction } from "@/lib/stock";
 import { toast } from "sonner";
@@ -52,7 +52,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
         (tx.phoneNumber || '').toLowerCase().includes(q) ||
         tx.description.toLowerCase().includes(q) ||
         getDepartment(tx.departmentId).name.toLowerCase().includes(q) ||
-        getPaymentMethodLabel(tx.paymentMethod || 'especes').toLowerCase().includes(q) ||
+        getPaymentMethodLabel(tx.paymentMethod || 'especes', tx.departmentId).toLowerCase().includes(q) ||
         tx.amount.toString().includes(q);
       const matchType = typeFilter === "all" || tx.type === typeFilter;
       const matchCategory = categoryFilter === "all" || tx.category === categoryFilter;
@@ -222,7 +222,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
             tx.type === "income" ? "Revenu" : "Dépense",
             tx.category,
             tx.description || "—",
-            getPaymentMethodLabel(tx.paymentMethod || "especes"),
+            getPaymentMethodLabel(tx.paymentMethod || "especes", tx.departmentId),
             tx.type === "income" ? "+" + fmtAmt(tx.amount) : "-" + fmtAmt(tx.amount),
           ];
         }),
@@ -248,6 +248,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
   const editCategories = editDept
     ? editType === "income" ? editDept.incomeCategories : editDept.expenseCategories
     : [];
+  const editPaymentMethods = getPaymentMethodsForDepartment(editTx?.departmentId);
 
   return (
     <>
@@ -342,7 +343,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
                       </TableCell>
                       <TableCell>
                         <Badge variant="secondary" className="text-xs">
-                          {getPaymentMethodLabel(tx.paymentMethod || 'especes')}
+                          {getPaymentMethodLabel(tx.paymentMethod || 'especes', tx.departmentId)}
                         </Badge>
                       </TableCell>
                       {showDepartment && (
@@ -449,7 +450,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {PAYMENT_METHODS.map((m) => (
+                    {editPaymentMethods.map((m) => (
                       <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
                     ))}
                   </SelectContent>
