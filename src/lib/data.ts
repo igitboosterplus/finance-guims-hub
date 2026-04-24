@@ -37,8 +37,8 @@ export type PaymentMethod =
 export const PAYMENT_METHODS: { value: PaymentMethod; label: string }[] = [
   { value: 'especes', label: 'Espèces' },
   { value: 'banque', label: 'Banque' },
-  { value: 'momo', label: 'MoMo Direction Générale' },
-  { value: 'om', label: 'OM Direction Générale' },
+  { value: 'momo', label: 'MoMo (ancien non affecté)' },
+  { value: 'om', label: 'OM (ancien non affecté)' },
   { value: 'momo-gaba', label: 'MoMo GABA' },
   { value: 'om-gaba', label: 'OM GABA' },
   { value: 'momo-guims-educ', label: 'MoMo Guims Educ' },
@@ -54,7 +54,18 @@ const DEPARTMENT_PAYMENT_METHODS: Record<DepartmentId, PaymentMethod[]> = {
   'guims-educ': ['especes', 'banque', 'momo-guims-educ', 'om-guims-educ'],
   'guims-academy': ['especes', 'banque', 'momo-guims-academy', 'om-guims-academy'],
   'digitboosterplus': ['especes', 'banque', 'momo-digitboosterplus', 'om-digitboosterplus'],
-  'charges-entreprise': ['especes', 'banque', 'momo', 'om'],
+  'charges-entreprise': [
+    'especes',
+    'banque',
+    'momo-gaba',
+    'om-gaba',
+    'momo-guims-educ',
+    'om-guims-educ',
+    'momo-guims-academy',
+    'om-guims-academy',
+    'momo-digitboosterplus',
+    'om-digitboosterplus',
+  ],
 };
 
 export const getPaymentMethodsForDepartment = (departmentId?: DepartmentId): { value: PaymentMethod; label: string }[] => {
