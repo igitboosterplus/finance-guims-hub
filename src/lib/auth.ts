@@ -87,11 +87,40 @@ async function hashPassword(password: string): Promise<string> {
 
 function getUsers(): User[] {
   const data = localStorage.getItem(USERS_KEY);
-  return data ? JSON.parse(data) : [];
+  const users: User[] = data ? JSON.parse(data) : [];
+  const seenIds = new Set<string>();
+  const seenUsernames = new Set<string>();
+  const sanitized: User[] = [];
+
+  for (const user of users) {
+    const normalized = normalizeUsername(user.username);
+    if (seenIds.has(user.id) || seenUsernames.has(normalized)) continue;
+    seenIds.add(user.id);
+    seenUsernames.add(normalized);
+    sanitized.push(user);
+  }
+
+  if (sanitized.length !== users.length) {
+    localStorage.setItem(USERS_KEY, JSON.stringify(sanitized));
+  }
+
+  return sanitized;
 }
 
 function saveUsers(users: User[]) {
-  localStorage.setItem(USERS_KEY, JSON.stringify(users));
+  const seenIds = new Set<string>();
+  const seenUsernames = new Set<string>();
+  const sanitized: User[] = [];
+
+  for (const user of users) {
+    const normalized = normalizeUsername(user.username);
+    if (seenIds.has(user.id) || seenUsernames.has(normalized)) continue;
+    seenIds.add(user.id);
+    seenUsernames.add(normalized);
+    sanitized.push(user);
+  }
+
+  localStorage.setItem(USERS_KEY, JSON.stringify(sanitized));
   syncFullCollection(TABLES.users, USERS_KEY);
 }
 
@@ -244,8 +273,16 @@ export function approveUser(userId: string) {
 
 export function rejectUser(userId: string) {
   const users = getUsers();
-  saveUsers(users.filter(u => u.id !== userId));
-  syncDeleteDoc(TABLES.users, userId);
+  const target = users.find(u => u.id === userId);
+  if (!target) return;
+
+  const normalized = normalizeUsername(target.username);
+  const toDeleteIds = users
+    .filter(u => u.id === userId || normalizeUsername(u.username) === normalized)
+    .map(u => u.id);
+
+  saveUsers(users.filter(u => !toDeleteIds.includes(u.id)));
+  toDeleteIds.forEach(id => syncDeleteDoc(TABLES.users, id));
 }
 
 export async function resetUserPassword(userId: string, newPassword: string) {
@@ -259,8 +296,16 @@ export async function resetUserPassword(userId: string, newPassword: string) {
 
 export function deleteUser(userId: string) {
   const users = getUsers();
-  saveUsers(users.filter(u => u.id !== userId));
-  syncDeleteDoc(TABLES.users, userId);
+  const target = users.find(u => u.id === userId);
+  if (!target) return;
+
+  const normalized = normalizeUsername(target.username);
+  const toDeleteIds = users
+    .filter(u => u.id === userId || normalizeUsername(u.username) === normalized)
+    .map(u => u.id);
+
+  saveUsers(users.filter(u => !toDeleteIds.includes(u.id)));
+  toDeleteIds.forEach(id => syncDeleteDoc(TABLES.users, id));
 }
 
 export function getUserById(id: string): User | undefined {
