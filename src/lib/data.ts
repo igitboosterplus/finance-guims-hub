@@ -5,6 +5,7 @@ import logoDigitbooster from '@/assets/logo-digitbooster.png';
 import logoGuimsGroup from '@/assets/logo-guims-group.jpg';
 import { syncSetDoc, syncDeleteDoc, pushAllToSupabase } from './sync';
 import { TABLES } from './firebase';
+import { normalizeTransactionDate } from './transactionDates';
 
 export type DepartmentId = 'gaba' | 'guims-educ' | 'guims-academy' | 'digitboosterplus' | 'charges-entreprise';
 
@@ -112,6 +113,7 @@ export interface Transaction {
   amount: number;
   date: string;
   createdAt: string;
+  saleTicketNumber?: string; // Ticket de vente lié à la sortie de stock auto
   quantity?: number;
   stockItemId?: string;
   // Champs spécifiques formations
@@ -187,17 +189,54 @@ export const getDepartment = (id: DepartmentId) => departments.find(d => d.id ==
 // LocalStorage-based data management
 const STORAGE_KEY = 'finance-transactions';
 
+function normalizeStoredTransaction(tx: any): Transaction {
+  const normalizedCreatedAt = normalizeTransactionDate(tx?.createdAt || tx?.date || '');
+  const normalizedDate = normalizeTransactionDate(tx?.date || '', new Date(normalizedCreatedAt));
+  const hasEnrollmentDate = typeof tx?.enrollmentDate === 'string';
+  const normalizedEnrollmentDate = hasEnrollmentDate
+    ? normalizeTransactionDate(tx.enrollmentDate, new Date(normalizedDate))
+    : undefined;
+
+  const changed =
+    tx?.createdAt !== normalizedCreatedAt ||
+    tx?.date !== normalizedDate ||
+    (hasEnrollmentDate && tx?.enrollmentDate !== normalizedEnrollmentDate);
+
+  if (!changed) return tx as Transaction;
+
+  return {
+    ...tx,
+    createdAt: normalizedCreatedAt,
+    date: normalizedDate,
+    ...(hasEnrollmentDate ? { enrollmentDate: normalizedEnrollmentDate } : {}),
+  } as Transaction;
+}
+
 export const getTransactions = (): Transaction[] => {
   const data = localStorage.getItem(STORAGE_KEY);
-  return data ? JSON.parse(data) : [];
+  if (!data) return [];
+
+  const parsed = JSON.parse(data);
+  if (!Array.isArray(parsed)) return [];
+
+  const normalized = parsed.map(normalizeStoredTransaction);
+  const changed = normalized.some((tx, i) => tx !== parsed[i]);
+  if (changed) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
+  }
+
+  return normalized;
 };
 
 export const addTransaction = (tx: Omit<Transaction, 'id' | 'createdAt'>): Transaction => {
   const transactions = getTransactions();
+  const now = new Date();
   const newTx: Transaction = {
     ...tx,
+    date: normalizeTransactionDate(tx.date, now),
+    ...(tx.enrollmentDate ? { enrollmentDate: normalizeTransactionDate(tx.enrollmentDate, now) } : {}),
     id: crypto.randomUUID(),
-    createdAt: new Date().toISOString(),
+    createdAt: now.toISOString(),
   };
   transactions.push(newTx);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(transactions));
@@ -209,7 +248,16 @@ export const updateTransaction = (id: string, updates: Partial<Omit<Transaction,
   const transactions = getTransactions();
   const index = transactions.findIndex(t => t.id === id);
   if (index === -1) return null;
-  transactions[index] = { ...transactions[index], ...updates };
+
+  const normalizedUpdates = { ...updates };
+  if (typeof normalizedUpdates.date === 'string') {
+    normalizedUpdates.date = normalizeTransactionDate(normalizedUpdates.date, new Date(transactions[index].createdAt));
+  }
+  if (typeof normalizedUpdates.enrollmentDate === 'string') {
+    normalizedUpdates.enrollmentDate = normalizeTransactionDate(normalizedUpdates.enrollmentDate, new Date(transactions[index].createdAt));
+  }
+
+  transactions[index] = { ...transactions[index], ...normalizedUpdates };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(transactions));
   syncSetDoc(TABLES.transactions, transactions[index]);
   return transactions[index];
@@ -261,10 +309,11 @@ export const importDataJSON = (json: string): { success: boolean; count: number;
         return { success: false, count: 0, error: 'Format invalide: transaction incomplète' };
       }
     }
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data.transactions));
+    const normalizedTransactions = data.transactions.map((tx: any) => normalizeStoredTransaction(tx));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(normalizedTransactions));
     // Bulk import → full push to sync everything to Supabase
     pushAllToSupabase().catch(err => console.error('[Import] Sync error:', err));
-    return { success: true, count: data.transactions.length };
+    return { success: true, count: normalizedTransactions.length };
   } catch {
     return { success: false, count: 0, error: 'JSON invalide' };
   }

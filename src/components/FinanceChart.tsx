@@ -3,6 +3,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatCurrency, type Transaction } from "@/lib/data";
+import { getTransactionTimestamp } from "@/lib/transactionDates";
 
 interface FinanceChartProps {
   transactions: Transaction[];
@@ -48,7 +49,7 @@ export function FinanceChart({ transactions, title = "Analyse financière" }: Fi
   const monthlyData = useMemo(() => {
     const map = new Map<string, { month: string; revenus: number; depenses: number }>();
     transactions.forEach((tx) => {
-      const d = new Date(tx.date);
+      const d = new Date(getTransactionTimestamp(tx.date));
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
       const label = d.toLocaleDateString("fr-FR", { month: "short", year: "2-digit" });
       if (!map.has(key)) map.set(key, { month: label, revenus: 0, depenses: 0 });

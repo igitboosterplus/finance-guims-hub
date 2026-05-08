@@ -25,6 +25,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { dateInputToIsoTimestamp, formatLocalDateInputValue } from "@/lib/utils";
 
 const STATUS_CONFIG = {
   en_cours: { label: "En cours", icon: Clock, color: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400" },
@@ -62,7 +63,7 @@ export default function PaymentTrackingPage() {
   const [installOpen, setInstallOpen] = useState(false);
   const [installPlanId, setInstallPlanId] = useState<string | null>(null);
   const [installAmount, setInstallAmount] = useState("");
-  const [installDate, setInstallDate] = useState(new Date().toISOString().split('T')[0]);
+  const [installDate, setInstallDate] = useState(formatLocalDateInputValue());
   const [installMethod, setInstallMethod] = useState("especes");
   const [installNote, setInstallNote] = useState("");
 
@@ -204,7 +205,7 @@ export default function PaymentTrackingPage() {
       setInstallAmount(plan ? String(getRemainingAmount(plan)) : "");
       setInstallNote("");
     }
-    setInstallDate(new Date().toISOString().split('T')[0]);
+    setInstallDate(formatLocalDateInputValue());
     setInstallMethod("especes");
     setInstallOpen(true);
   };
@@ -217,6 +218,7 @@ export default function PaymentTrackingPage() {
 
     const plan = plans.find(p => p.id === installPlanId);
     if (!plan) return;
+    const transactionTimestamp = dateInputToIsoTimestamp(installDate);
 
     const noteText = installNote.trim();
     const isInscriptionPayment = isInscriptionCategory(noteText);
@@ -233,10 +235,10 @@ export default function PaymentTrackingPage() {
         personName: plan.clientName,
         description: `Inscription ${plan.label}`,
         amount,
-        date: installDate,
+        date: transactionTimestamp,
       });
       if (currentUser) {
-        addAuditEntry({ userId: currentUser.id, username: currentUser.username, action: 'create', entityType: 'transaction', entityId: tx.id, details: `Inscription ${plan.clientName} — ${plan.label} : ${amount} FCFA (via suivi)`, previousData: '', newData: JSON.stringify({ type: 'income', amount, category: noteText, date: installDate, paymentMethod: installMethod }) });
+        addAuditEntry({ userId: currentUser.id, username: currentUser.username, action: 'create', entityType: 'transaction', entityId: tx.id, details: `Inscription ${plan.clientName} — ${plan.label} : ${amount} FCFA (via suivi)`, previousData: '', newData: JSON.stringify({ type: 'income', amount, category: noteText, date: transactionTimestamp, paymentMethod: installMethod }) });
       }
       toast.success(`Inscription de ${formatCurrency(amount)} enregistrée (hors frais de formation)`);
     } else {
@@ -260,10 +262,10 @@ export default function PaymentTrackingPage() {
         personName: plan.clientName,
         description: `Paiement ${plan.label} — ${noteText || 'versement'}`,
         amount,
-        date: installDate,
+        date: transactionTimestamp,
       });
       if (currentUser) {
-        addAuditEntry({ userId: currentUser.id, username: currentUser.username, action: 'create', entityType: 'transaction', entityId: tx.id, details: `Paiement ${plan.clientName} — ${plan.label} : ${amount} FCFA (via suivi)`, previousData: '', newData: JSON.stringify({ type: 'income', amount, category: noteText || 'Frais de formation', date: installDate, paymentMethod: installMethod }) });
+        addAuditEntry({ userId: currentUser.id, username: currentUser.username, action: 'create', entityType: 'transaction', entityId: tx.id, details: `Paiement ${plan.clientName} — ${plan.label} : ${amount} FCFA (via suivi)`, previousData: '', newData: JSON.stringify({ type: 'income', amount, category: noteText || 'Frais de formation', date: transactionTimestamp, paymentMethod: installMethod }) });
       }
       toast.success("Paiement enregistré et visible au tableau de bord");
     }
@@ -311,7 +313,7 @@ export default function PaymentTrackingPage() {
   };
 
   const getDeptName = (id: string) => departments.find(d => d.id === id)?.name ?? id;
-  const getMethodLabel = (m: PaymentMethod, departmentId?: DepartmentId) => getPaymentMethodLabel(m, departmentId);
+  const getMethodLabel = (m: string, departmentId?: DepartmentId) => getPaymentMethodLabel(m as PaymentMethod, departmentId);
 
   return (
     <div className="space-y-6">

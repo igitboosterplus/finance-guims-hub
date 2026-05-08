@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { departments, addTransaction, getPaymentMethodsForDepartment, isEnrollmentCategory, isInscriptionCategory, isTranche, type DepartmentId, type PaymentMethod, formatCurrency } from "@/lib/data";
 import { addAuditEntry, getCurrentUser, hasPermission, hasDepartmentAccess } from "@/lib/auth";
-import { getStockItems, addStockMovement, getFormationsByDepartment, addPaymentPlan, addInstallment, getPaymentPlans, getEnrolledStudents, buildAllocationMessage, updatePlanInscription, getAllocationSummary, getRemainingAmount, addEnrollment, getEnrollmentsByFormation, updateEnrollment, type StockItem, type FormationCatalog, type FormationPack } from "@/lib/stock";
+import { getStockItems, addStockMovement, generateSaleTicketNumber, getFormationsByDepartment, addPaymentPlan, addInstallment, getPaymentPlans, getEnrolledStudents, buildAllocationMessage, updatePlanInscription, getAllocationSummary, getRemainingAmount, addEnrollment, getEnrollmentsByFormation, updateEnrollment, type StockItem, type FormationCatalog, type FormationPack } from "@/lib/stock";
 import { findEmployeeByName, getActiveEmployeesByDepartment } from "@/lib/employees";
 import { toast } from "sonner";
 import { ArrowLeft, ShieldAlert, Package, GraduationCap, Star, Award, CreditCard } from "lucide-react";
@@ -212,9 +212,14 @@ export default function NewTransaction() {
       }
     }
 
+    let saleTicketNumber: string | undefined;
+
     // If stock-linked, create the stock movement first
     if (isStockCategory && stockDirection && stockItemId && parsedQty > 0) {
-      const reason = category;
+      if (stockDirection === 'exit') {
+        saleTicketNumber = generateSaleTicketNumber();
+      }
+      const reason = saleTicketNumber ? `${category} [Ticket ${saleTicketNumber}]` : category;
       const unitPrice = Math.round(parsedAmount / parsedQty);
       const result = addStockMovement(
         stockItemId,
@@ -227,6 +232,8 @@ export default function NewTransaction() {
         undefined,
         undefined,
         departmentId,
+        undefined,
+        saleTicketNumber,
       );
       if (!result.success) {
         toast.error(result.error ?? "Erreur lors de la mise à jour du stock");
@@ -244,6 +251,7 @@ export default function NewTransaction() {
       description,
       amount: parsedAmount,
       date: transactionTimestamp,
+      ...(saleTicketNumber ? { saleTicketNumber } : {}),
       ...(isStockCategory && parsedQty > 0 ? { quantity: parsedQty, stockItemId } : {}),
       ...(isEnrollmentCategory(category) ? { enrollmentDate: new Date().toISOString() } : {}),
       ...(isTranche(category) ? { tranche: category.replace('Frais de formation - ', '') } : {}),
@@ -399,11 +407,15 @@ export default function NewTransaction() {
         entityId: '',
         details: `Création: ${category} - ${personName.trim()} - ${parsedAmount} FCFA (${departmentId})`,
         previousData: '',
-        newData: JSON.stringify({ departmentId, type, paymentMethod, category, personName: personName.trim(), description, amount: parsedAmount, date: transactionTimestamp }),
+        newData: JSON.stringify({ departmentId, type, paymentMethod, category, personName: personName.trim(), description, amount: parsedAmount, date: transactionTimestamp, saleTicketNumber }),
       });
     }
 
-    toast.success("Transaction ajoutée avec succès");
+    if (saleTicketNumber) {
+      toast.success(`Vente enregistrée. Ticket ${saleTicketNumber} : la sortie de stock est déjà faite automatiquement. Ne la créez pas une seconde fois.`);
+    } else {
+      toast.success("Transaction ajoutée avec succès");
+    }
     navigate(departmentId ? `/department/${departmentId}` : '/');
   };
 

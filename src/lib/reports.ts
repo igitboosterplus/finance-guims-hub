@@ -10,6 +10,7 @@ import {
   getTransactionsByDepartment, getDepartment, formatCurrency,
   getPaymentMethodLabel, getStatsByPaymentMethod, type DepartmentId, type Transaction,
 } from "./data";
+import { getTransactionTimestamp } from "./transactionDates";
 import { getStockItems, getStockMovements, getCategoryLabel, getStockStats, getTrainings, getMovementTypeLabel } from "./stock";
 import { getAuditLog, buildHumanDiff } from "./auth";
 import { generateExternalAIInsights, type AIProvider, type AIReportPayload, type InsightSection } from "./aiReports";
@@ -46,12 +47,14 @@ const STRATEGIC_EXPENSE_RULES: Array<{ label: string; keywords: string[] }> = [
 function filterByPeriod<T extends { date: string }>(items: T[], opts?: ReportOptions): T[] {
   const start = opts?.startDate ? new Date(`${opts.startDate}T00:00:00`) : null;
   const end = opts?.endDate ? new Date(`${opts.endDate}T23:59:59.999`) : null;
+  const startMs = start?.getTime() ?? null;
+  const endMs = end?.getTime() ?? null;
 
   return items.filter(item => {
-    const dt = new Date(item.date);
-    if (Number.isNaN(dt.getTime())) return false;
-    if (start && dt < start) return false;
-    if (end && dt > end) return false;
+    const ts = getTransactionTimestamp(item.date);
+    if (Number.isNaN(ts)) return false;
+    if (startMs !== null && ts < startMs) return false;
+    if (endMs !== null && ts > endMs) return false;
     return true;
   });
 }

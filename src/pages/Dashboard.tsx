@@ -12,12 +12,13 @@ import { toast } from "sonner";
 import { downloadDashboardReport, downloadTransactionsReport } from "@/lib/reports";
 import type { ReportOptions } from "@/lib/reports";
 import logoGuimsGroup from "@/assets/logo-guims-group.jpg";
+import { getTransactionTimestamp } from "@/lib/transactionDates";
 
 export default function Dashboard() {
   const sortTransactionsByRecency = <T extends { date: string; createdAt?: string }>(items: T[]) => {
     return [...items].sort((a, b) => {
-      const ta = new Date(a.createdAt || a.date).getTime();
-      const tb = new Date(b.createdAt || b.date).getTime();
+      const ta = getTransactionTimestamp(a.createdAt || a.date);
+      const tb = getTransactionTimestamp(b.createdAt || b.date);
       return tb - ta;
     });
   };

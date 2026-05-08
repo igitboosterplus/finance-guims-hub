@@ -2,6 +2,13 @@
 
 import { syncFullCollection, syncDeleteDoc } from './sync';
 import { TABLES } from './firebase';
+import {
+  getTransactionTimestamp,
+  isSameCalendarDate,
+  normalizeDateOnlyValue,
+  normalizeTransactionDate,
+  toCalendarDateKey,
+} from './transactionDates';
 
 export interface StockCategory {
   id: string;
@@ -77,6 +84,7 @@ export interface StockMovement {
   parkName?: string;       // Parc de formation (for training/gift)
   traineeName?: string;    // Nom du formé (for gift)
   transactionId?: string;  // Lien vers la transaction (pour les ventes)
+  saleTicketNumber?: string; // Ticket de vente pour éviter une double sortie
 }
 
 // ==================== TRAINING / FORMATION ====================
@@ -136,6 +144,17 @@ function trainingsKey(deptId: string = 'gaba') {
 }
 function stockKitsKey(deptId: string = 'gaba') {
   return deptId === 'gaba' ? 'gaba-stock-kits' : `${deptId}-stock-kits`;
+}
+
+const SALES_TICKET_COUNTER_KEY = 'sales-ticket-counter';
+
+export function generateSaleTicketNumber(date = new Date()): string {
+  const dayKey = normalizeDateOnlyValue(date.toISOString()).replace(/-/g, '');
+  const raw = localStorage.getItem(SALES_TICKET_COUNTER_KEY);
+  const current = raw ? parseInt(raw, 10) : 0;
+  const next = Number.isNaN(current) ? 1 : current + 1;
+  localStorage.setItem(SALES_TICKET_COUNTER_KEY, String(next));
+  return `VT-${dayKey}-${String(next).padStart(5, '0')}`;
 }
 
 // ==================== ITEMS ====================
@@ -219,7 +238,20 @@ export function addStockMovement(
   traineeName?: string,
   departmentId: string = 'gaba',
   transactionId?: string,
+  saleTicketNumber?: string,
 ): { success: boolean; movement?: StockMovement; error?: string } {
+  if (type === 'exit' && saleTicketNumber) {
+    const existing = getStockMovements(departmentId).find(
+      m => m.type === 'exit' && m.saleTicketNumber === saleTicketNumber,
+    );
+    if (existing) {
+      return {
+        success: false,
+        error: `Sortie de stock déjà enregistrée pour le ticket ${saleTicketNumber}.`,
+      };
+    }
+  }
+
   const items = getStockItems(departmentId);
   const idx = items.findIndex(i => i.id === itemId);
   if (idx === -1) return { success: false, error: 'Article introuvable' };
@@ -263,6 +295,7 @@ export function addStockMovement(
     ...(parkName ? { parkName } : {}),
     ...(traineeName ? { traineeName } : {}),
     ...(transactionId ? { transactionId } : {}),
+    ...(saleTicketNumber ? { saleTicketNumber } : {}),
   };
   movements.push(movement);
   saveStockMovements(movements, departmentId);
@@ -624,7 +657,9 @@ export function cleanupOrphanedInstallments(): void {
   const txSet = new Set<string>();
   for (const tx of transactions) {
     if (tx.type === 'income' && tx.personName) {
-      txSet.add(`${tx.personName.toLowerCase()}|${tx.date}|${tx.amount}`);
+      const dateKey = toCalendarDateKey(tx.date);
+      if (!dateKey) continue;
+      txSet.add(`${tx.personName.toLowerCase()}|${dateKey}|${tx.amount}`);
     }
   }
   let changed = false;
@@ -634,7 +669,12 @@ export function cleanupOrphanedInstallments(): void {
     const toRemove: number[] = [];
     for (let i = 0; i < plan.installments.length; i++) {
       const inst = plan.installments[i];
-      const key = `${clientLower}|${inst.date}|${inst.amount}`;
+      const instDateKey = toCalendarDateKey(inst.date);
+      if (!instDateKey) {
+        toRemove.push(i);
+        continue;
+      }
+      const key = `${clientLower}|${instDateKey}|${inst.amount}`;
       if (!txSet.has(key)) {
         // No matching transaction — this installment is orphaned
         console.log(`[Cleanup] Orphaned installment: ${plan.clientName}, ${inst.date}, ${inst.amount} — removing`);
@@ -659,7 +699,58 @@ export function cleanupOrphanedInstallments(): void {
 
 export function getPaymentPlans(): PaymentPlan[] {
   const data = localStorage.getItem(PAYMENT_PLANS_KEY);
-  return data ? JSON.parse(data) : [];
+  if (!data) return [];
+
+  const parsed = JSON.parse(data);
+  if (!Array.isArray(parsed)) return [];
+
+  let changed = false;
+  const normalized = parsed.map((plan: any) => {
+    let planChanged = false;
+    const createdAt = normalizeTransactionDate(plan?.createdAt || '');
+    if (plan?.createdAt !== createdAt) planChanged = true;
+
+    const installments = Array.isArray(plan?.installments)
+      ? plan.installments.map((inst: any) => {
+          const normalizedDate = normalizeDateOnlyValue(inst?.date || '', new Date(createdAt));
+          const normalizedRecordedAt = normalizeTransactionDate(inst?.recordedAt || '', new Date(createdAt));
+          const instChanged = inst?.date !== normalizedDate || inst?.recordedAt !== normalizedRecordedAt;
+          if (instChanged) planChanged = true;
+          return instChanged
+            ? { ...inst, date: normalizedDate, recordedAt: normalizedRecordedAt }
+            : inst;
+        })
+      : [];
+
+    if (!Array.isArray(plan?.installments)) planChanged = true;
+
+    const scheduledTranches = Array.isArray(plan?.scheduledTranches)
+      ? plan.scheduledTranches.map((tr: any) => {
+          const normalizedDueDate = normalizeDateOnlyValue(tr?.dueDate || '', new Date(createdAt));
+          if (tr?.dueDate !== normalizedDueDate) {
+            planChanged = true;
+            return { ...tr, dueDate: normalizedDueDate };
+          }
+          return tr;
+        })
+      : plan?.scheduledTranches;
+
+    if (!planChanged) return plan;
+    changed = true;
+
+    return {
+      ...plan,
+      createdAt,
+      installments,
+      ...(Array.isArray(scheduledTranches) ? { scheduledTranches } : {}),
+    } as PaymentPlan;
+  });
+
+  if (changed) {
+    localStorage.setItem(PAYMENT_PLANS_KEY, JSON.stringify(normalized));
+  }
+
+  return normalized;
 }
 
 function savePaymentPlans(plans: PaymentPlan[]) {
@@ -669,12 +760,21 @@ function savePaymentPlans(plans: PaymentPlan[]) {
 
 export function addPaymentPlan(plan: Omit<PaymentPlan, 'id' | 'createdAt' | 'installments' | 'status'>): PaymentPlan {
   const plans = getPaymentPlans();
+  const now = new Date();
   const newPlan: PaymentPlan = {
     ...plan,
+    ...(plan.scheduledTranches
+      ? {
+          scheduledTranches: plan.scheduledTranches.map(tr => ({
+            ...tr,
+            dueDate: normalizeDateOnlyValue(tr.dueDate, now),
+          })),
+        }
+      : {}),
     id: crypto.randomUUID(),
     installments: [],
     status: 'en_cours',
-    createdAt: new Date().toISOString(),
+    createdAt: now.toISOString(),
   };
   plans.push(newPlan);
   savePaymentPlans(plans);
@@ -685,10 +785,12 @@ export function addInstallment(planId: string, installment: Omit<PaymentInstallm
   const plans = getPaymentPlans();
   const plan = plans.find(p => p.id === planId);
   if (!plan) return null;
+  const now = new Date();
   plan.installments.push({
     ...installment,
+    date: normalizeDateOnlyValue(installment.date, now),
     id: crypto.randomUUID(),
-    recordedAt: new Date().toISOString(),
+    recordedAt: now.toISOString(),
   });
   // Auto-complete if fully paid
   const totalPaid = plan.installments.reduce((s, i) => s + i.amount, 0);
@@ -754,7 +856,7 @@ export function removeInstallmentFromTransaction(personName: string, date: strin
       return true;
     }
     // Otherwise look in installments
-    const idx = plan.installments.findIndex(i => i.date === date && i.amount === amount);
+    const idx = plan.installments.findIndex(i => isSameCalendarDate(i.date, date) && i.amount === amount);
     if (idx !== -1) {
       plan.installments.splice(idx, 1);
       // Re-check status
@@ -773,7 +875,7 @@ export function syncInstallmentFromTransaction(personName: string, date: string,
   const plans = getPaymentPlans();
   for (const plan of plans) {
     if (plan.clientName.toLowerCase() !== personName.toLowerCase()) continue;
-    const inst = plan.installments.find(i => i.date === date && i.amount === oldAmount);
+    const inst = plan.installments.find(i => isSameCalendarDate(i.date, date) && i.amount === oldAmount);
     if (inst) {
       inst.amount = newAmount;
       // Re-check auto-complete
@@ -795,6 +897,7 @@ export function syncEditedTransaction(
   oldCategory: string,
   newCategory: string,
 ): void {
+  const normalizedDate = normalizeDateOnlyValue(date);
   const INSCRIPTION_CATS = ['inscription étudiant', 'inscription élève/étudiant', 'inscriptions formation'];
   const wasInscription = INSCRIPTION_CATS.includes(oldCategory.toLowerCase());
   const isNowInscription = INSCRIPTION_CATS.includes(newCategory.toLowerCase());
@@ -835,7 +938,7 @@ export function syncEditedTransaction(
         plan.installments.push({
           id: crypto.randomUUID(),
           amount: newAmount,
-          date,
+          date: normalizedDate,
           paymentMethod: 'especes',
           recordedBy: 'sync',
           recordedAt: new Date().toISOString(),
@@ -852,8 +955,8 @@ export function syncEditedTransaction(
     for (const plan of plans) {
       if (plan.clientName.toLowerCase() !== personName.toLowerCase()) continue;
       // Try to remove matching installment with multiple strategies
-      let idx = plan.installments.findIndex(i => i.date === date && i.amount === oldAmount);
-      if (idx === -1) idx = plan.installments.findIndex(i => i.date === date);
+      let idx = plan.installments.findIndex(i => isSameCalendarDate(i.date, normalizedDate) && i.amount === oldAmount);
+      if (idx === -1) idx = plan.installments.findIndex(i => isSameCalendarDate(i.date, normalizedDate));
       if (idx === -1) idx = plan.installments.findIndex(i => i.amount === oldAmount);
       // Fallback: match by note containing oldCategory keyword (e.g. "Tranche 1")
       if (idx === -1) {
@@ -956,9 +1059,9 @@ export interface PaymentReminder {
 /** Get all upcoming payment reminders (today + tomorrow) for active plans */
 export function getPaymentReminders(referenceDate?: string): PaymentReminder[] {
   const plans = getPaymentPlans().filter(p => p.status === 'en_cours');
-  const today = referenceDate ?? new Date().toISOString().split('T')[0];
-  const todayMs = new Date(today + 'T00:00:00').getTime();
-  const tomorrowStr = new Date(todayMs + 86400000).toISOString().split('T')[0];
+  const today = normalizeDateOnlyValue(referenceDate ?? new Date().toISOString());
+  const todayMs = getTransactionTimestamp(today);
+  const tomorrowStr = normalizeDateOnlyValue(new Date(todayMs + 86400000).toISOString());
 
   const reminders: PaymentReminder[] = [];
 
@@ -971,17 +1074,18 @@ export function getPaymentReminders(referenceDate?: string): PaymentReminder[] {
       cumulative += tr.amount;
       if (paid >= cumulative) continue; // Already paid this tranche
 
-      if (tr.dueDate === today) {
+      const dueDate = normalizeDateOnlyValue(tr.dueDate);
+      if (dueDate === today) {
         reminders.push({
           planId: plan.id, clientName: plan.clientName, label: plan.label,
           departmentId: plan.departmentId, trancheName: tr.name,
-          trancheAmount: tr.amount, dueDate: tr.dueDate, urgency: 'today',
+          trancheAmount: tr.amount, dueDate, urgency: 'today',
         });
-      } else if (tr.dueDate === tomorrowStr) {
+      } else if (dueDate === tomorrowStr) {
         reminders.push({
           planId: plan.id, clientName: plan.clientName, label: plan.label,
           departmentId: plan.departmentId, trancheName: tr.name,
-          trancheAmount: tr.amount, dueDate: tr.dueDate, urgency: 'tomorrow',
+          trancheAmount: tr.amount, dueDate, urgency: 'tomorrow',
         });
       }
     }
@@ -993,7 +1097,8 @@ export function getPaymentReminders(referenceDate?: string): PaymentReminder[] {
 /** Get overdue scheduled tranches (past due date, not yet paid) */
 export function getOverdueTranches(): PaymentReminder[] {
   const plans = getPaymentPlans().filter(p => p.status === 'en_cours');
-  const today = new Date().toISOString().split('T')[0];
+  const today = normalizeDateOnlyValue(new Date().toISOString());
+  const todayMs = getTransactionTimestamp(today);
   const overdue: PaymentReminder[] = [];
 
   for (const plan of plans) {
@@ -1003,11 +1108,12 @@ export function getOverdueTranches(): PaymentReminder[] {
     for (const tr of plan.scheduledTranches) {
       cumulative += tr.amount;
       if (paid >= cumulative) continue;
-      if (tr.dueDate < today) {
+      const dueDate = normalizeDateOnlyValue(tr.dueDate);
+      if (getTransactionTimestamp(dueDate) < todayMs) {
         overdue.push({
           planId: plan.id, clientName: plan.clientName, label: plan.label,
           departmentId: plan.departmentId, trancheName: tr.name,
-          trancheAmount: tr.amount, dueDate: tr.dueDate, urgency: 'today',
+          trancheAmount: tr.amount, dueDate, urgency: 'today',
         });
       }
     }

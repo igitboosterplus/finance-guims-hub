@@ -12,6 +12,7 @@ import { Trash2, ArrowUpRight, ArrowDownRight, Search, Pencil, ChevronLeft, Chev
 import { formatCurrency, type Transaction, type PaymentMethod, getDepartment, deleteTransaction, updateTransaction, departments, exportTransactionsCSV, getPaymentMethodsForDepartment, getPaymentMethodLabel } from "@/lib/data";
 import { addAuditEntry, getCurrentUser, isSuperAdmin, hasPermission, buildHumanDiff } from "@/lib/auth";
 import { syncInstallmentFromTransaction, removeInstallmentFromTransaction, syncEditedTransaction } from "@/lib/stock";
+import { getTransactionTimestamp, transactionDateToInputValue } from "@/lib/transactionDates";
 import { toast } from "sonner";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -51,6 +52,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
         (tx.personName || '').toLowerCase().includes(q) ||
         (tx.phoneNumber || '').toLowerCase().includes(q) ||
         tx.description.toLowerCase().includes(q) ||
+        (tx.saleTicketNumber || '').toLowerCase().includes(q) ||
         getDepartment(tx.departmentId).name.toLowerCase().includes(q) ||
         getPaymentMethodLabel(tx.paymentMethod || 'especes', tx.departmentId).toLowerCase().includes(q) ||
         tx.amount.toString().includes(q);
@@ -58,7 +60,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
       const matchCategory = categoryFilter === "all" || tx.category === categoryFilter;
       return matchSearch && matchType && matchCategory;
     })
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    .sort((a, b) => getTransactionTimestamp(b.date) - getTransactionTimestamp(a.date));
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const currentPage = Math.min(page, totalPages);
@@ -102,7 +104,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
     setEditPhoneNumber(tx.phoneNumber || '');
     setEditDescription(tx.description);
     setEditAmount(String(tx.amount));
-    setEditDate(tx.date.includes('T') ? tx.date.slice(0, 10) : tx.date);
+    setEditDate(transactionDateToInputValue(tx.date));
     setEditType(tx.type);
     setEditPaymentMethod(tx.paymentMethod || 'especes');
     setEditJustification("");
@@ -132,7 +134,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
       phoneNumber: editPhoneNumber.trim() || undefined,
       description: editDescription,
       amount: parsedAmount,
-      date: editTx.date,
+      date: editDate,
       type: editType,
       paymentMethod: editPaymentMethod,
     });
@@ -140,7 +142,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
     if (editTx.personName && (editTx.amount !== parsedAmount || editTx.category !== editCategory)) {
       syncEditedTransaction(editTx.personName, editTx.date, editTx.amount, parsedAmount, editTx.category, editCategory);
     }
-    const newData = JSON.stringify({ type: editType, amount: parsedAmount, category: editCategory, personName: editPersonName, phoneNumber: editPhoneNumber.trim() || undefined, date: editTx.date, paymentMethod: editPaymentMethod, description: editDescription });
+    const newData = JSON.stringify({ type: editType, amount: parsedAmount, category: editCategory, personName: editPersonName, phoneNumber: editPhoneNumber.trim() || undefined, date: editDate, paymentMethod: editPaymentMethod, description: editDescription });
     const readableDetails = buildHumanDiff(previousData, newData);
     if (currentUser) {
       addAuditEntry({
@@ -360,6 +362,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
                         <div className="space-y-1">
                           <p className="truncate">{tx.description || '—'}</p>
                           <p className="text-xs">Numéro: {tx.phoneNumber || '—'}</p>
+                          {tx.saleTicketNumber && <p className="text-xs">Ticket vente: {tx.saleTicketNumber}</p>}
                         </div>
                       </TableCell>
                       <TableCell className={`text-right font-semibold ${tx.type === 'income' ? 'text-success' : 'text-destructive'}`}>
