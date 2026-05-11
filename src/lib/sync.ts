@@ -18,6 +18,8 @@ function stockStorageKey(dept: string, suffix: string): string {
 
 // ==================== DELETION TOMBSTONES ====================
 const TOMBSTONE_KEY = 'guims-sync-tombstones';
+const PENDING_UPSERT_KEY = 'guims-sync-pending-upserts';
+const CLOUD_SEEN_TABLES_KEY = 'guims-sync-cloud-seen-tables';
 
 function getTombstones(): Set<string> {
   const raw = localStorage.getItem(TOMBSTONE_KEY);
@@ -38,6 +40,65 @@ function clearTombstone(tableName: string, itemId: string) {
   const tombstones = getTombstones();
   tombstones.delete(`${tableName}:${itemId}`);
   localStorage.setItem(TOMBSTONE_KEY, JSON.stringify([...tombstones]));
+}
+
+function getPendingUpsertsMap(): Record<string, string[]> {
+  const raw = localStorage.getItem(PENDING_UPSERT_KEY);
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function setPendingUpsertsMap(map: Record<string, string[]>) {
+  localStorage.setItem(PENDING_UPSERT_KEY, JSON.stringify(map));
+}
+
+function addPendingUpsert(tableName: string, itemId: string) {
+  const map = getPendingUpsertsMap();
+  const current = new Set(map[tableName] || []);
+  current.add(itemId);
+  map[tableName] = [...current];
+  setPendingUpsertsMap(map);
+}
+
+function removePendingUpsert(tableName: string, itemId: string) {
+  const map = getPendingUpsertsMap();
+  const current = new Set(map[tableName] || []);
+  current.delete(itemId);
+  if (current.size === 0) delete map[tableName];
+  else map[tableName] = [...current];
+  setPendingUpsertsMap(map);
+}
+
+function isPendingUpsert(tableName: string, itemId: string): boolean {
+  const map = getPendingUpsertsMap();
+  return (map[tableName] || []).includes(itemId);
+}
+
+function getCloudSeenTables(): Set<string> {
+  const raw = localStorage.getItem(CLOUD_SEEN_TABLES_KEY);
+  if (!raw) return new Set();
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed);
+  } catch {
+    return new Set();
+  }
+}
+
+function markCloudSeen(tableName: string) {
+  const seen = getCloudSeenTables();
+  seen.add(tableName);
+  localStorage.setItem(CLOUD_SEEN_TABLES_KEY, JSON.stringify([...seen]));
+}
+
+function hasCloudSeen(tableName: string): boolean {
+  return getCloudSeenTables().has(tableName);
 }
 
 /** Retry deleting all tombstoned items from Supabase */
@@ -77,15 +138,17 @@ async function pullTable(tableName: TableName, storageKey: string): Promise<bool
     const localItems: { id: string }[] = localRaw ? JSON.parse(localRaw) : [];
 
     if (data && data.length > 0) {
+      markCloudSeen(tableName);
       const supabaseItems = data.map(row => row.data);
       const supabaseIds = new Set(supabaseItems.map((item: any) => item.id));
 
       // Start with Supabase data (authoritative — has changes from all devices)
       const mergedMap = new Map(supabaseItems.map((item: any) => [item.id, item]));
 
-      // Add local-only items (new items not yet in Supabase)
+      // Add only local pending items that have not been uploaded yet.
+      // This avoids resurrecting stale deleted entries from old caches.
       for (const item of localItems) {
-        if (item.id && !supabaseIds.has(item.id)) {
+        if (item.id && !supabaseIds.has(item.id) && isPendingUpsert(tableName, item.id) && !isDeleted(tableName, item.id)) {
           mergedMap.set(item.id, item);
         }
       }
@@ -101,21 +164,38 @@ async function pullTable(tableName: TableName, storageKey: string): Promise<bool
       localStorage.setItem(storageKey, JSON.stringify(merged));
 
       // Push local-only items to Supabase + delete tombstoned items from Supabase
-      const localOnly = localItems.filter(item => item.id && !supabaseIds.has(item.id) && !isDeleted(tableName, item.id));
+      const localOnly = localItems.filter(
+        item => item.id && !supabaseIds.has(item.id) && isPendingUpsert(tableName, item.id) && !isDeleted(tableName, item.id),
+      );
       if (localOnly.length > 0) {
         await pushArrayToSupabase(tableName, localOnly);
       }
       return true;
     }
 
-    // Supabase vide → pousser les données locales si elles existent
+    const pendingLocalOnly = localItems.filter(
+      item => item.id && isPendingUpsert(tableName, item.id) && !isDeleted(tableName, item.id),
+    );
+
+    // Supabase table empty and already known from cloud: trust cloud emptiness,
+    // keep only pending local creations.
+    if (hasCloudSeen(tableName)) {
+      localStorage.setItem(storageKey, JSON.stringify(pendingLocalOnly));
+      if (pendingLocalOnly.length > 0) {
+        await pushArrayToSupabase(tableName, pendingLocalOnly);
+      }
+      return true;
+    }
+
+    // First cloud handshake for this table: seed with local alive records.
     if (Array.isArray(localItems) && localItems.length > 0) {
-      // Filter out tombstoned items
       const alive = localItems.filter(item => !isDeleted(tableName, item.id));
+      localStorage.setItem(storageKey, JSON.stringify(alive));
       if (alive.length > 0) {
         await pushArrayToSupabase(tableName, alive);
       }
     }
+    markCloudSeen(tableName);
 
     return true;
   } catch (error) {
@@ -146,6 +226,7 @@ async function pullStockTables(): Promise<void> {
       if (error) throw error;
 
       if (data && data.length > 0) {
+        markCloudSeen(tableName);
         const allItems = data.map(row => row.data);
 
         for (const dept of STOCK_DEPTS) {
@@ -160,9 +241,9 @@ async function pullStockTables(): Promise<void> {
             // Start with Supabase data (authoritative)
             const mergedMap = new Map(deptItems.map((item: any) => [item.id, item]));
 
-            // Add local-only items (new, not yet in Supabase)
+            // Add only pending local-only items (new, not yet in Supabase)
             for (const item of localItems) {
-              if (item.id && !supabaseIds.has(item.id)) {
+              if (item.id && !supabaseIds.has(item.id) && isPendingUpsert(tableName, item.id) && !isDeleted(tableName, item.id)) {
                 mergedMap.set(item.id, item);
               }
             }
@@ -178,31 +259,53 @@ async function pullStockTables(): Promise<void> {
             localStorage.setItem(storageKey, JSON.stringify(merged));
 
             // Push local-only items to Supabase
-            const localOnly = localItems.filter(item => item.id && !supabaseIds.has(item.id) && !isDeleted(tableName, item.id));
+            const localOnly = localItems.filter(
+              item => item.id && !supabaseIds.has(item.id) && isPendingUpsert(tableName, item.id) && !isDeleted(tableName, item.id),
+            );
             if (localOnly.length > 0) {
               const tagged = localOnly.map((item: any) => ({ ...item, _dept: dept }));
               await pushArrayToSupabase(tableName, tagged);
             }
           } else if (localItems.length > 0) {
-            // Supabase has no items for this dept → preserve local and push
+            // Supabase has no items for this dept: keep/push only pending local creations.
+            const pending = localItems.filter(
+              item => item.id && isPendingUpsert(tableName, item.id) && !isDeleted(tableName, item.id),
+            );
+            localStorage.setItem(storageKey, JSON.stringify(pending));
+            if (pending.length > 0) {
+              const tagged = pending.map(item => ({ ...item, _dept: dept }));
+              await pushArrayToSupabase(tableName, tagged);
+            }
+          }
+        }
+      } else {
+        const seen = hasCloudSeen(tableName);
+
+        for (const dept of STOCK_DEPTS) {
+          const storageKey = stockStorageKey(dept, suffix);
+          const localRaw = localStorage.getItem(storageKey);
+          const localItems: { id: string }[] = localRaw ? JSON.parse(localRaw) : [];
+
+          if (seen) {
+            const pending = localItems.filter(
+              item => item.id && isPendingUpsert(tableName, item.id) && !isDeleted(tableName, item.id),
+            );
+            localStorage.setItem(storageKey, JSON.stringify(pending));
+            if (pending.length > 0) {
+              const tagged = pending.map(item => ({ ...item, _dept: dept }));
+              await pushArrayToSupabase(tableName, tagged);
+            }
+          } else {
             const alive = localItems.filter(item => !isDeleted(tableName, item.id));
+            localStorage.setItem(storageKey, JSON.stringify(alive));
             if (alive.length > 0) {
               const tagged = alive.map(item => ({ ...item, _dept: dept }));
               await pushArrayToSupabase(tableName, tagged);
             }
           }
         }
-      } else {
-        // Supabase table completely empty → push all local data
-        for (const dept of STOCK_DEPTS) {
-          const storageKey = stockStorageKey(dept, suffix);
-          const localRaw = localStorage.getItem(storageKey);
-          const localItems: { id: string }[] = localRaw ? JSON.parse(localRaw) : [];
-          if (localItems.length > 0) {
-            const tagged = localItems.map(item => ({ ...item, _dept: dept }));
-            await pushArrayToSupabase(tableName, tagged);
-          }
-        }
+
+        markCloudSeen(tableName);
       }
     } catch (error) {
       console.error(`[Sync] Erreur pull stock ${tableName}:`, error);
@@ -331,7 +434,8 @@ async function replaceCollection(tableName: TableName, items: { id: string }[]) 
   const localIds = items.map(i => i.id);
   if (localIds.length > 0) {
     // Delete rows whose id is NOT in the local set
-    const { error } = await sb.from(tableName).delete().not('id', 'in', `(${localIds.join(',')})`);
+    const quotedIds = localIds.map(id => `'${String(id).replace(/'/g, "''")}'`);
+    const { error } = await sb.from(tableName).delete().not('id', 'in', `(${quotedIds.join(',')})`);
     if (error) console.error(`[Sync] Erreur nettoyage ${tableName}:`, error);
   } else {
     // Local is empty → delete all
@@ -418,16 +522,22 @@ export async function purgeAllSupabase(): Promise<void> {
 // ==================== SINGLE DOCUMENT OPERATIONS ====================
 
 export function syncSetDoc(tableName: TableName, item: { id: string }) {
+  addPendingUpsert(tableName, item.id);
   const sb = getSupabase();
   if (!sb) return;
   sb.from(tableName).upsert({ id: item.id, data: item }, { onConflict: "id" })
     .then(({ error }) => {
       if (error) console.error(`[Sync] Erreur écriture ${tableName}/${item.id}:`, error);
+      else {
+        removePendingUpsert(tableName, item.id);
+        clearTombstone(tableName, item.id);
+      }
     });
 }
 
 export function syncDeleteDoc(tableName: TableName, itemId: string) {
   // Track deletion so it survives page refresh (won't be resurrected from Supabase)
+  removePendingUpsert(tableName, itemId);
   addTombstone(tableName, itemId);
   const sb = getSupabase();
   if (!sb) return;
