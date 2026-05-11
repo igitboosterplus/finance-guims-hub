@@ -250,6 +250,10 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
   const editCategories = editDept
     ? editType === "income" ? editDept.incomeCategories : editDept.expenseCategories
     : [];
+  const safeCategoryOptions = [...new Set(transactions.map(tx => (tx.category || '').trim()))]
+    .filter(Boolean)
+    .sort();
+  const safeEditCategories = editCategories.map(c => (c || '').trim()).filter(Boolean);
   const editPaymentMethods = getPaymentMethodsForDepartment(editTx?.departmentId);
 
   return (
@@ -271,7 +275,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">Toutes catégories</SelectItem>
-            {[...new Set(transactions.map(tx => tx.category))].sort().map(cat => (
+            {safeCategoryOptions.map(cat => (
               <SelectItem key={cat} value={cat}>{cat}</SelectItem>
             ))}
           </SelectContent>
@@ -468,7 +472,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {editCategories.map((c) => (
+                    {safeEditCategories.map((c) => (
                       <SelectItem key={c} value={c}>{c}</SelectItem>
                     ))}
                   </SelectContent>
