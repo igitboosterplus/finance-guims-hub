@@ -71,6 +71,7 @@ export interface AuditLogEntry {
 const USERS_KEY = 'finance-users';
 const SESSION_KEY = 'finance-session';
 const AUDIT_KEY = 'finance-audit-log';
+const SUPERADMIN_BOOTSTRAPPED_KEY = 'finance-superadmin-bootstrapped';
 
 function normalizeUsername(username: string): string {
   return username.trim().toLowerCase();
@@ -142,8 +143,10 @@ export async function initDefaultSuperAdmin() {
     console.log('[Auth] Removed duplicate user entries.');
   }
 
-  // Create default superadmin only if NO users exist (after Supabase pull)
-  if (users.length === 0 || !users.some(u => u.role === 'superadmin')) {
+  // Create default superadmin only ONCE on first bootstrap.
+  // After that, deletions are definitive and no account is auto-recreated.
+  const alreadyBootstrapped = localStorage.getItem(SUPERADMIN_BOOTSTRAPPED_KEY) === 'true';
+  if (!alreadyBootstrapped && users.length === 0) {
     const hash = await hashPassword('Yvan2000@');
 
     // Re-read users after async hashing to avoid duplicate creation in concurrent startup calls.
@@ -164,6 +167,7 @@ export async function initDefaultSuperAdmin() {
     const final = latestUsers.filter(u => u.role !== 'superadmin');
     final.push(superAdmin);
     saveUsers(final);
+    localStorage.setItem(SUPERADMIN_BOOTSTRAPPED_KEY, 'true');
   }
 }
 
@@ -189,7 +193,10 @@ export function purgeAllData(): void {
     'payment-plans',
     'formation-enrollments',
     'finance-seed-done',
+    'finance-superadmin-bootstrapped',
     'guims-sync-tombstones',
+    'guims-sync-pending-upserts',
+    'guims-sync-cloud-seen-tables',
   ];
   for (const key of ALL_KEYS) {
     localStorage.removeItem(key);
@@ -342,7 +349,7 @@ export function getUserPermissions(user: User | null): UserPermissions {
   return user.permissions ?? DEFAULT_PERMISSIONS;
 }
 
-export function hasPermission(user: User | null, key: keyof Omit<UserPermissions, 'departments'>): boolean {
+export function hasPermission(user: User | null, key: keyof Omit<UserPermissions, 'departments' | 'stockDepartments'>): boolean {
   return getUserPermissions(user)[key];
 }
 
