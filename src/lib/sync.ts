@@ -1,350 +1,148 @@
-import { getSupabase, isSupabaseConfigured, TABLES } from "./firebase";
+﻿import { getSupabase, isSupabaseConfigured, TABLES } from "./firebase";
 
 // ==================== SYNC ENGINE ====================
-// Stratégie : localStorage = source rapide, Supabase = persistance cloud.
-// - Au démarrage : Supabase → localStorage (si configuré)
-// - À chaque écriture : localStorage → Supabase (async, en arrière-plan)
-// RÈGLE : Supabase est autoritaire. Local ne gagne que pour les items ABSENTS de Supabase.
-// Les suppressions locales sont traquées par des tombstones pour éviter la résurrection.
+// Strategie : localStorage = cache rapide, Supabase = SEULE SOURCE DE VERITE.
+//
+// REGLES STRICTES :
+//   1. Au demarrage : on tire Supabase -> localStorage (Supabase gagne toujours).
+//   2. A chaque ecriture : on envoie vers Supabase immediatement (async).
+//   3. SUPPRESSION DEFINITIVE : on inscrit l ID dans la table `deleted_ids` de Supabase
+//      ET on supprime la ligne dans sa table d origine.
+//      Lors de chaque pull, les deleted_ids sont lus EN PREMIER et tout item dont l ID
+//      figure dans deleted_ids est exclu - peu importe l appareil ou le navigateur.
+//   4. Le localStorage n est JAMAIS une source pour reinjecter des donnees dans Supabase.
 
 type TableName = typeof TABLES[keyof typeof TABLES];
 
-// Départements qui ont des tables de stock dédiées
 const STOCK_DEPTS = ['gaba', 'guims-academy', 'guims-educ', 'digitboosterplus'] as const;
 
 function stockStorageKey(dept: string, suffix: string): string {
   return `${dept === 'gaba' ? 'gaba' : dept}-${suffix}`;
 }
 
-// ==================== DELETION TOMBSTONES ====================
-const TOMBSTONE_KEY = 'guims-sync-tombstones';
-const PENDING_UPSERT_KEY = 'guims-sync-pending-upserts';
-const CLOUD_SEEN_TABLES_KEY = 'guims-sync-cloud-seen-tables';
+// ==================== DELETED IDS (Supabase-persisted) ====================
 
-function getTombstones(): Set<string> {
-  const raw = localStorage.getItem(TOMBSTONE_KEY);
+const LOCAL_TOMBSTONE_KEY = 'guims-sync-tombstones';
+
+function getLocalTombstones(): Set<string> {
+  const raw = localStorage.getItem(LOCAL_TOMBSTONE_KEY);
   return raw ? new Set(JSON.parse(raw)) : new Set();
 }
 
-function addTombstone(tableName: string, itemId: string) {
-  const tombstones = getTombstones();
-  tombstones.add(`${tableName}:${itemId}`);
-  localStorage.setItem(TOMBSTONE_KEY, JSON.stringify([...tombstones]));
+function addLocalTombstone(tableName: string, itemId: string) {
+  const t = getLocalTombstones();
+  t.add(`${tableName}:${itemId}`);
+  localStorage.setItem(LOCAL_TOMBSTONE_KEY, JSON.stringify([...t]));
 }
+
+let cloudDeletedIds: Set<string> = new Set();
 
 function isDeleted(tableName: string, itemId: string): boolean {
-  return getTombstones().has(`${tableName}:${itemId}`);
+  const key = `${tableName}:${itemId}`;
+  return cloudDeletedIds.has(key) || getLocalTombstones().has(key);
 }
 
-function clearTombstone(tableName: string, itemId: string) {
-  const tombstones = getTombstones();
-  tombstones.delete(`${tableName}:${itemId}`);
-  localStorage.setItem(TOMBSTONE_KEY, JSON.stringify([...tombstones]));
-}
-
-function getPendingUpsertsMap(): Record<string, string[]> {
-  const raw = localStorage.getItem(PENDING_UPSERT_KEY);
-  if (!raw) return {};
+async function fetchCloudDeletedIds(): Promise<Set<string>> {
+  const sb = getSupabase();
+  if (!sb) return new Set();
   try {
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function setPendingUpsertsMap(map: Record<string, string[]>) {
-  localStorage.setItem(PENDING_UPSERT_KEY, JSON.stringify(map));
-}
-
-function addPendingUpsert(tableName: string, itemId: string) {
-  const map = getPendingUpsertsMap();
-  const current = new Set(map[tableName] || []);
-  current.add(itemId);
-  map[tableName] = [...current];
-  setPendingUpsertsMap(map);
-}
-
-function removePendingUpsert(tableName: string, itemId: string) {
-  const map = getPendingUpsertsMap();
-  const current = new Set(map[tableName] || []);
-  current.delete(itemId);
-  if (current.size === 0) delete map[tableName];
-  else map[tableName] = [...current];
-  setPendingUpsertsMap(map);
-}
-
-function isPendingUpsert(tableName: string, itemId: string): boolean {
-  const map = getPendingUpsertsMap();
-  return (map[tableName] || []).includes(itemId);
-}
-
-function getCloudSeenTables(): Set<string> {
-  const raw = localStorage.getItem(CLOUD_SEEN_TABLES_KEY);
-  if (!raw) return new Set();
-  try {
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return new Set();
-    return new Set(parsed);
-  } catch {
+    const { data, error } = await sb.from('deleted_ids').select('table_name, item_id');
+    if (error) {
+      console.warn('[Sync] deleted_ids fetch error (table may not exist yet):', error.message);
+      return new Set();
+    }
+    const result = new Set<string>();
+    for (const row of data || []) {
+      if (row.table_name && row.item_id) {
+        result.add(`${row.table_name}:${row.item_id}`);
+      }
+    }
+    return result;
+  } catch (e) {
+    console.warn('[Sync] deleted_ids fetch failed:', e);
     return new Set();
   }
 }
 
-function markCloudSeen(tableName: string) {
-  const seen = getCloudSeenTables();
-  seen.add(tableName);
-  localStorage.setItem(CLOUD_SEEN_TABLES_KEY, JSON.stringify([...seen]));
-}
-
-function hasCloudSeen(tableName: string): boolean {
-  return getCloudSeenTables().has(tableName);
-}
-
-/** Retry deleting all tombstoned items from Supabase */
-async function flushTombstones() {
+async function persistDeleteToSupabase(tableName: string, itemId: string): Promise<void> {
   const sb = getSupabase();
   if (!sb) return;
-  const tombstones = getTombstones();
-  for (const entry of tombstones) {
-    const [tableName, itemId] = entry.split(':');
-    if (!tableName || !itemId) continue;
-    try {
-      const { error } = await sb.from(tableName).delete().eq("id", itemId);
-      if (!error) {
-        clearTombstone(tableName, itemId);
-      }
-    } catch {
-      // Will retry on next pull
-    }
+  try {
+    await sb.from('deleted_ids').upsert(
+      { table_name: tableName, item_id: itemId, deleted_at: new Date().toISOString() },
+      { onConflict: 'table_name,item_id' }
+    );
+    await sb.from(tableName).delete().eq('id', itemId);
+    cloudDeletedIds.add(`${tableName}:${itemId}`);
+  } catch (e) {
+    console.error(`[Sync] Failed to persist delete ${tableName}/${itemId}:`, e);
   }
 }
 
-// ==================== PULL (Supabase → localStorage) ====================
+// ==================== PULL (Supabase -> localStorage) ====================
 
-/**
- * Pull a non-departmental table from Supabase → localStorage.
- * If Supabase has data → use it (authoritative).
- * If Supabase empty + local has data → push local to Supabase (first-time seed).
- */
 async function pullTable(tableName: TableName, storageKey: string): Promise<boolean> {
   const sb = getSupabase();
   if (!sb) return false;
   try {
     const { data, error } = await sb.from(tableName).select("data");
     if (error) throw error;
-
-    const localRaw = localStorage.getItem(storageKey);
-    const localItems: { id: string }[] = localRaw ? JSON.parse(localRaw) : [];
-
-    if (data && data.length > 0) {
-      markCloudSeen(tableName);
-      const supabaseItems = data.map(row => row.data);
-      const supabaseIds = new Set(supabaseItems.map((item: any) => item.id));
-
-      // Start with Supabase data (authoritative — has changes from all devices)
-      const mergedMap = new Map(supabaseItems.map((item: any) => [item.id, item]));
-
-      // Add only local pending items that have not been uploaded yet.
-      // This avoids resurrecting stale deleted entries from old caches.
-      for (const item of localItems) {
-        if (item.id && !supabaseIds.has(item.id) && isPendingUpsert(tableName, item.id) && !isDeleted(tableName, item.id)) {
-          mergedMap.set(item.id, item);
-        }
-      }
-
-      // Remove tombstoned items (deleted locally, not yet deleted from Supabase)
-      for (const [id] of mergedMap) {
-        if (isDeleted(tableName, id)) {
-          mergedMap.delete(id);
-        }
-      }
-
-      const merged = Array.from(mergedMap.values());
-      localStorage.setItem(storageKey, JSON.stringify(merged));
-
-      // Push local-only items to Supabase + delete tombstoned items from Supabase
-      const localOnly = localItems.filter(
-        item => item.id && !supabaseIds.has(item.id) && isPendingUpsert(tableName, item.id) && !isDeleted(tableName, item.id),
-      );
-      if (localOnly.length > 0) {
-        await pushArrayToSupabase(tableName, localOnly);
-      }
-      return true;
-    }
-
-    const pendingLocalOnly = localItems.filter(
-      item => item.id && isPendingUpsert(tableName, item.id) && !isDeleted(tableName, item.id),
-    );
-
-    // Supabase table empty and already known from cloud: trust cloud emptiness,
-    // keep only pending local creations.
-    if (hasCloudSeen(tableName)) {
-      localStorage.setItem(storageKey, JSON.stringify(pendingLocalOnly));
-      if (pendingLocalOnly.length > 0) {
-        await pushArrayToSupabase(tableName, pendingLocalOnly);
-      }
-      return true;
-    }
-
-    // First cloud handshake for this table: seed with local alive records.
-    if (Array.isArray(localItems) && localItems.length > 0) {
-      const alive = localItems.filter(item => !isDeleted(tableName, item.id));
-      localStorage.setItem(storageKey, JSON.stringify(alive));
-      if (alive.length > 0) {
-        await pushArrayToSupabase(tableName, alive);
-      }
-    }
-    markCloudSeen(tableName);
-
+    const items = (data || [])
+      .map((row: any) => row.data)
+      .filter((item: any) => item?.id && !isDeleted(tableName, item.id));
+    localStorage.setItem(storageKey, JSON.stringify(items));
     return true;
-  } catch (error) {
-    console.error(`[Sync] Erreur pull ${tableName}:`, error);
+  } catch (err) {
+    console.error(`[Sync] Erreur pull ${tableName}:`, err);
     return false;
   }
 }
 
-/**
- * Pull ALL stock tables (items, movements, trainings, kits) in one pass per table.
- * Fetches once per Supabase table, then splits by _dept into per-department localStorage keys.
- * This avoids duplicate fetches and ensures consistent _dept filtering.
- */
 async function pullStockTables(): Promise<void> {
   const sb = getSupabase();
   if (!sb) return;
-
   const stockTableSuffixes: [TableName, string][] = [
     [TABLES.stockItems, 'stock-items'],
     [TABLES.stockMovements, 'stock-movements'],
     [TABLES.trainings, 'trainings'],
     [TABLES.stockKits, 'stock-kits'],
   ];
-
   for (const [tableName, suffix] of stockTableSuffixes) {
     try {
       const { data, error } = await sb.from(tableName).select("data");
       if (error) throw error;
-
-      if (data && data.length > 0) {
-        markCloudSeen(tableName);
-        const allItems = data.map(row => row.data);
-
-        for (const dept of STOCK_DEPTS) {
-          const storageKey = stockStorageKey(dept, suffix);
-          const deptItems = allItems.filter(item => (item?._dept || 'gaba') === dept);
-
-          const localRaw = localStorage.getItem(storageKey);
-          const localItems: { id: string }[] = localRaw ? JSON.parse(localRaw) : [];
-          const supabaseIds = new Set(deptItems.map((item: any) => item.id));
-
-          if (deptItems.length > 0) {
-            // Start with Supabase data (authoritative)
-            const mergedMap = new Map(deptItems.map((item: any) => [item.id, item]));
-
-            // Add only pending local-only items (new, not yet in Supabase)
-            for (const item of localItems) {
-              if (item.id && !supabaseIds.has(item.id) && isPendingUpsert(tableName, item.id) && !isDeleted(tableName, item.id)) {
-                mergedMap.set(item.id, item);
-              }
-            }
-
-            // Remove tombstoned items
-            for (const [id] of mergedMap) {
-              if (isDeleted(tableName, id)) {
-                mergedMap.delete(id);
-              }
-            }
-
-            const merged = Array.from(mergedMap.values());
-            localStorage.setItem(storageKey, JSON.stringify(merged));
-
-            // Push local-only items to Supabase
-            const localOnly = localItems.filter(
-              item => item.id && !supabaseIds.has(item.id) && isPendingUpsert(tableName, item.id) && !isDeleted(tableName, item.id),
-            );
-            if (localOnly.length > 0) {
-              const tagged = localOnly.map((item: any) => ({ ...item, _dept: dept }));
-              await pushArrayToSupabase(tableName, tagged);
-            }
-          } else if (localItems.length > 0) {
-            // Supabase has no items for this dept: keep/push only pending local creations.
-            const pending = localItems.filter(
-              item => item.id && isPendingUpsert(tableName, item.id) && !isDeleted(tableName, item.id),
-            );
-            localStorage.setItem(storageKey, JSON.stringify(pending));
-            if (pending.length > 0) {
-              const tagged = pending.map(item => ({ ...item, _dept: dept }));
-              await pushArrayToSupabase(tableName, tagged);
-            }
-          }
-        }
-      } else {
-        const seen = hasCloudSeen(tableName);
-
-        for (const dept of STOCK_DEPTS) {
-          const storageKey = stockStorageKey(dept, suffix);
-          const localRaw = localStorage.getItem(storageKey);
-          const localItems: { id: string }[] = localRaw ? JSON.parse(localRaw) : [];
-
-          if (seen) {
-            const pending = localItems.filter(
-              item => item.id && isPendingUpsert(tableName, item.id) && !isDeleted(tableName, item.id),
-            );
-            localStorage.setItem(storageKey, JSON.stringify(pending));
-            if (pending.length > 0) {
-              const tagged = pending.map(item => ({ ...item, _dept: dept }));
-              await pushArrayToSupabase(tableName, tagged);
-            }
-          } else {
-            const alive = localItems.filter(item => !isDeleted(tableName, item.id));
-            localStorage.setItem(storageKey, JSON.stringify(alive));
-            if (alive.length > 0) {
-              const tagged = alive.map(item => ({ ...item, _dept: dept }));
-              await pushArrayToSupabase(tableName, tagged);
-            }
-          }
-        }
-
-        markCloudSeen(tableName);
+      const allItems = (data || [])
+        .map((row: any) => row.data)
+        .filter((item: any) => item?.id && !isDeleted(tableName, item.id));
+      for (const dept of STOCK_DEPTS) {
+        const storageKey = stockStorageKey(dept, suffix);
+        const deptItems = allItems.filter((item: any) => (item._dept || 'gaba') === dept);
+        localStorage.setItem(storageKey, JSON.stringify(deptItems));
       }
-    } catch (error) {
-      console.error(`[Sync] Erreur pull stock ${tableName}:`, error);
+    } catch (err) {
+      console.error(`[Sync] Erreur pull stock ${tableName}:`, err);
     }
   }
-
-  // After pulling all stock data, recalculate currentQuantity from movements
-  // This ensures consistency when items and movements come from different devices
   recalcStockQuantities();
 }
 
-/**
- * Recalculate currentQuantity on stock items from movements.
- * Ensures consistency after sync (items and movements may come from different devices).
- */
 function recalcStockQuantities() {
   for (const dept of STOCK_DEPTS) {
     const itemsKey = stockStorageKey(dept, 'stock-items');
     const movementsKey = stockStorageKey(dept, 'stock-movements');
-
     const itemsRaw = localStorage.getItem(itemsKey);
     const movementsRaw = localStorage.getItem(movementsKey);
     if (!itemsRaw) continue;
-
     const items: any[] = JSON.parse(itemsRaw);
     const movements: any[] = movementsRaw ? JSON.parse(movementsRaw) : [];
-
     if (movements.length === 0) continue;
-
-    // Build quantity map from movements
     const quantityMap = new Map<string, number>();
-    // Sort movements by date + createdAt for deterministic ordering
     const sorted = [...movements].sort((a, b) => {
       const da = a.createdAt || a.date || '';
       const db = b.createdAt || b.date || '';
       const cmp = da.localeCompare(db);
       return cmp !== 0 ? cmp : (a.id || '').localeCompare(b.id || '');
     });
-
     for (const m of sorted) {
       const prev = quantityMap.get(m.itemId) ?? 0;
       if (m.type === 'entry') {
@@ -355,7 +153,6 @@ function recalcStockQuantities() {
         quantityMap.set(m.itemId, m.newQuantity ?? m.quantity ?? 0);
       }
     }
-
     let changed = false;
     for (const item of items) {
       if (quantityMap.has(item.id)) {
@@ -366,10 +163,8 @@ function recalcStockQuantities() {
         }
       }
     }
-
     if (changed) {
       localStorage.setItem(itemsKey, JSON.stringify(items));
-      // Push corrected items to Supabase
       const tagged = items.map((item: any) => ({ ...item, _dept: dept }));
       pushArrayToSupabase(TABLES.stockItems, tagged).catch(err =>
         console.error(`[Sync] Erreur push recalc ${dept}:`, err)
@@ -379,12 +174,11 @@ function recalcStockQuantities() {
 }
 
 export async function pullAllFromSupabase(): Promise<{ success: boolean; error?: string }> {
-  if (!isSupabaseConfigured()) return { success: false, error: "Supabase non configuré" };
+  if (!isSupabaseConfigured()) return { success: false, error: "Supabase non configure" };
   const sb = getSupabase();
-  if (!sb) return { success: false, error: "Supabase non initialisé" };
-
+  if (!sb) return { success: false, error: "Supabase non initialise" };
   try {
-    // 1. Pull non-departmental tables in parallel
+    cloudDeletedIds = await fetchCloudDeletedIds();
     await Promise.all([
       pullTable(TABLES.transactions, "finance-transactions"),
       pullTable(TABLES.users, "finance-users"),
@@ -395,13 +189,7 @@ export async function pullAllFromSupabase(): Promise<{ success: boolean; error?:
       pullTable(TABLES.paymentPlans, "payment-plans"),
       pullTable(TABLES.enrollments, "formation-enrollments"),
     ]);
-
-    // 2. Pull stock tables (single fetch per table, split by _dept)
     await pullStockTables();
-
-    // 3. Retry pending tombstone deletions from Supabase
-    await flushTombstones();
-
     console.log("[Sync] Pull complet depuis Supabase.");
     return { success: true };
   } catch (error) {
@@ -410,47 +198,21 @@ export async function pullAllFromSupabase(): Promise<{ success: boolean; error?:
   }
 }
 
-// ==================== PUSH (localStorage → Supabase) ====================
+// ==================== PUSH (localStorage -> Supabase) ====================
 
 async function pushArrayToSupabase(tableName: TableName, items: { id: string }[]) {
   const sb = getSupabase();
   if (!sb || items.length === 0) return;
-  // Upsert : chaque item est stocké avec son id + blob JSON complet dans "data"
   const rows = items.map(item => ({ id: item.id, data: item }));
   const { error } = await sb.from(tableName).upsert(rows, { onConflict: "id" });
   if (error) throw error;
 }
 
-async function replaceCollection(tableName: TableName, items: { id: string }[]) {
-  const sb = getSupabase();
-  if (!sb) return;
-
-  // Upsert all current items first (atomic per-item, no data loss window)
-  if (items.length > 0) {
-    await pushArrayToSupabase(tableName, items);
-  }
-
-  // Then remove items that are no longer in the local set
-  const localIds = items.map(i => i.id);
-  if (localIds.length > 0) {
-    // Delete rows whose id is NOT in the local set
-    const quotedIds = localIds.map(id => `'${String(id).replace(/'/g, "''")}'`);
-    const { error } = await sb.from(tableName).delete().not('id', 'in', `(${quotedIds.join(',')})`);
-    if (error) console.error(`[Sync] Erreur nettoyage ${tableName}:`, error);
-  } else {
-    // Local is empty → delete all
-    const { error } = await sb.from(tableName).delete().neq('id', '___none___');
-    if (error) console.error(`[Sync] Erreur suppression ${tableName}:`, error);
-  }
-}
-
 export async function pushAllToSupabase(): Promise<{ success: boolean; error?: string }> {
-  if (!isSupabaseConfigured()) return { success: false, error: "Supabase non configuré" };
+  if (!isSupabaseConfigured()) return { success: false, error: "Supabase non configure" };
   const sb = getSupabase();
-  if (!sb) return { success: false, error: "Supabase non initialisé" };
-
+  if (!sb) return { success: false, error: "Supabase non initialise" };
   try {
-    // Non-departmental tables: safe to replaceCollection (cleans up Supabase)
     const sharedPairs: [TableName, string][] = [
       [TABLES.transactions, "finance-transactions"],
       [TABLES.users, "finance-users"],
@@ -461,16 +223,13 @@ export async function pushAllToSupabase(): Promise<{ success: boolean; error?: s
       [TABLES.paymentPlans, "payment-plans"],
       [TABLES.enrollments, "formation-enrollments"],
     ];
-
     for (const [tableName, storageKey] of sharedPairs) {
       const data = localStorage.getItem(storageKey);
       const items = data ? JSON.parse(data) : [];
-      if (Array.isArray(items)) {
-        await replaceCollection(tableName, items);
+      if (Array.isArray(items) && items.length > 0) {
+        await pushArrayToSupabase(tableName, items);
       }
     }
-
-    // Departmental stock tables: gather ALL dept items, then replaceCollection per table
     const stockSuffixes: [TableName, string][] = [
       [TABLES.stockItems, 'stock-items'],
       [TABLES.stockMovements, 'stock-movements'],
@@ -478,7 +237,6 @@ export async function pushAllToSupabase(): Promise<{ success: boolean; error?: s
       [TABLES.stockKits, 'stock-kits'],
     ];
     for (const [tableName, suffix] of stockSuffixes) {
-      // Collect all items from all departments for this stock table
       const allTagged: { id: string }[] = [];
       for (const dept of STOCK_DEPTS) {
         const storageKey = stockStorageKey(dept, suffix);
@@ -489,10 +247,10 @@ export async function pushAllToSupabase(): Promise<{ success: boolean; error?: s
           allTagged.push(...tagged);
         }
       }
-      // replaceCollection with ALL dept items combined = safe (no cross-dept loss)
-      await replaceCollection(tableName, allTagged);
+      if (allTagged.length > 0) {
+        await pushArrayToSupabase(tableName, allTagged);
+      }
     }
-
     console.log("[Sync] Push complet vers Supabase.");
     return { success: true };
   } catch (error) {
@@ -516,49 +274,33 @@ export async function purgeAllSupabase(): Promise<void> {
     const { error } = await sb.from(table).delete().neq('id', '___none___');
     if (error) console.error(`[Purge] Erreur suppression ${table}:`, error);
   }
-  console.log('[Purge] Toutes les tables Supabase vidées.');
+  await sb.from('deleted_ids').delete().neq('item_id', '___none___');
+  console.log('[Purge] Toutes les tables Supabase videes.');
 }
 
 // ==================== SINGLE DOCUMENT OPERATIONS ====================
 
 export function syncSetDoc(tableName: TableName, item: { id: string }) {
-  addPendingUpsert(tableName, item.id);
   const sb = getSupabase();
   if (!sb) return;
   sb.from(tableName).upsert({ id: item.id, data: item }, { onConflict: "id" })
     .then(({ error }) => {
-      if (error) console.error(`[Sync] Erreur écriture ${tableName}/${item.id}:`, error);
-      else {
-        removePendingUpsert(tableName, item.id);
-        clearTombstone(tableName, item.id);
-      }
+      if (error) console.error(`[Sync] Erreur ecriture ${tableName}/${item.id}:`, error);
     });
 }
 
 export function syncDeleteDoc(tableName: TableName, itemId: string) {
-  // Track deletion so it survives page refresh (won't be resurrected from Supabase)
-  removePendingUpsert(tableName, itemId);
-  addTombstone(tableName, itemId);
-  const sb = getSupabase();
-  if (!sb) return;
-  sb.from(tableName).delete().eq("id", itemId)
-    .then(({ error }) => {
-      if (error) console.error(`[Sync] Erreur suppression ${tableName}/${itemId}:`, error);
-      else clearTombstone(tableName, itemId); // Supabase delete confirmed → clean up tombstone
-    });
+  addLocalTombstone(tableName, itemId);
+  cloudDeletedIds.add(`${tableName}:${itemId}`);
+  persistDeleteToSupabase(tableName, itemId);
 }
 
-/**
- * Sync a localStorage collection to Supabase (upsert only — safe for shared tables).
- * Use syncDeleteDoc() for individual deletions.
- */
 export function syncFullCollection(tableName: TableName, storageKey: string, deptId?: string) {
   const sb = getSupabase();
   if (!sb) return;
   const data = localStorage.getItem(storageKey);
   const items = data ? JSON.parse(data) : [];
   if (!Array.isArray(items) || items.length === 0) return;
-  // Upsert only — do NOT delete other rows (table may be shared across departments)
   const tagged = deptId ? items.map((item: any) => ({ ...item, _dept: deptId })) : items;
   pushArrayToSupabase(tableName, tagged).catch(err =>
     console.error(`[Sync] Erreur sync collection ${tableName}:`, err)

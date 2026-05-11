@@ -179,4 +179,17 @@ CREATE TABLE enrollments (
 ALTER TABLE enrollments ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Allow all" ON enrollments FOR ALL USING (true) WITH CHECK (true);
 
+-- ==================== TABLE SUPPRESSIONS DEFINITIVES ====================
+-- Cette table est CRITIQUE. Elle garantit que tout élément supprimé ne réapparaît
+-- JAMAIS, même après un rechargement, un autre appareil, ou un nouveau déploiement.
+CREATE TABLE deleted_ids (
+  table_name TEXT NOT NULL,
+  item_id TEXT NOT NULL,
+  deleted_at TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (table_name, item_id)
+);
+
+ALTER TABLE deleted_ids ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all" ON deleted_ids FOR ALL USING (true) WITH CHECK (true);
+
 */
