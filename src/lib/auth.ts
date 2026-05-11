@@ -278,10 +278,10 @@ export function approveUser(userId: string) {
   }
 }
 
-export function rejectUser(userId: string) {
+export function rejectUser(userId: string): { success: boolean; error?: string } {
   const users = getUsers();
   const target = users.find(u => u.id === userId);
-  if (!target) return;
+  if (!target) return { success: false, error: 'Utilisateur introuvable' };
 
   const normalized = normalizeUsername(target.username);
   const toDeleteIds = users
@@ -290,6 +290,7 @@ export function rejectUser(userId: string) {
 
   saveUsers(users.filter(u => !toDeleteIds.includes(u.id)));
   toDeleteIds.forEach(id => syncDeleteDoc(TABLES.users, id));
+  return { success: true };
 }
 
 export async function resetUserPassword(userId: string, newPassword: string) {
@@ -301,10 +302,17 @@ export async function resetUserPassword(userId: string, newPassword: string) {
   }
 }
 
-export function deleteUser(userId: string) {
+export function deleteUser(userId: string): { success: boolean; error?: string } {
   const users = getUsers();
   const target = users.find(u => u.id === userId);
-  if (!target) return;
+  if (!target) return { success: false, error: 'Utilisateur introuvable' };
+
+  if (target.role === 'superadmin') {
+    const superAdminCount = users.filter(u => u.role === 'superadmin').length;
+    if (superAdminCount <= 1) {
+      return { success: false, error: 'Impossible de supprimer le dernier Super Admin' };
+    }
+  }
 
   const normalized = normalizeUsername(target.username);
   const toDeleteIds = users
@@ -313,6 +321,7 @@ export function deleteUser(userId: string) {
 
   saveUsers(users.filter(u => !toDeleteIds.includes(u.id)));
   toDeleteIds.forEach(id => syncDeleteDoc(TABLES.users, id));
+  return { success: true };
 }
 
 export function getUserById(id: string): User | undefined {

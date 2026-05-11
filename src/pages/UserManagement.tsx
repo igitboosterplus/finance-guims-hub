@@ -68,17 +68,25 @@ export default function UserManagement() {
   };
 
   const handleReject = (id: string) => {
-    rejectUser(id);
-    toast.success("Compte refusé et supprimé");
-    refresh();
+    const result = rejectUser(id);
+    if (result.success) {
+      toast.success("Compte refusé et supprimé");
+      refresh();
+    } else {
+      toast.error(result.error);
+    }
   };
 
   const handleDelete = () => {
     if (!deleteId) return;
-    deleteUser(deleteId);
+    const result = deleteUser(deleteId);
     setDeleteId(null);
-    toast.success("Compte supprimé");
-    refresh();
+    if (result.success) {
+      toast.success("Compte supprimé");
+      refresh();
+    } else {
+      toast.error(result.error);
+    }
   };
 
   const handleResetPassword = async () => {
