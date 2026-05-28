@@ -1,4 +1,4 @@
-import { LayoutDashboard, Plus, Users, FileText, Bell, UserCircle, Package, GraduationCap, CreditCard, ShieldCheck, Sparkles } from "lucide-react";
+import { LayoutDashboard, Plus, Users, FileText, Bell, UserCircle, Package, GraduationCap, CreditCard, ShieldCheck, Sparkles, LineChart } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
 import { departments } from "@/lib/data";
@@ -277,6 +277,18 @@ export function AppSidebar() {
                           )}
                         </span>
                       )}
+                    </NavLink>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild>
+                    <NavLink
+                      to="/ecart-solde"
+                      className="hover:bg-sidebar-accent"
+                      activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
+                    >
+                      <LineChart className="mr-2 h-4 w-4" />
+                      {!collapsed && <span>Ecart de solde</span>}
                     </NavLink>
                   </SidebarMenuButton>
                 </SidebarMenuItem>

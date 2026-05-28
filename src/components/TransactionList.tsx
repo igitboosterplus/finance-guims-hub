@@ -9,7 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Trash2, ArrowUpRight, ArrowDownRight, Search, Pencil, ChevronLeft, ChevronRight, Download, FileDown } from "lucide-react";
-import { formatCurrency, type Transaction, type PaymentMethod, getDepartment, deleteTransaction, updateTransaction, exportTransactionsCSV, getPaymentMethodsForDepartment, getPaymentMethodLabel, getTransactions } from "@/lib/data";
+import { formatCurrency, type Transaction, type PaymentMethod, getDepartment, deleteTransaction, updateTransaction, exportTransactionsCSV, getPaymentMethodsForDepartment, getPaymentMethodLabel, getTransactions, isInscriptionCategory } from "@/lib/data";
 import { addAuditEntry, getCurrentUser, isSuperAdmin, hasPermission, buildHumanDiff } from "@/lib/auth";
 import { syncInstallmentFromTransaction, removeInstallmentFromTransaction, syncEditedTransaction } from "@/lib/stock";
 import { getTransactionTimestamp, transactionDateToInputValue } from "@/lib/transactionDates";
@@ -34,6 +34,8 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
   const [dateTo, setDateTo] = useState<string>("");
   const [page, setPage] = useState(1);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [doubleConfirmOpen, setDoubleConfirmOpen] = useState(false);
+  const [doubleConfirmText, setDoubleConfirmText] = useState("");
   const [editTx, setEditTx] = useState<Transaction | null>(null);
 
   // Edit form state
@@ -78,35 +80,68 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
   const currentPage = Math.min(page, totalPages);
   const paginated = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
 
-  const handleDelete = () => {
-    if (!deleteId) return;
+  const txToDelete = deleteId ? transactions.find(t => t.id === deleteId) : null;
+  const isInscriptionLinkedTransaction = (tx: Transaction) => {
+    const category = tx.category || "";
+    const description = (tx.description || "").toLowerCase();
+    return isInscriptionCategory(category) || category.toLowerCase().includes("inscription") || description.includes("inscription");
+  };
+
+  const finalizeDelete = (targetId: string) => {
     const currentUser = getCurrentUser();
     if (!currentUser || !isSuperAdmin(currentUser)) {
       toast.error("Seul le Super Admin peut supprimer des transactions");
       setDeleteId(null);
+      setDoubleConfirmOpen(false);
+      setDoubleConfirmText("");
       return;
     }
-    const txToDelete = transactions.find(t => t.id === deleteId);
-    deleteTransaction(deleteId);
+    const tx = transactions.find(t => t.id === targetId);
+    deleteTransaction(targetId);
     // Remove corresponding installment from payment plan (or reset inscription)
-    if (txToDelete?.personName) {
-      removeInstallmentFromTransaction(txToDelete.personName, txToDelete.date, txToDelete.amount, txToDelete.category);
+    if (tx?.personName) {
+      removeInstallmentFromTransaction(tx.personName, tx.date, tx.amount, tx.category);
     }
-    if (txToDelete && currentUser) {
+    if (tx && currentUser) {
       addAuditEntry({
         userId: currentUser.id,
         username: currentUser.username,
         action: 'delete',
         entityType: 'transaction',
-        entityId: deleteId,
-        details: `Suppression: ${txToDelete.category} - ${txToDelete.description}`,
-        previousData: JSON.stringify({ type: txToDelete.type, amount: txToDelete.amount, category: txToDelete.category, date: txToDelete.date, paymentMethod: txToDelete.paymentMethod }),
+        entityId: targetId,
+        details: `Suppression: ${tx.category} - ${tx.description}`,
+        previousData: JSON.stringify({ type: tx.type, amount: tx.amount, category: tx.category, date: tx.date, paymentMethod: tx.paymentMethod }),
         newData: '',
       });
     }
     setDeleteId(null);
+    setDoubleConfirmOpen(false);
+    setDoubleConfirmText("");
     toast.success("Transaction supprimée");
     onDelete?.();
+  };
+
+  const handleDelete = () => {
+    if (!deleteId) return;
+    const tx = transactions.find(t => t.id === deleteId);
+    if (!tx) return;
+
+    if (isInscriptionLinkedTransaction(tx)) {
+      setDoubleConfirmText("");
+      setDoubleConfirmOpen(true);
+      return;
+    }
+
+    finalizeDelete(deleteId);
+  };
+
+  const confirmDoubleDelete = () => {
+    if (!deleteId) return;
+    if (doubleConfirmText.trim().toUpperCase() !== "SUPPRIMER") {
+      toast.error('Tapez "SUPPRIMER" pour confirmer');
+      return;
+    }
+    finalizeDelete(deleteId);
   };
 
   const openEdit = (tx: Transaction) => {
@@ -520,6 +555,38 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
             <AlertDialogCancel>Annuler</AlertDialogCancel>
             <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
               Supprimer
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={doubleConfirmOpen} onOpenChange={(open) => { setDoubleConfirmOpen(open); if (!open) setDoubleConfirmText(""); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Verrou actif: transaction d'inscription</AlertDialogTitle>
+            <AlertDialogDescription>
+              Cette transaction est liee a une inscription et peut impacter fortement le solde.
+              Pour confirmer la suppression, tapez SUPPRIMER ci-dessous.
+              {txToDelete && (
+                <span className="block mt-2 text-foreground font-medium">
+                  {txToDelete.personName || 'Sans nom'} - {txToDelete.category} - {formatCurrency(txToDelete.amount)}
+                </span>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="double-delete-confirm">Confirmation</Label>
+            <Input
+              id="double-delete-confirm"
+              placeholder='Tapez SUPPRIMER'
+              value={doubleConfirmText}
+              onChange={(e) => setDoubleConfirmText(e.target.value)}
+            />
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Annuler</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDoubleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              Confirmer suppression
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -17,6 +17,7 @@ import GabaStockPage from "@/pages/GabaStockPage";
 import FormationsPage from "@/pages/FormationsPage";
 import PaymentTrackingPage from "@/pages/PaymentTrackingPage";
 import AIAccountingChatPage from "@/pages/AIAccountingChatPage";
+import BalanceDeltaPage from "@/pages/BalanceDeltaPage";
 import NotFound from "./pages/NotFound.tsx";
 import { initSupabase, isSupabaseConfigured } from "@/lib/firebase";
 import { hasDepartmentAccess, hasPermission, hasStockAccess } from "@/lib/auth";
@@ -84,6 +85,7 @@ const App = () => (
                     <Route path="/formations" element={<FormationsPage />} />
                     <Route path="/paiements" element={<PaymentTrackingPage />} />
                     <Route path="/ai-comptabilite" element={<PermGuard perm="canCreateTransaction"><AIAccountingChatPage /></PermGuard>} />
+                    <Route path="/ecart-solde" element={<PermGuard perm="canViewAudit"><BalanceDeltaPage /></PermGuard>} />
                     <Route path="*" element={<NotFound />} />
                   </Routes>
                 </Layout>

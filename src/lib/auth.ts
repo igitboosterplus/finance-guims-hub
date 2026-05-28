@@ -79,6 +79,11 @@ interface AuditChainStatus {
   message?: string;
 }
 
+export interface UserSession {
+  userId: string;
+  loginAt: string;
+}
+
 const USERS_KEY = 'finance-users';
 const SESSION_KEY = 'finance-session';
 const AUDIT_KEY = 'finance-audit-log';
@@ -241,6 +246,18 @@ export function getCurrentUser(): User | null {
     const session = JSON.parse(sessionData);
     const users = getUsers();
     return users.find(u => u.id === session.userId) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export function getCurrentSession(): UserSession | null {
+  const sessionData = localStorage.getItem(SESSION_KEY);
+  if (!sessionData) return null;
+  try {
+    const session = JSON.parse(sessionData);
+    if (!session?.userId || !session?.loginAt) return null;
+    return { userId: session.userId, loginAt: session.loginAt };
   } catch {
     return null;
   }
