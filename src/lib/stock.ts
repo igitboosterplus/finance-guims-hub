@@ -303,6 +303,24 @@ export function addStockMovement(
   return { success: true, movement };
 }
 
+export function updateStockMovementLink(
+  id: string,
+  updates: Partial<Pick<StockMovement, 'transactionId' | 'saleTicketNumber'>>,
+  departmentId: string = 'gaba',
+): StockMovement | null {
+  const movements = getStockMovements(departmentId);
+  const index = movements.findIndex(movement => movement.id === id);
+  if (index === -1) return null;
+
+  movements[index] = {
+    ...movements[index],
+    ...updates,
+  };
+
+  saveStockMovements(movements, departmentId);
+  return movements[index];
+}
+
 // ==================== QUERIES ====================
 
 export function getItemMovements(itemId: string, departmentId: string = 'gaba'): StockMovement[] {

@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,14 +19,13 @@ import {
   type PaymentPlan, type PaymentInstallment, type PaymentReminder, type ScheduledTranche,
 } from "@/lib/stock";
 import { toast } from "sonner";
-import {
-  CreditCard, Plus, Search, ChevronDown, ChevronUp, CheckCircle2, Clock, XCircle, Archive, ArchiveRestore, Receipt, User, Users, CalendarDays, Banknote, AlertTriangle, Bell, Trash2,
-} from "lucide-react";
+import { CreditCard, Plus, Search, ChevronDown, ChevronUp, CheckCircle2, Clock, XCircle, Archive, ArchiveRestore, Receipt, User, Users, CalendarDays, Banknote, AlertTriangle, Bell, Trash2 } from "lucide-react";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { dateInputToIsoTimestamp, formatLocalDateInputValue } from "@/lib/utils";
+import { PaymentAlerts } from "@/components/PaymentAlerts";
 
 const STATUS_CONFIG = {
   en_cours: { label: "En cours", icon: Clock, color: "bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400" },
@@ -35,6 +35,8 @@ const STATUS_CONFIG = {
 };
 
 export default function PaymentTrackingPage() {
+  const [searchParams] = useSearchParams();
+  const focus = searchParams.get('focus') || '';
   const currentUser = getCurrentUser();
   const canCreate = hasPermission(currentUser, 'canCreateTransaction');
   const canEdit = hasPermission(currentUser, 'canEditTransaction');
@@ -73,6 +75,13 @@ export default function PaymentTrackingPage() {
   const installPaymentMethods = getPaymentMethodsForDepartment(plans.find(p => p.id === installPlanId)?.departmentId);
 
   useEffect(() => { refresh(); }, []);
+
+  useEffect(() => {
+    if (focus === 'monthly-deficit') {
+      setFilterStatus('en_cours');
+      setFilterDept('all');
+    }
+  }, [focus]);
 
   const refresh = () => {
     setPlans(getPaymentPlans());
@@ -125,6 +134,9 @@ export default function PaymentTrackingPage() {
   const totalDue = activePlans.reduce((s, p) => s + p.totalAmount + (p.inscriptionFee || 0), 0);
   const totalPaid = activePlans.reduce((s, p) => s + getPaidAmount(p) + (p.inscriptionPaidAmount || (p.inscriptionPaid && p.inscriptionFee ? p.inscriptionFee : 0)), 0);
   const totalRemaining = totalDue - totalPaid;
+  const topRiskPlans = [...activePlans]
+    .sort((a, b) => getRemainingAmount(b) - getRemainingAmount(a))
+    .slice(0, 5);
 
   const handleCreatePlan = () => {
     if (!newClient.trim()) { toast.error("Nom du client obligatoire"); return; }
@@ -360,6 +372,32 @@ export default function PaymentTrackingPage() {
         </div>
       )}
 
+      {/* Payment Alerts */}
+      <PaymentAlerts reminders={reminders} overdue={overdue} />
+
+      {focus === 'monthly-deficit' && (
+        <Card className="border-destructive/30 bg-destructive/5 shadow-sm">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-destructive" />
+              Cas signalés: actions prioritaires sur déficit
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-xs">
+            {topRiskPlans.length === 0 ? (
+              <p className="text-muted-foreground">Aucun plan en cours à prioriser.</p>
+            ) : (
+              topRiskPlans.map((plan) => (
+                <div key={plan.id} className="rounded border border-destructive/30 px-2 py-1 flex items-center justify-between gap-2">
+                  <span><strong>{plan.clientName}</strong> — {plan.label}</span>
+                  <span className="font-semibold text-destructive">Reste: {formatCurrency(getRemainingAmount(plan))}</span>
+                </div>
+              ))
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Reminders and overdue alerts */}
       {(reminders.length > 0 || overdue.length > 0) && (
         <div className="space-y-3">
@@ -467,7 +505,7 @@ export default function PaymentTrackingPage() {
                 const groupRemaining = groupTotal - groupPaid;
 
                 return (
-                  <Card key={group.key} className="border-0 shadow-md overflow-hidden">
+                  <Card key={group.key} className={`border-0 shadow-md overflow-hidden ${focus === 'monthly-deficit' ? 'ring-1 ring-destructive/30' : ''}`}>
                     <CardHeader className="pb-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div>
@@ -632,7 +670,7 @@ export default function PaymentTrackingPage() {
                 const statusCfg = STATUS_CONFIG[plan.status];
                 const StatusIcon = statusCfg.icon;
                 return (
-                  <Card key={plan.id} className="border-0 shadow-sm">
+                  <Card key={plan.id} className={`border-0 shadow-sm ${focus === 'monthly-deficit' ? 'ring-1 ring-destructive/20' : ''}`}>
                     <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                       <div>
                         <p className="font-semibold text-sm">{plan.label}</p>

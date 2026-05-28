@@ -9,6 +9,7 @@ export interface UserPermissions {
   stockDepartments: string[];  // IDs des départements dont le stock est accessible
   canCreateTransaction: boolean;
   canEditTransaction: boolean;
+  canRecordStockExitWithoutPrice: boolean;
   canExportData: boolean;
   canImportData: boolean;
   canManageUsers: boolean;
@@ -21,6 +22,7 @@ export const DEFAULT_PERMISSIONS: UserPermissions = {
   stockDepartments: [],
   canCreateTransaction: false,
   canEditTransaction: false,
+  canRecordStockExitWithoutPrice: false,
   canExportData: false,
   canImportData: false,
   canManageUsers: false,
@@ -33,6 +35,7 @@ export const FULL_PERMISSIONS: UserPermissions = {
   stockDepartments: STOCK_ENABLED_DEPARTMENT_IDS,
   canCreateTransaction: true,
   canEditTransaction: true,
+  canRecordStockExitWithoutPrice: true,
   canExportData: true,
   canImportData: true,
   canManageUsers: true,
@@ -66,6 +69,14 @@ export interface AuditLogEntry {
   justification?: string;
   timestamp: string;
   seen: boolean;
+  prevHash?: string;
+  hash?: string;
+}
+
+interface AuditChainStatus {
+  ok: boolean;
+  brokenAtId?: string;
+  message?: string;
 }
 
 const USERS_KEY = 'finance-users';
@@ -390,7 +401,14 @@ export function updateUserPermissions(userId: string, permissions: UserPermissio
 
 export function getAuditLog(): AuditLogEntry[] {
   const data = localStorage.getItem(AUDIT_KEY);
-  return data ? JSON.parse(data) : [];
+  const parsed: AuditLogEntry[] = data ? JSON.parse(data) : [];
+  const missingChain = parsed.some(entry => !entry.hash || !entry.prevHash);
+  if (missingChain && parsed.length > 0) {
+    const sealed = sealAuditChain(parsed);
+    saveAuditLog(sealed);
+    return sealed;
+  }
+  return parsed;
 }
 
 function saveAuditLog(entries: AuditLogEntry[]) {
@@ -400,12 +418,16 @@ function saveAuditLog(entries: AuditLogEntry[]) {
 
 export function addAuditEntry(entry: Omit<AuditLogEntry, 'id' | 'timestamp' | 'seen'>) {
   const log = getAuditLog();
-  log.push({
+  const draft: AuditLogEntry = {
     ...entry,
     id: crypto.randomUUID(),
     timestamp: new Date().toISOString(),
     seen: false,
-  });
+  };
+  const prevHash = log.length > 0 ? log[log.length - 1].hash || 'GENESIS' : 'GENESIS';
+  draft.prevHash = prevHash;
+  draft.hash = computeLocalHash(`${prevHash}|${buildAuditBaseString(draft)}`);
+  log.push(draft);
   saveAuditLog(log);
 
   // Mirror into super audit
@@ -425,21 +447,14 @@ export function addAuditEntry(entry: Omit<AuditLogEntry, 'id' | 'timestamp' | 's
 
 /** Delete an audit entry and log the deletion in the super audit */
 export function deleteAuditEntry(entryId: string, deletedBy: { userId: string; username: string }): boolean {
-  const log = getAuditLog();
-  const entry = log.find(e => e.id === entryId);
-  if (!entry) return false;
-  // Log in super audit BEFORE deletion
   addSuperAuditEntry({
     userId: deletedBy.userId,
     username: deletedBy.username,
-    action: 'delete_audit',
-    details: `Suppression audit: [${actionLabelsInternal[entry.action] ?? entry.action}] ${entry.details}`,
-    targetEntityId: entry.entityId,
-    metadata: JSON.stringify(entry),
+    action: 'other',
+    details: `Tentative refusée: suppression d'audit append-only (entryId=${entryId})`,
+    targetEntityId: entryId,
   });
-  const filtered = log.filter(e => e.id !== entryId);
-  saveAuditLog(filtered);
-  return true;
+  return false;
 }
 
 export function markAuditEntriesSeen() {
@@ -457,6 +472,91 @@ const actionLabelsInternal: Record<string, string> = {
   update: 'Modification',
   delete: 'Suppression',
 };
+
+function computeLocalHash(input: string): string {
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+function buildAuditBaseString(entry: Pick<AuditLogEntry, 'id' | 'userId' | 'username' | 'action' | 'entityType' | 'entityId' | 'details' | 'previousData' | 'newData' | 'justification' | 'timestamp' | 'seen'>): string {
+  return [
+    entry.id,
+    entry.userId,
+    entry.username,
+    entry.action,
+    entry.entityType,
+    entry.entityId,
+    entry.details,
+    entry.previousData || '',
+    entry.newData || '',
+    entry.justification || '',
+    entry.timestamp,
+    String(entry.seen),
+  ].join('|');
+}
+
+function buildSuperAuditBaseString(entry: Pick<SuperAuditEntry, 'id' | 'userId' | 'username' | 'action' | 'details' | 'targetEntityId' | 'metadata' | 'timestamp'>): string {
+  return [
+    entry.id,
+    entry.userId,
+    entry.username,
+    entry.action,
+    entry.details,
+    entry.targetEntityId || '',
+    entry.metadata || '',
+    entry.timestamp,
+  ].join('|');
+}
+
+function sealAuditChain(entries: AuditLogEntry[]): AuditLogEntry[] {
+  let prevHash = 'GENESIS';
+  return entries.map((entry) => {
+    const payload = `${prevHash}|${buildAuditBaseString(entry)}`;
+    const hash = computeLocalHash(payload);
+    const sealed: AuditLogEntry = { ...entry, prevHash, hash };
+    prevHash = hash;
+    return sealed;
+  });
+}
+
+function sealSuperAuditChain(entries: SuperAuditEntry[]): SuperAuditEntry[] {
+  let prevHash = 'GENESIS';
+  return entries.map((entry) => {
+    const payload = `${prevHash}|${buildSuperAuditBaseString(entry)}`;
+    const hash = computeLocalHash(payload);
+    const sealed: SuperAuditEntry = { ...entry, prevHash, hash };
+    prevHash = hash;
+    return sealed;
+  });
+}
+
+function verifyAuditChain(entries: AuditLogEntry[]): AuditChainStatus {
+  let prevHash = 'GENESIS';
+  for (const entry of entries) {
+    const expected = computeLocalHash(`${prevHash}|${buildAuditBaseString(entry)}`);
+    if (entry.prevHash !== prevHash || entry.hash !== expected) {
+      return { ok: false, brokenAtId: entry.id, message: 'Chaîne d\'audit altérée ou incohérente' };
+    }
+    prevHash = expected;
+  }
+  return { ok: true };
+}
+
+function verifySuperAuditChain(entries: SuperAuditEntry[]): AuditChainStatus {
+  let prevHash = 'GENESIS';
+  for (const entry of entries) {
+    const expected = computeLocalHash(`${prevHash}|${buildSuperAuditBaseString(entry)}`);
+    if (entry.prevHash !== prevHash || entry.hash !== expected) {
+      return { ok: false, brokenAtId: entry.id, message: 'Chaîne de super audit altérée ou incohérente' };
+    }
+    prevHash = expected;
+  }
+  return { ok: true };
+}
 
 // ==================== SUPER AUDIT LOG ====================
 // Tracks ALL system actions — accessible ONLY by the principal superadmin.
@@ -480,11 +580,20 @@ export interface SuperAuditEntry {
   targetEntityId?: string;
   metadata?: string;
   timestamp: string;
+  prevHash?: string;
+  hash?: string;
 }
 
 export function getSuperAuditLog(): SuperAuditEntry[] {
   const data = localStorage.getItem(SUPER_AUDIT_KEY);
-  return data ? JSON.parse(data) : [];
+  const parsed: SuperAuditEntry[] = data ? JSON.parse(data) : [];
+  const missingChain = parsed.some(entry => !entry.hash || !entry.prevHash);
+  if (missingChain && parsed.length > 0) {
+    const sealed = sealSuperAuditChain(parsed);
+    saveSuperAuditLog(sealed);
+    return sealed;
+  }
+  return parsed;
 }
 
 function saveSuperAuditLog(entries: SuperAuditEntry[]) {
@@ -494,12 +603,23 @@ function saveSuperAuditLog(entries: SuperAuditEntry[]) {
 
 export function addSuperAuditEntry(entry: Omit<SuperAuditEntry, 'id' | 'timestamp'>) {
   const log = getSuperAuditLog();
-  log.push({
+  const draft: SuperAuditEntry = {
     ...entry,
     id: crypto.randomUUID(),
     timestamp: new Date().toISOString(),
-  });
+  };
+  const prevHash = log.length > 0 ? log[log.length - 1].hash || 'GENESIS' : 'GENESIS';
+  draft.prevHash = prevHash;
+  draft.hash = computeLocalHash(`${prevHash}|${buildSuperAuditBaseString(draft)}`);
+  log.push(draft);
   saveSuperAuditLog(log);
+}
+
+export function getAuditIntegrityStatus(): { audit: AuditChainStatus; superAudit: AuditChainStatus } {
+  return {
+    audit: verifyAuditChain(getAuditLog()),
+    superAudit: verifySuperAuditChain(getSuperAuditLog()),
+  };
 }
 
 const FIELD_LABELS: Record<string, string> = {

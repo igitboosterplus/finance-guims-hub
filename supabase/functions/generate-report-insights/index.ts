@@ -5,6 +5,7 @@ const corsHeaders = {
 };
 
 type AIProvider = "openai" | "gemini";
+type AIMode = "report-insights" | "conversation";
 
 interface InsightSection {
   overview: string[];
@@ -23,6 +24,12 @@ interface AIReportPayload {
   paymentMethods: Array<{ label: string; income: number; expenses: number; balance: number }>;
   departmentBalances: Array<{ label: string; income: number; expenses: number; balance: number; count: number }>;
   recentTransactions: Array<{ date: string; type: string; category: string; amount: number; department: string; description: string }>;
+}
+
+interface AIConversationPayload {
+  question: string;
+  context: Record<string, unknown>;
+  conversationHistory?: Array<{ role: "user" | "assistant"; text: string }>;
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -71,21 +78,46 @@ function isRoleAllowed(requestedByRole: unknown): boolean {
 
 function getAvailableProviders(): AIProvider[] {
   const providers: AIProvider[] = [];
-  if (Deno.env.get("OPENAI_API_KEY")) providers.push("openai");
+  if (Deno.env.get("OPENAI_API_KEY") || Deno.env.get("OPENROUTER_API_KEY")) providers.push("openai");
   if (Deno.env.get("GEMINI_API_KEY")) providers.push("gemini");
   return providers;
 }
 
 function getDefaultProvider(requested?: string): AIProvider | null {
-  if (requested === "openai" && Deno.env.get("OPENAI_API_KEY")) return "openai";
+  if (requested === "openai" && (Deno.env.get("OPENAI_API_KEY") || Deno.env.get("OPENROUTER_API_KEY"))) return "openai";
   if (requested === "gemini" && Deno.env.get("GEMINI_API_KEY")) return "gemini";
 
   const preferred = (Deno.env.get("AI_REPORT_PROVIDER") || "").trim().toLowerCase();
   if (preferred === "gemini" && Deno.env.get("GEMINI_API_KEY")) return "gemini";
-  if (preferred === "openai" && Deno.env.get("OPENAI_API_KEY")) return "openai";
+  if (preferred === "openai" && (Deno.env.get("OPENAI_API_KEY") || Deno.env.get("OPENROUTER_API_KEY"))) return "openai";
   if (Deno.env.get("GEMINI_API_KEY")) return "gemini";
-  if (Deno.env.get("OPENAI_API_KEY")) return "openai";
+  if (Deno.env.get("OPENAI_API_KEY") || Deno.env.get("OPENROUTER_API_KEY")) return "openai";
   return null;
+}
+
+function getOpenAICompatConfig() {
+  const openAiKey = Deno.env.get("OPENAI_API_KEY") || "";
+  const openRouterKey = Deno.env.get("OPENROUTER_API_KEY") || "";
+  const usingOpenRouter = !openAiKey && !!openRouterKey;
+  const apiKey = openAiKey || openRouterKey;
+
+  const baseUrl = (Deno.env.get("OPENAI_BASE_URL") || Deno.env.get("OPENROUTER_BASE_URL") || "").trim();
+  const apiBase = baseUrl || (usingOpenRouter ? "https://openrouter.ai/api/v1" : "https://api.openai.com/v1");
+  const model = (Deno.env.get("OPENAI_MODEL") || "").trim() || (usingOpenRouter ? "openai/gpt-4o-mini" : "gpt-4.1-mini");
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${apiKey}`,
+  };
+
+  if (apiBase.includes("openrouter.ai")) {
+    const referer = (Deno.env.get("OPENROUTER_SITE_URL") || "").trim();
+    const title = (Deno.env.get("OPENROUTER_APP_NAME") || "Guims Finance Hub").trim();
+    if (referer) headers["HTTP-Referer"] = referer;
+    if (title) headers["X-Title"] = title;
+  }
+
+  return { apiKey, model, apiBase, headers };
 }
 
 function extractJsonObject(raw: string): string | null {
@@ -134,17 +166,38 @@ function buildPrompt(payload: AIReportPayload): string {
   ].join("\n");
 }
 
+function buildConversationPrompt(payload: AIConversationPayload): string {
+  const history = Array.isArray(payload.conversationHistory)
+    ? payload.conversationHistory
+      .slice(-8)
+      .map(item => `${item.role === "user" ? "Utilisateur" : "Assistant"}: ${item.text}`)
+      .join("\n")
+    : "";
+
+  return [
+    "Tu es un assistant financier opérationnel pour une application de transactions.",
+    "Réponds en français clair, orienté décision, avec chiffres quand possible.",
+    "Contrainte importante: ne valide pas un retrait salarial qui dépasserait le salaire mensuel d'un employé.",
+    "Format attendu:",
+    "1) Impact estimé",
+    "2) Risques",
+    "3) Recommandation actionnable",
+    "Reste concis (6 à 12 lignes).",
+    history ? `Historique récent:\n${history}` : "",
+    "Contexte transactionnel:",
+    JSON.stringify(payload.context || {}, null, 2),
+    "Question de l'utilisateur:",
+    payload.question,
+  ].filter(Boolean).join("\n\n");
+}
+
 async function requestOpenAI(payload: AIReportPayload): Promise<InsightSection | null> {
-  const apiKey = Deno.env.get("OPENAI_API_KEY");
+  const { apiKey, model, apiBase, headers } = getOpenAICompatConfig();
   if (!apiKey) return null;
 
-  const model = Deno.env.get("OPENAI_MODEL") || "gpt-4.1-mini";
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+  const response = await fetch(`${apiBase}/chat/completions`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
+    headers,
     body: JSON.stringify({
       model,
       temperature: 0.35,
@@ -203,6 +256,67 @@ async function requestGemini(payload: AIReportPayload): Promise<InsightSection |
   return normalizeInsightSection(JSON.parse(rawJson));
 }
 
+async function requestOpenAIConversation(payload: AIConversationPayload): Promise<string | null> {
+  const { apiKey, model, apiBase, headers } = getOpenAICompatConfig();
+  if (!apiKey) return null;
+
+  const response = await fetch(`${apiBase}/chat/completions`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      model,
+      temperature: 0.3,
+      messages: [
+        { role: "system", content: "Tu es un conseiller financier. Réponds en texte clair et structuré." },
+        { role: "user", content: buildConversationPrompt(payload) },
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`openai: ${response.status} ${response.statusText}`);
+  }
+
+  const data = await response.json();
+  const text = data.choices?.[0]?.message?.content;
+  if (typeof text !== "string" || !text.trim()) return null;
+  return text.trim();
+}
+
+async function requestGeminiConversation(payload: AIConversationPayload): Promise<string | null> {
+  const apiKey = Deno.env.get("GEMINI_API_KEY");
+  if (!apiKey) return null;
+
+  const model = Deno.env.get("GEMINI_MODEL") || "gemini-2.0-flash";
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      generationConfig: {
+        temperature: 0.3,
+        responseMimeType: "text/plain",
+      },
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: buildConversationPrompt(payload) }],
+        },
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`gemini: ${response.status} ${response.statusText}`);
+  }
+
+  const data = await response.json();
+  const text = data.candidates?.[0]?.content?.parts?.map((part: { text?: string }) => part.text || "").join("\n");
+  if (typeof text !== "string" || !text.trim()) return null;
+  return text.trim();
+}
+
 Deno.serve(async (request) => {
   const responseHeaders = getCorsHeadersForRequest(request);
 
@@ -231,16 +345,9 @@ Deno.serve(async (request) => {
 
   try {
     const body = await request.json();
-    const payload = body?.payload as AIReportPayload | undefined;
+    const mode = (body?.mode as AIMode | undefined) || "report-insights";
     const provider = getDefaultProvider(body?.provider);
     const requestedByRole = body?.requestedByRole;
-
-    if (!payload || typeof payload !== "object") {
-      return new Response(JSON.stringify({ error: "Invalid payload" }), {
-        status: 400,
-        headers: { ...responseHeaders, "Content-Type": "application/json" },
-      });
-    }
 
     if (!isRoleAllowed(requestedByRole)) {
       return new Response(JSON.stringify({ error: "Role not allowed" }), {
@@ -251,6 +358,37 @@ Deno.serve(async (request) => {
 
     if (!provider) {
       return jsonResponse({ error: "Requested provider is not available" }, 400);
+    }
+
+    if (mode === "conversation") {
+      const payload = body?.payload as AIConversationPayload | undefined;
+      if (!payload || typeof payload !== "object" || typeof payload.question !== "string" || !payload.question.trim()) {
+        return new Response(JSON.stringify({ error: "Invalid conversation payload" }), {
+          status: 400,
+          headers: { ...responseHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const reply = provider === "gemini"
+        ? await requestGeminiConversation(payload)
+        : await requestOpenAIConversation(payload);
+
+      if (!reply) {
+        return jsonResponse({ error: "AI conversation response could not be generated" }, 502);
+      }
+
+      return new Response(JSON.stringify({ reply }), {
+        status: 200,
+        headers: { ...responseHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const payload = body?.payload as AIReportPayload | undefined;
+    if (!payload || typeof payload !== "object") {
+      return new Response(JSON.stringify({ error: "Invalid payload" }), {
+        status: 400,
+        headers: { ...responseHeaders, "Content-Type": "application/json" },
+      });
     }
 
     const insights = provider === "gemini"

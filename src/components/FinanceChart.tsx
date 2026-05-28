@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, AreaChart, Area, LineChart, Line } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatCurrency, type Transaction } from "@/lib/data";
@@ -26,11 +26,14 @@ function CustomTooltip({ active, payload, label }: any) {
   return (
     <div className="rounded-lg border bg-card p-3 shadow-lg">
       <p className="text-sm font-medium mb-1">{label}</p>
-      {payload.map((entry: any, i: number) => (
-        <p key={i} className="text-xs" style={{ color: entry.color }}>
-          {entry.name}: {formatCurrency(entry.value)}
-        </p>
-      ))}
+      {payload.map((entry: any, i: number) => {
+        const colorClass = i === 0 ? 'text-emerald-500' : i === 1 ? 'text-rose-500' : 'text-blue-500';
+        return (
+          <p key={i} className={`text-xs ${colorClass}`}>
+            {entry.name}: {formatCurrency(entry.value)}
+          </p>
+        );
+      })}
     </div>
   );
 }
@@ -47,20 +50,26 @@ function PieTooltip({ active, payload }: any) {
 
 export function FinanceChart({ transactions, title = "Analyse financière" }: FinanceChartProps) {
   const monthlyData = useMemo(() => {
-    const map = new Map<string, { month: string; revenus: number; depenses: number }>();
+    const map = new Map<string, { month: string; revenus: number; depenses: number; solde: number }>();
     transactions.forEach((tx) => {
       const d = new Date(getTransactionTimestamp(tx.date));
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
       const label = d.toLocaleDateString("fr-FR", { month: "short", year: "2-digit" });
-      if (!map.has(key)) map.set(key, { month: label, revenus: 0, depenses: 0 });
+      if (!map.has(key)) map.set(key, { month: label, revenus: 0, depenses: 0, solde: 0 });
       const entry = map.get(key)!;
       if (tx.type === "income") entry.revenus += tx.amount;
       else entry.depenses += tx.amount;
     });
-    return Array.from(map.entries())
+    // Compute cumulative balance and sort
+    const result = Array.from(map.entries())
       .sort(([a], [b]) => a.localeCompare(b))
-      .slice(-12)
-      .map(([, v]) => v);
+      .slice(-12);
+    
+    let cumulativeBalance = 0;
+    return result.map(([, v]) => {
+      cumulativeBalance += v.revenus - v.depenses;
+      return { ...v, solde: cumulativeBalance };
+    });
   }, [transactions]);
 
   const categoryData = useMemo(() => {
@@ -87,6 +96,7 @@ export function FinanceChart({ transactions, title = "Analyse financière" }: Fi
         <Tabs defaultValue="bar" className="w-full">
           <TabsList className="mb-4">
             <TabsTrigger value="bar">Revenus / Dépenses</TabsTrigger>
+            <TabsTrigger value="balance">Solde cumulé</TabsTrigger>
             <TabsTrigger value="pie">Par catégorie</TabsTrigger>
           </TabsList>
           <TabsContent value="bar">
@@ -101,6 +111,23 @@ export function FinanceChart({ transactions, title = "Analyse financière" }: Fi
                     <Bar dataKey="revenus" name="Revenus" fill="hsl(142, 71%, 45%)" radius={[4, 4, 0, 0]} />
                     <Bar dataKey="depenses" name="Dépenses" fill="hsl(0, 84%, 60%)" radius={[4, 4, 0, 0]} />
                   </BarChart>
+                </ResponsiveContainer>
+              </div>
+            ) : (
+              <p className="text-center text-muted-foreground py-8">Pas assez de données</p>
+            )}
+          </TabsContent>
+          <TabsContent value="balance">
+            {monthlyData.length > 0 ? (
+              <div className="h-[300px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={monthlyData} margin={{ top: 5, right: 5, left: 5, bottom: 5 }}>
+                    <CartesianGrid strokeDasharray="3 3" className="stroke-border/50" />
+                    <XAxis dataKey="month" tick={{ fontSize: 12 }} className="text-muted-foreground" />
+                    <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} className="text-muted-foreground" />
+                    <Tooltip content={<CustomTooltip />} />
+                    <Area type="monotone" dataKey="solde" fill="hsl(215, 80%, 48%)" stroke="hsl(215, 80%, 48%)" fillOpacity={0.15} name="Solde" />
+                  </AreaChart>
                 </ResponsiveContainer>
               </div>
             ) : (

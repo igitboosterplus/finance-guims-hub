@@ -129,3 +129,39 @@ export function getEmployeeLastPaymentDate(employee: Employee): string | null {
 
   return lastPayment?.date || null;
 }
+
+export function getEmployeeWithdrawalsForMonth(employee: Employee, referenceDate?: string | Date): number {
+  const ref = referenceDate ? new Date(referenceDate) : new Date();
+  const month = ref.getMonth();
+  const year = ref.getFullYear();
+  const normalizedName = employee.fullName.trim().toLowerCase();
+
+  return getTransactions()
+    .filter((tx) => {
+      if (!isEmployeePaymentTransaction(tx)) return false;
+      if (tx.personName.trim().toLowerCase() !== normalizedName) return false;
+      const txDate = new Date(tx.date);
+      return txDate.getFullYear() === year && txDate.getMonth() === month;
+    })
+    .reduce((sum, tx) => sum + tx.amount, 0);
+}
+
+export interface EmployeeSalaryStatus {
+  monthlySalary?: number;
+  paidThisMonth: number;
+  remaining: number | null;
+}
+
+export function getEmployeeSalaryStatus(employee: Employee, referenceDate?: string | Date): EmployeeSalaryStatus {
+  const paidThisMonth = getEmployeeWithdrawalsForMonth(employee, referenceDate);
+  const monthlySalary = employee.monthlySalary;
+  if (!monthlySalary || monthlySalary <= 0) {
+    return { monthlySalary: undefined, paidThisMonth, remaining: null };
+  }
+
+  return {
+    monthlySalary,
+    paidThisMonth,
+    remaining: Math.max(monthlySalary - paidThisMonth, 0),
+  };
+}

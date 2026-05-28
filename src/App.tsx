@@ -16,6 +16,7 @@ import ProfilePage from "@/pages/ProfilePage";
 import GabaStockPage from "@/pages/GabaStockPage";
 import FormationsPage from "@/pages/FormationsPage";
 import PaymentTrackingPage from "@/pages/PaymentTrackingPage";
+import AIAccountingChatPage from "@/pages/AIAccountingChatPage";
 import NotFound from "./pages/NotFound.tsx";
 import { initSupabase, isSupabaseConfigured } from "@/lib/firebase";
 import { hasDepartmentAccess, hasPermission, hasStockAccess } from "@/lib/auth";
@@ -50,7 +51,7 @@ function StockGuard({ departmentId, children }: { departmentId: string; children
   return <>{children}</>;
 }
 
-function PermGuard({ perm, children }: { perm: 'canManageUsers' | 'canViewAudit' | 'canViewSuperAudit'; children: React.ReactNode }) {
+function PermGuard({ perm, children }: { perm: 'canManageUsers' | 'canViewAudit' | 'canViewSuperAudit' | 'canCreateTransaction'; children: React.ReactNode }) {
   const { user } = useAuth();
   if (!hasPermission(user, perm)) return <Navigate to="/" replace />;
   return <>{children}</>;
@@ -82,6 +83,7 @@ const App = () => (
                     <Route path="/digitboosterplus/stock" element={<StockGuard departmentId="digitboosterplus"><GabaStockPage key="digitboosterplus" departmentId="digitboosterplus" /></StockGuard>} />
                     <Route path="/formations" element={<FormationsPage />} />
                     <Route path="/paiements" element={<PaymentTrackingPage />} />
+                    <Route path="/ai-comptabilite" element={<PermGuard perm="canCreateTransaction"><AIAccountingChatPage /></PermGuard>} />
                     <Route path="*" element={<NotFound />} />
                   </Routes>
                 </Layout>

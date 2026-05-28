@@ -8,12 +8,26 @@ import logoDigitbooster from "@/assets/logo-digitbooster.png";
 import {
   departments, getTransactions, getGlobalStats, getDepartmentStats,
   getTransactionsByDepartment, getDepartment, formatCurrency,
-  getPaymentMethodLabel, getStatsByPaymentMethod, type DepartmentId, type Transaction,
+  getPaymentMethodLabel, getStatsByPaymentMethod, type DepartmentId, type PaymentMethod, type Transaction,
 } from "./data";
 import { getTransactionTimestamp } from "./transactionDates";
-import { getStockItems, getStockMovements, getCategoryLabel, getStockStats, getTrainings, getMovementTypeLabel } from "./stock";
+import {
+  getStockItems,
+  getStockMovements,
+  getCategoryLabel,
+  getStockStats,
+  getTrainings,
+  getMovementTypeLabel,
+  getFormationsCatalog,
+  getEnrollments,
+  getPaymentPlans,
+  getOverdueTranches,
+  getRemainingAmount,
+  getAllocationSummary,
+} from "./stock";
 import { getAuditLog, buildHumanDiff } from "./auth";
 import { generateExternalAIInsights, type AIProvider, type AIReportPayload, type InsightSection } from "./aiReports";
+import { getEmployeesByDepartment, getEmployeeLastPaymentDate, getEmployeeSalaryStatus } from "./employees";
 
 // ==================== HELPERS ====================
 
@@ -21,6 +35,8 @@ export interface ReportOptions {
   startDate?: string;
   endDate?: string;
   personName?: string;
+  transactionType?: Transaction["type"];
+  paymentMethod?: PaymentMethod;
   useAI?: boolean;
   aiProvider?: AIProvider;
   reportMode?: "download" | "preview";
@@ -65,6 +81,12 @@ function filterTransactions(txs: Transaction[], opts?: ReportOptions): Transacti
     const name = opts.personName.toLowerCase();
     result = result.filter(t => (t.personName || '').toLowerCase().includes(name));
   }
+  if (opts?.transactionType) {
+    result = result.filter(t => t.type === opts.transactionType);
+  }
+  if (opts?.paymentMethod) {
+    result = result.filter(t => t.paymentMethod === opts.paymentMethod);
+  }
   return result;
 }
 
@@ -79,7 +101,87 @@ function periodLabel(opts?: ReportOptions): string {
   else if (opts?.endDate) label = `Jusqu'au ${new Date(opts.endDate).toLocaleDateString("fr-FR")}`;
   else label = "Toutes les dates";
   if (opts?.personName) label += ` · Personne : ${opts.personName}`;
+  if (opts?.transactionType) {
+    label += ` · Type : ${opts.transactionType === "income" ? "Revenus" : "Dépenses"}`;
+  }
+  if (opts?.paymentMethod) {
+    label += ` · Caisse : ${getPaymentMethodLabel(opts.paymentMethod)}`;
+  }
   return label;
+}
+
+function toDateOnly(value: Date): string {
+  return value.toISOString().slice(0, 10);
+}
+
+function getDefaultCurrentPeriod(): { startDate: string; endDate: string; label: string } {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), 1);
+  const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  return {
+    startDate: toDateOnly(start),
+    endDate: toDateOnly(end),
+    label: now.toLocaleDateString("fr-FR", { month: "long", year: "numeric" }),
+  };
+}
+
+function buildComparisonOptions(opts?: ReportOptions): { currentLabel: string; previousLabel: string; previousOpts: ReportOptions } | null {
+  const baseOpts = opts || {};
+
+  if (!baseOpts.startDate && !baseOpts.endDate) {
+    const now = new Date();
+    const currentStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const currentEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    const previousStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const previousEnd = new Date(now.getFullYear(), now.getMonth(), 0);
+
+    return {
+      currentLabel: now.toLocaleDateString("fr-FR", { month: "long", year: "numeric" }),
+      previousLabel: previousStart.toLocaleDateString("fr-FR", { month: "long", year: "numeric" }),
+      previousOpts: {
+        ...baseOpts,
+        startDate: toDateOnly(previousStart),
+        endDate: toDateOnly(previousEnd),
+      },
+    };
+  }
+
+  if (!baseOpts.startDate || !baseOpts.endDate) {
+    return null;
+  }
+
+  const currentStart = new Date(`${baseOpts.startDate}T00:00:00`);
+  const currentEnd = new Date(`${baseOpts.endDate}T23:59:59.999`);
+  if (Number.isNaN(currentStart.getTime()) || Number.isNaN(currentEnd.getTime()) || currentEnd < currentStart) {
+    return null;
+  }
+
+  const dayMs = 24 * 60 * 60 * 1000;
+  const dayCount = Math.floor((currentEnd.getTime() - currentStart.getTime()) / dayMs) + 1;
+  const previousEnd = new Date(currentStart.getTime() - 1);
+  const previousStart = new Date(previousEnd.getTime() - (dayCount - 1) * dayMs);
+
+  return {
+    currentLabel: `${baseOpts.startDate} -> ${baseOpts.endDate}`,
+    previousLabel: `${toDateOnly(previousStart)} -> ${toDateOnly(previousEnd)}`,
+    previousOpts: {
+      ...baseOpts,
+      startDate: toDateOnly(previousStart),
+      endDate: toDateOnly(previousEnd),
+    },
+  };
+}
+
+function percentDelta(current: number, previous: number): string {
+  if (previous === 0) return "N/A";
+  const delta = ((current - previous) / Math.abs(previous)) * 100;
+  const rounded = Math.round(delta * 10) / 10;
+  return `${rounded > 0 ? "+" : ""}${rounded.toLocaleString("fr-FR", { maximumFractionDigits: 1 })} %`;
+}
+
+function deltaValue(current: number, previous: number): string {
+  const d = current - previous;
+  return `${d >= 0 ? "+" : ""}${fmtAmount(d)}`;
 }
 
 async function toDataUrl(src: string): Promise<string | null> {
@@ -479,6 +581,64 @@ function addBreakdownTable(
   return (doc as any).lastAutoTable.finalY + 10;
 }
 
+function addExecutiveSummaryTable(doc: jsPDF, stats: { income: number; expenses: number; balance: number; count: number }, y: number): number {
+  const marginRate = stats.income > 0 ? (stats.balance / stats.income) * 100 : 0;
+  const coverageRate = stats.expenses > 0 ? (stats.income / stats.expenses) * 100 : 0;
+  const avgTicket = stats.count > 0 ? (stats.income + stats.expenses) / stats.count : 0;
+
+  let nextY = addSectionTitle(doc, "Résumé exécutif chiffré", y);
+  autoTable(doc, {
+    startY: nextY,
+    head: [["Encaissements", "Décaissements", "Solde net", "Marge nette", "Couverture des dépenses", "Ticket moyen", "Transactions"]],
+    body: [[
+      fmtAmount(stats.income),
+      fmtAmount(stats.expenses),
+      fmtAmount(stats.balance),
+      `${Math.round(marginRate)} %`,
+      `${Math.round(coverageRate)} %`,
+      fmtAmount(avgTicket),
+      String(stats.count),
+    ]],
+    theme: "grid",
+    headStyles: { fillColor: [25, 85, 120], fontSize: 8.5 },
+    bodyStyles: { fontSize: 9.5, fontStyle: "bold" },
+    margin: { left: 14 },
+  });
+  return (doc as any).lastAutoTable.finalY + 10;
+}
+
+function addPeriodComparisonTable(
+  doc: jsPDF,
+  y: number,
+  current: { income: number; expenses: number; balance: number; count: number },
+  previous: { income: number; expenses: number; balance: number; count: number },
+  labels: { currentLabel: string; previousLabel: string },
+): number {
+  let nextY = addSectionTitle(doc, `Comparaison de période (${labels.currentLabel} vs ${labels.previousLabel})`, y);
+  autoTable(doc, {
+    startY: nextY,
+    head: [["Indicateur", "Période actuelle", "Période précédente", "Écart", "% évolution"]],
+    body: [
+      ["Revenus", fmtAmount(current.income), fmtAmount(previous.income), deltaValue(current.income, previous.income), percentDelta(current.income, previous.income)],
+      ["Dépenses", fmtAmount(current.expenses), fmtAmount(previous.expenses), deltaValue(current.expenses, previous.expenses), percentDelta(current.expenses, previous.expenses)],
+      ["Solde", fmtAmount(current.balance), fmtAmount(previous.balance), deltaValue(current.balance, previous.balance), percentDelta(current.balance, previous.balance)],
+      ["Transactions", String(current.count), String(previous.count), String(current.count - previous.count), percentDelta(current.count, previous.count)],
+    ],
+    theme: "striped",
+    headStyles: { fillColor: [70, 100, 132], fontSize: 8.5 },
+    margin: { left: 14 },
+    styles: { fontSize: 8.5 },
+    columnStyles: {
+      1: { halign: "right" },
+      2: { halign: "right" },
+      3: { halign: "right", fontStyle: "bold" },
+      4: { halign: "right" },
+    },
+    alternateRowStyles: { fillColor: [245, 247, 250] },
+  });
+  return (doc as any).lastAutoTable.finalY + 10;
+}
+
 // ==================== DASHBOARD REPORT ====================
 
 function computeStats(txs: Transaction[]) {
@@ -490,13 +650,26 @@ function computeStats(txs: Transaction[]) {
 export async function downloadDashboardReport(opts?: ReportOptions) {
   const reportTitle = "Rapport global — Tableau de bord";
   const doc = await setupDoc(reportTitle, opts);
-  const allTxs = filterTransactions(getTransactions(), opts);
+  const sourceTxs = getTransactions();
+  const allTxs = filterTransactions(sourceTxs, opts);
   const stats = computeStats(allTxs);
+  const comparisonMeta = buildComparisonOptions(opts);
+  const previousStats = comparisonMeta
+    ? computeStats(filterTransactions(sourceTxs, comparisonMeta.previousOpts))
+    : null;
   const txs = allTxs.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   const insights = await resolveInsights("Rapport global — Tableau de bord", allTxs, buildDashboardInsights(allTxs), opts);
   const expenseBreakdown = buildCategoryBreakdown(allTxs, 'expense');
   const strategicExpenses = buildStrategicExpenseBreakdown(allTxs);
-  let y = 44;
+  let y = 20;
+
+  y = addExecutiveSummaryTable(doc, stats, y);
+  if (comparisonMeta && previousStats) {
+    y = addPeriodComparisonTable(doc, y, stats, previousStats, {
+      currentLabel: comparisonMeta.currentLabel,
+      previousLabel: comparisonMeta.previousLabel,
+    });
+  }
 
   y = addInsightSections(doc, insights, y);
 
@@ -592,13 +765,26 @@ export async function downloadDepartmentReport(deptId: DepartmentId, opts?: Repo
   const dept = getDepartment(deptId);
   const reportTitle = `Rapport — ${dept.name}`;
   const doc = await setupDoc(reportTitle, opts);
-  const allTxs = filterTransactions(getTransactionsByDepartment(deptId), opts);
+  const sourceTxs = getTransactionsByDepartment(deptId);
+  const allTxs = filterTransactions(sourceTxs, opts);
   const stats = computeStats(allTxs);
+  const comparisonMeta = buildComparisonOptions(opts);
+  const previousStats = comparisonMeta
+    ? computeStats(filterTransactions(sourceTxs, comparisonMeta.previousOpts))
+    : null;
   const txs = allTxs.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   const insights = await resolveInsights(`Rapport — ${dept.name}`, allTxs, buildTransactionInsights(allTxs, `Le département ${dept.name}`), opts);
   const expenseBreakdown = buildCategoryBreakdown(allTxs, 'expense');
   const strategicExpenses = buildStrategicExpenseBreakdown(allTxs);
-  let y = 44;
+  let y = 20;
+
+  y = addExecutiveSummaryTable(doc, stats, y);
+  if (comparisonMeta && previousStats) {
+    y = addPeriodComparisonTable(doc, y, stats, previousStats, {
+      currentLabel: comparisonMeta.currentLabel,
+      previousLabel: comparisonMeta.previousLabel,
+    });
+  }
 
   y = addInsightSections(doc, insights, y);
 
@@ -677,6 +863,8 @@ export async function downloadStockReport(opts?: ReportOptions, departmentId: st
   const items = getStockItems(departmentId);
   const allMovements = getStockMovements(departmentId);
   const movements = filterByPeriod(allMovements, opts);
+  const stockTxs = filterTransactions(getTransactionsByDepartment(departmentId as DepartmentId), opts)
+    .filter(tx => tx.type === 'income' && (tx.stockItemId || tx.saleTicketNumber || tx.category.toLowerCase().includes('vente')));
   const trainingsAll = getTrainings(departmentId);
   const trainings = filterByPeriod(trainingsAll, opts);
   let y = 44;
@@ -785,6 +973,89 @@ export async function downloadStockReport(opts?: ReportOptions, departmentId: st
       margin: { left: 14 },
       styles: { fontSize: 7 },
     });
+    y = (doc as any).lastAutoTable.finalY + 10;
+  }
+
+  const movementByTxId = new Map<string, (typeof movements)[number]>();
+  const movementByTicket = new Map<string, (typeof movements)[number]>();
+  for (const mv of movements) {
+    if (mv.transactionId) movementByTxId.set(mv.transactionId, mv);
+    if (mv.saleTicketNumber) movementByTicket.set(mv.saleTicketNumber, mv);
+  }
+
+  const reconIssues: Array<{ level: 'Critique' | 'Alerte'; source: string; ref: string; message: string }> = [];
+
+  for (const tx of stockTxs) {
+    const linkedById = movementByTxId.get(tx.id);
+    const linkedByTicket = tx.saleTicketNumber ? movementByTicket.get(tx.saleTicketNumber) : undefined;
+    const linked = linkedById || linkedByTicket;
+    if (!linked) {
+      reconIssues.push({
+        level: 'Critique',
+        source: 'Compta',
+        ref: tx.saleTicketNumber || tx.id,
+        message: `Vente ${fmtAmount(tx.amount)} sans mouvement de stock lié.`,
+      });
+      continue;
+    }
+    if (tx.quantity && linked.quantity !== tx.quantity) {
+      reconIssues.push({
+        level: 'Alerte',
+        source: 'Stock/Compta',
+        ref: tx.saleTicketNumber || tx.id,
+        message: `Quantité incohérente (stock: ${linked.quantity}, compta: ${tx.quantity}).`,
+      });
+    }
+  }
+
+  for (const mv of movements.filter(m => m.type === 'exit' && m.reason.toLowerCase().includes('vente'))) {
+    if (!mv.transactionId && !mv.saleTicketNumber) {
+      reconIssues.push({
+        level: 'Alerte',
+        source: 'Stock',
+        ref: mv.id,
+        message: 'Sortie de vente sans transaction comptable associée.',
+      });
+      continue;
+    }
+    if (mv.transactionId && !stockTxs.some(tx => tx.id === mv.transactionId)) {
+      reconIssues.push({
+        level: 'Alerte',
+        source: 'Stock',
+        ref: mv.transactionId,
+        message: 'Mouvement lié à une transaction introuvable sur la période.',
+      });
+    }
+  }
+
+  y = addSectionTitle(doc, 'Rapprochement stock / comptabilité', y);
+  autoTable(doc, {
+    startY: y,
+    head: [["Ventes compta", "Mouvements vente", "Ecarts détectés"]],
+    body: [[String(stockTxs.length), String(movements.filter(m => m.type === 'exit' && m.reason.toLowerCase().includes('vente')).length), String(reconIssues.length)]],
+    theme: 'grid',
+    headStyles: { fillColor: [100, 60, 20], fontSize: 9 },
+    bodyStyles: { fontSize: 10, fontStyle: 'bold' },
+    margin: { left: 14 },
+  });
+  y = (doc as any).lastAutoTable.finalY + 8;
+
+  if (reconIssues.length > 0) {
+    autoTable(doc, {
+      startY: y,
+      head: [["Niveau", "Source", "Référence", "Constat"]],
+      body: reconIssues.slice(0, 60).map(issue => [issue.level, issue.source, issue.ref, issue.message]),
+      theme: 'striped',
+      headStyles: { fillColor: [140, 70, 30], fontSize: 8 },
+      styles: { fontSize: 8 },
+      margin: { left: 14 },
+      columnStyles: {
+        0: { cellWidth: 20 },
+        1: { cellWidth: 24 },
+        2: { cellWidth: 46 },
+      },
+      alternateRowStyles: { fillColor: [250, 247, 242] },
+    });
   }
 
   decoratePages(doc, reportTitle);
@@ -796,11 +1067,25 @@ export async function downloadStockReport(opts?: ReportOptions, departmentId: st
 export async function downloadTransactionsReport(opts?: ReportOptions) {
   const reportTitle = "Rapport de toutes les transactions";
   const doc = await setupDoc(reportTitle, opts);
-  const txs = filterTransactions(getTransactions(), opts).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  const sourceTxs = getTransactions();
+  const txs = filterTransactions(sourceTxs, opts).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  const stats = computeStats(txs);
+  const comparisonMeta = buildComparisonOptions(opts);
+  const previousStats = comparisonMeta
+    ? computeStats(filterTransactions(sourceTxs, comparisonMeta.previousOpts))
+    : null;
   const insights = await resolveInsights("Rapport de toutes les transactions", txs, buildTransactionInsights(txs, 'Le rapport des transactions'), opts);
   const expenseBreakdown = buildCategoryBreakdown(txs, 'expense');
   const strategicExpenses = buildStrategicExpenseBreakdown(txs);
-  let y = 44;
+  let y = 20;
+
+  y = addExecutiveSummaryTable(doc, stats, y);
+  if (comparisonMeta && previousStats) {
+    y = addPeriodComparisonTable(doc, y, stats, previousStats, {
+      currentLabel: comparisonMeta.currentLabel,
+      previousLabel: comparisonMeta.previousLabel,
+    });
+  }
 
   y = addInsightSections(doc, insights, y);
 
@@ -844,6 +1129,261 @@ export async function downloadTransactionsReport(opts?: ReportOptions) {
 
   decoratePages(doc, reportTitle);
   presentPdf(doc, `rapport-transactions-${new Date().toISOString().slice(0, 10)}.pdf`, opts?.reportMode || "download");
+}
+
+// ==================== SPECIALIZED REPORTS ====================
+
+export async function downloadEmployeeSalaryReport(opts?: ReportOptions) {
+  const reportTitle = "Rapport spécialisé — Salaires & employés";
+  const doc = await setupDoc(reportTitle, opts);
+
+  const period = opts?.startDate && opts?.endDate
+    ? { startDate: opts.startDate, endDate: opts.endDate, label: `${opts.startDate} -> ${opts.endDate}` }
+    : getDefaultCurrentPeriod();
+
+  const referenceDate = `${period.startDate}T00:00:00`;
+  const employees = getEmployeesByDepartment("charges-entreprise");
+  const payrollTransactions = filterTransactions(
+    getTransactionsByDepartment("charges-entreprise").filter(tx => tx.type === "expense" && tx.category === "Paiement employés"),
+    { ...opts, startDate: period.startDate, endDate: period.endDate },
+  ).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+  const rows = employees.map((employee) => {
+    const salaryStatus = getEmployeeSalaryStatus(employee, referenceDate);
+    const monthlySalary = salaryStatus.monthlySalary || 0;
+    const paid = salaryStatus.paidThisMonth;
+    const remaining = monthlySalary > 0 ? Math.max(monthlySalary - paid, 0) : 0;
+    const overrun = monthlySalary > 0 && paid > monthlySalary ? paid - monthlySalary : 0;
+    return {
+      employee,
+      monthlySalary,
+      paid,
+      remaining,
+      overrun,
+      statusLabel: monthlySalary <= 0
+        ? "Salaire non défini"
+        : overrun > 0
+          ? "Dépassement"
+          : remaining > 0
+            ? "Partiel"
+            : "Soldé",
+      lastPaymentDate: getEmployeeLastPaymentDate(employee),
+    };
+  });
+
+  const totalPlanned = rows.reduce((sum, row) => sum + row.monthlySalary, 0);
+  const totalPaid = rows.reduce((sum, row) => sum + row.paid, 0);
+  const totalRemaining = rows.reduce((sum, row) => sum + row.remaining, 0);
+  const totalOverrun = rows.reduce((sum, row) => sum + row.overrun, 0);
+
+  let y = 20;
+  y = addSectionTitle(doc, `Période analysée: ${period.label}`, y);
+  y = addExecutiveSummaryTable(doc, {
+    income: totalPlanned,
+    expenses: totalPaid,
+    balance: totalPlanned - totalPaid,
+    count: rows.length,
+  }, y);
+
+  y = addSectionTitle(doc, "Indicateurs masse salariale", y);
+  autoTable(doc, {
+    startY: y,
+    head: [["Employés", "Masse salariale prévue", "Payé", "Reste à payer", "Dépassements", "Salaires non définis"]],
+    body: [[
+      String(rows.length),
+      fmtAmount(totalPlanned),
+      fmtAmount(totalPaid),
+      fmtAmount(totalRemaining),
+      fmtAmount(totalOverrun),
+      String(rows.filter(r => r.monthlySalary <= 0).length),
+    ]],
+    theme: "grid",
+    headStyles: { fillColor: [34, 87, 122], fontSize: 9 },
+    bodyStyles: { fontSize: 10, fontStyle: "bold" },
+    margin: { left: 14 },
+  });
+  y = (doc as any).lastAutoTable.finalY + 10;
+
+  y = addSectionTitle(doc, "Détail par employé", y);
+  autoTable(doc, {
+    startY: y,
+    head: [["Employé", "Statut", "Salaire mensuel", "Payé période", "Reste", "Dépassement", "Dernier paiement"]],
+    body: rows
+      .sort((a, b) => b.monthlySalary - a.monthlySalary)
+      .map((row) => [
+        row.employee.fullName,
+        row.statusLabel,
+        row.monthlySalary > 0 ? fmtAmount(row.monthlySalary) : "—",
+        fmtAmount(row.paid),
+        row.monthlySalary > 0 ? fmtAmount(row.remaining) : "—",
+        row.overrun > 0 ? fmtAmount(row.overrun) : "—",
+        row.lastPaymentDate ? new Date(row.lastPaymentDate).toLocaleDateString("fr-FR") : "—",
+      ]),
+    theme: "striped",
+    headStyles: { fillColor: [34, 87, 122], fontSize: 8.5 },
+    margin: { left: 14 },
+    styles: { fontSize: 8.5 },
+    columnStyles: {
+      2: { halign: "right" },
+      3: { halign: "right" },
+      4: { halign: "right" },
+      5: { halign: "right", fontStyle: "bold" },
+    },
+    alternateRowStyles: { fillColor: [245, 247, 250] },
+  });
+  y = (doc as any).lastAutoTable.finalY + 10;
+
+  if (payrollTransactions.length > 0) {
+    y = addSectionTitle(doc, `Transactions salariales (${payrollTransactions.length})`, y);
+    autoTable(doc, {
+      startY: y,
+      head: [["Date", "Employé", "Description", "Caisse", "Montant"]],
+      body: payrollTransactions.map((tx) => [
+        new Date(tx.date).toLocaleDateString("fr-FR"),
+        tx.personName || "—",
+        tx.description || "Paiement employés",
+        getPaymentMethodLabel(tx.paymentMethod || "especes", tx.departmentId),
+        fmtAmount(tx.amount),
+      ]),
+      theme: "striped",
+      headStyles: { fillColor: [34, 87, 122], fontSize: 8 },
+      margin: { left: 14 },
+      styles: { fontSize: 8 },
+      columnStyles: {
+        4: { halign: "right", fontStyle: "bold" },
+      },
+      alternateRowStyles: { fillColor: [245, 247, 250] },
+    });
+  }
+
+  decoratePages(doc, reportTitle);
+  presentPdf(doc, `rapport-salaires-employes-${new Date().toISOString().slice(0, 10)}.pdf`, opts?.reportMode || "download");
+}
+
+function filterByTimestamp<T>(items: T[], getDateValue: (item: T) => string | undefined, opts?: ReportOptions): T[] {
+  const startMs = opts?.startDate ? getTransactionTimestamp(`${opts.startDate}T00:00:00`) : null;
+  const endMs = opts?.endDate ? getTransactionTimestamp(`${opts.endDate}T23:59:59.999`) : null;
+  if (startMs === null && endMs === null) return items;
+
+  return items.filter((item) => {
+    const raw = getDateValue(item);
+    if (!raw) return false;
+    const ts = getTransactionTimestamp(raw);
+    if (Number.isNaN(ts)) return false;
+    if (startMs !== null && ts < startMs) return false;
+    if (endMs !== null && ts > endMs) return false;
+    return true;
+  });
+}
+
+export async function downloadFormationPaymentScheduleReport(opts?: ReportOptions) {
+  const reportTitle = "Rapport spécialisé — Formations / paiements / échéances";
+  const doc = await setupDoc(reportTitle, opts);
+
+  const formations = getFormationsCatalog();
+  const formationMap = new Map(formations.map(f => [f.id, f]));
+  const enrollments = filterByTimestamp(getEnrollments(), (e) => e.enrolledAt, opts)
+    .filter((e) => {
+      if (!opts?.personName) return true;
+      return e.fullName.toLowerCase().includes(opts.personName.toLowerCase());
+    });
+  const plans = getPaymentPlans();
+  const overdueSet = new Set(getOverdueTranches().map(item => `${item.planId}|${item.trancheName}|${item.dueDate}`));
+
+  const rows = enrollments.map((enrollment) => {
+    const formation = formationMap.get(enrollment.formationId);
+    const plan = plans.find((p) => p.formationId === enrollment.formationId && p.clientName.trim().toLowerCase() === enrollment.fullName.trim().toLowerCase());
+    const paid = plan ? plan.installments.reduce((sum, installment) => sum + installment.amount, 0) : 0;
+    const remaining = plan ? getRemainingAmount(plan) : 0;
+    const allocations = plan ? getAllocationSummary(plan) : [];
+    const nextIndex = allocations.findIndex((a) => a.status !== "paid");
+    const nextTranche = nextIndex >= 0 && plan?.scheduledTranches?.[nextIndex] ? plan.scheduledTranches[nextIndex] : null;
+    const isOverdue = !!(plan && nextTranche && overdueSet.has(`${plan.id}|${nextTranche.name}|${nextTranche.dueDate}`));
+    const contact = enrollment.phone?.trim() || enrollment.email?.trim() || "—";
+    const totalAmount = plan?.totalAmount || 0;
+    return {
+      enrollment,
+      formation,
+      plan,
+      totalAmount,
+      paid,
+      remaining,
+      nextTranche,
+      isOverdue,
+      contact,
+      unpaidTranches: allocations.filter((a) => a.status !== "paid").length,
+      totalTranches: allocations.length,
+    };
+  });
+
+  const formedCount = rows.filter((row) => row.enrollment.status === "terminé").length;
+  const notFormedCount = rows.filter((row) => row.enrollment.status === "inscrit" || row.enrollment.status === "en_cours").length;
+  const overdueCount = rows.filter((row) => row.isOverdue).length;
+  const totalRemaining = rows.reduce((sum, row) => sum + row.remaining, 0);
+  const totalPaid = rows.reduce((sum, row) => sum + row.paid, 0);
+  const totalContracted = rows.reduce((sum, row) => sum + row.totalAmount, 0);
+
+  let y = 20;
+  y = addExecutiveSummaryTable(doc, {
+    income: totalContracted,
+    expenses: totalPaid,
+    balance: totalContracted - totalPaid,
+    count: rows.length,
+  }, y);
+
+  y = addSectionTitle(doc, "Indicateurs de suivi formations", y);
+  autoTable(doc, {
+    startY: y,
+    head: [["Inscrits", "Formés", "Non formés", "Plans actifs", "Échéances en retard", "Reste à encaisser"]],
+    body: [[
+      String(rows.length),
+      String(formedCount),
+      String(notFormedCount),
+      String(rows.filter((row) => row.plan && row.plan.status === "en_cours").length),
+      String(overdueCount),
+      fmtAmount(totalRemaining),
+    ]],
+    theme: "grid",
+    headStyles: { fillColor: [120, 70, 20], fontSize: 9 },
+    bodyStyles: { fontSize: 10, fontStyle: "bold" },
+    margin: { left: 14 },
+  });
+  y = (doc as any).lastAutoTable.finalY + 10;
+
+  y = addSectionTitle(doc, "Détail des dossiers apprenants", y);
+  autoTable(doc, {
+    startY: y,
+    head: [["Apprenant", "Formation", "Parcours", "Contrat", "Payé", "Reste", "Prochaine échéance", "Retard", "Contact"]],
+    body: rows
+      .sort((a, b) => new Date(b.enrollment.enrolledAt).getTime() - new Date(a.enrollment.enrolledAt).getTime())
+      .map((row) => [
+        row.enrollment.fullName,
+        row.formation?.name || "Formation supprimée",
+        row.enrollment.status,
+        row.plan ? fmtAmount(row.totalAmount) : "Pas de plan",
+        row.plan ? fmtAmount(row.paid) : "—",
+        row.plan ? fmtAmount(row.remaining) : "—",
+        row.nextTranche
+          ? `${new Date(row.nextTranche.dueDate).toLocaleDateString("fr-FR")} · ${fmtAmount(row.nextTranche.amount)}`
+          : "Aucune échéance",
+        row.isOverdue ? "Oui" : "Non",
+        row.contact,
+      ]),
+    theme: "striped",
+    headStyles: { fillColor: [120, 70, 20], fontSize: 8 },
+    margin: { left: 14 },
+    styles: { fontSize: 8 },
+    columnStyles: {
+      3: { halign: "right" },
+      4: { halign: "right" },
+      5: { halign: "right", fontStyle: "bold" },
+      7: { halign: "center" },
+    },
+    alternateRowStyles: { fillColor: [250, 247, 242] },
+  });
+
+  decoratePages(doc, reportTitle);
+  presentPdf(doc, `rapport-formations-echeances-${new Date().toISOString().slice(0, 10)}.pdf`, opts?.reportMode || "download");
 }
 
 // ==================== AUDIT LOG REPORT ====================

@@ -5,7 +5,7 @@ import logoDigitbooster from '@/assets/logo-digitbooster.png';
 import logoGuimsGroup from '@/assets/logo-guims-group.jpg';
 import { syncSetDoc, syncDeleteDoc, pushAllToSupabase } from './sync';
 import { TABLES } from './firebase';
-import { normalizeTransactionDate } from './transactionDates';
+import { normalizeTransactionDate, getTransactionTimestamp } from './transactionDates';
 
 export type DepartmentId = 'gaba' | 'guims-educ' | 'guims-academy' | 'digitboosterplus' | 'charges-entreprise';
 
@@ -335,6 +335,26 @@ export const getGlobalStats = () => {
   const income = txs.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
   const expenses = txs.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
   return { income, expenses, balance: income - expenses, count: txs.length };
+};
+
+export const getTransactionsByMonth = (year: number, month: number) => {
+  return getTransactions().filter(tx => {
+    const d = new Date(getTransactionTimestamp(tx.date));
+    return d.getFullYear() === year && d.getMonth() === month;
+  });
+};
+
+export const getMonthlyStats = (year: number, month: number) => {
+  const txs = getTransactionsByMonth(year, month);
+  const income = txs.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
+  const expenses = txs.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
+  return { income, expenses, balance: income - expenses, count: txs.length };
+};
+
+/** Returns % change: positive = improvement, negative = decrease. null if no previous data. */
+export const computeTrend = (current: number, previous: number): number | null => {
+  if (previous === 0) return null;
+  return Math.round(((current - previous) / Math.abs(previous)) * 100);
 };
 
 export const getStatsByPaymentMethod = (txs?: Transaction[]) => {

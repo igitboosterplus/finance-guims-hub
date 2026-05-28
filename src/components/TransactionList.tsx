@@ -9,10 +9,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Trash2, ArrowUpRight, ArrowDownRight, Search, Pencil, ChevronLeft, ChevronRight, Download, FileDown } from "lucide-react";
-import { formatCurrency, type Transaction, type PaymentMethod, getDepartment, deleteTransaction, updateTransaction, departments, exportTransactionsCSV, getPaymentMethodsForDepartment, getPaymentMethodLabel } from "@/lib/data";
+import { formatCurrency, type Transaction, type PaymentMethod, getDepartment, deleteTransaction, updateTransaction, exportTransactionsCSV, getPaymentMethodsForDepartment, getPaymentMethodLabel, getTransactions } from "@/lib/data";
 import { addAuditEntry, getCurrentUser, isSuperAdmin, hasPermission, buildHumanDiff } from "@/lib/auth";
 import { syncInstallmentFromTransaction, removeInstallmentFromTransaction, syncEditedTransaction } from "@/lib/stock";
 import { getTransactionTimestamp, transactionDateToInputValue } from "@/lib/transactionDates";
+import { findEmployeeByName } from "@/lib/employees";
 import { toast } from "sonner";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -29,6 +30,8 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
+  const [dateFrom, setDateFrom] = useState<string>("");
+  const [dateTo, setDateTo] = useState<string>("");
   const [page, setPage] = useState(1);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [editTx, setEditTx] = useState<Transaction | null>(null);
@@ -58,7 +61,16 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
         tx.amount.toString().includes(q);
       const matchType = typeFilter === "all" || tx.type === typeFilter;
       const matchCategory = categoryFilter === "all" || tx.category === categoryFilter;
-      return matchSearch && matchType && matchCategory;
+      
+      // Date range filter
+      let matchDate = true;
+      if (dateFrom || dateTo) {
+        const txDate = new Date(getTransactionTimestamp(tx.date)).toISOString().split('T')[0];
+        if (dateFrom && txDate < dateFrom) matchDate = false;
+        if (dateTo && txDate > dateTo) matchDate = false;
+      }
+      
+      return matchSearch && matchType && matchCategory && matchDate;
     })
     .sort((a, b) => getTransactionTimestamp(b.date) - getTransactionTimestamp(a.date));
 
@@ -127,6 +139,51 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
       toast.error("Veuillez saisir la justification de la modification");
       return;
     }
+
+    const becomesEmployeePayment =
+      editTx.departmentId === 'charges-entreprise' &&
+      editType === 'expense' &&
+      editCategory === 'Paiement employés';
+
+    if (becomesEmployeePayment) {
+      const employee = findEmployeeByName('charges-entreprise', editPersonName);
+      if (!employee) {
+        toast.error("Employé introuvable. Ajoutez d'abord cet employé dans la liste avec son salaire mensuel.");
+        return;
+      }
+
+      if (!employee.monthlySalary || employee.monthlySalary <= 0) {
+        toast.error("Salaire mensuel non défini pour cet employé. Définissez-le avant ce retrait salarial.");
+        return;
+      }
+
+      const editedDate = new Date(editDate || editTx.date);
+      const year = editedDate.getFullYear();
+      const month = editedDate.getMonth();
+      const normalizedName = employee.fullName.trim().toLowerCase();
+
+      const paidThisMonthExcludingEdited = getTransactions()
+        .filter((tx) => tx.id !== editTx.id)
+        .filter((tx) =>
+          tx.departmentId === 'charges-entreprise' &&
+          tx.type === 'expense' &&
+          tx.category === 'Paiement employés' &&
+          tx.personName.trim().toLowerCase() === normalizedName,
+        )
+        .filter((tx) => {
+          const d = new Date(tx.date);
+          return d.getFullYear() === year && d.getMonth() === month;
+        })
+        .reduce((sum, tx) => sum + tx.amount, 0);
+
+      const projectedPaid = paidThisMonthExcludingEdited + parsedAmount;
+      if (projectedPaid > employee.monthlySalary) {
+        const over = projectedPaid - employee.monthlySalary;
+        toast.error(`Modification refusée: dépassement de ${formatCurrency(over)} sur le salaire mensuel (${formatCurrency(employee.monthlySalary)}).`);
+        return;
+      }
+    }
+
     const previousData = JSON.stringify({ type: editTx.type, amount: editTx.amount, category: editTx.category, personName: editTx.personName, phoneNumber: editTx.phoneNumber, date: editTx.date, paymentMethod: editTx.paymentMethod, description: editTx.description });
     updateTransaction(editTx.id, {
       category: editCategory,
@@ -259,37 +316,75 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
   return (
     <>
       {/* Toolbar */}
-      <div className="flex flex-col sm:flex-row gap-3 mb-4">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Rechercher par catégorie, description, département..."
-            value={search}
-            onChange={(e) => { setSearch(e.target.value); setPage(1); }}
-            className="pl-9"
-          />
-        </div>
-        <Select value={categoryFilter} onValueChange={(v) => { setCategoryFilter(v); setPage(1); }}>
-          <SelectTrigger className="w-[200px]">
-            <SelectValue placeholder="Toutes catégories" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">Toutes catégories</SelectItem>
-            {safeCategoryOptions.map(cat => (
-              <SelectItem key={cat} value={cat}>{cat}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Select value={typeFilter} onValueChange={(v) => { setTypeFilter(v); setPage(1); }}>
-          <SelectTrigger className="w-[160px]">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">Tous les types</SelectItem>
-            <SelectItem value="income">Revenus</SelectItem>
+      <div className="flex flex-col gap-3 mb-4">
+        <div className="flex flex-col sm:flex-row gap-3">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Rechercher par catégorie, description, département..."
+              value={search}
+              onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+              className="pl-9"
+            />
+          </div>
+          <Select value={categoryFilter} onValueChange={(v) => { setCategoryFilter(v); setPage(1); }}>
+            <SelectTrigger className="w-[200px]">
+              <SelectValue placeholder="Toutes catégories" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Toutes catégories</SelectItem>
+              {safeCategoryOptions.map(cat => (
+                <SelectItem key={cat} value={cat}>{cat}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={typeFilter} onValueChange={(v) => { setTypeFilter(v); setPage(1); }}>
+            <SelectTrigger className="w-[160px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Tous les types</SelectItem>
+              <SelectItem value="income">Revenus</SelectItem>
             <SelectItem value="expense">Dépenses</SelectItem>
           </SelectContent>
         </Select>
+        </div>
+        {/* Date range filters */}
+        <div className="flex flex-col sm:flex-row gap-2">
+          <div className="flex-1">
+            <Label htmlFor="dateFrom" className="text-xs text-muted-foreground block mb-1">De</Label>
+            <Input
+              id="dateFrom"
+              type="date"
+              value={dateFrom}
+              onChange={(e) => { setDateFrom(e.target.value); setPage(1); }}
+              className="text-sm"
+            />
+          </div>
+          <div className="flex-1">
+            <Label htmlFor="dateTo" className="text-xs text-muted-foreground block mb-1">À</Label>
+            <Input
+              id="dateTo"
+              type="date"
+              value={dateTo}
+              onChange={(e) => { setDateTo(e.target.value); setPage(1); }}
+              className="text-sm"
+            />
+          </div>
+          {(dateFrom || dateTo) && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => { setDateFrom(""); setDateTo(""); setPage(1); }}
+              className="self-end"
+            >
+              Réinitialiser
+            </Button>
+          )}
+        </div>
+      </div>
+
+      <div className="flex flex-col sm:flex-row gap-2 mb-4">
         {hasPermission(getCurrentUser(), 'canExportData') && (
           <>
           <Button variant="outline" size="sm" onClick={handleExportPDF} className="gap-2">

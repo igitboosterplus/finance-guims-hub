@@ -140,6 +140,7 @@ export default function UserManagement() {
     let count = 0;
     if (p.canCreateTransaction) count++;
     if (p.canEditTransaction) count++;
+    if (p.canRecordStockExitWithoutPrice) count++;
     if (p.canExportData) count++;
     if (p.canImportData) count++;
     return { count, depts: p.departments.length };
@@ -432,6 +433,16 @@ export default function UserManagement() {
                     </div>
                   </div>
                   <Switch checked={permsEdit.canEditTransaction} onCheckedChange={v => setPermsEdit(p => ({ ...p, canEditTransaction: v }))} />
+                </div>
+                <div className="flex items-center justify-between p-2.5 rounded-lg border">
+                  <div className="flex items-center gap-2">
+                    <Package className="h-4 w-4 text-amber-600" />
+                    <div>
+                      <p className="text-sm font-medium">Sorties stock sans prix</p>
+                      <p className="text-[11px] text-muted-foreground">Autoriser utilisation, perte, don et autres sorties non commerciales</p>
+                    </div>
+                  </div>
+                  <Switch checked={permsEdit.canRecordStockExitWithoutPrice} onCheckedChange={v => setPermsEdit(p => ({ ...p, canRecordStockExitWithoutPrice: v }))} />
                 </div>
                 <div className="flex items-center justify-between p-2.5 rounded-lg border">
                   <div className="flex items-center gap-2">

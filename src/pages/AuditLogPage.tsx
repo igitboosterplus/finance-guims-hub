@@ -4,22 +4,14 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { getAuditLog, markAuditEntriesSeen, buildHumanDiff, deleteAuditEntry, type AuditLogEntry } from "@/lib/auth";
+import { getAuditIntegrityStatus, getAuditLog, markAuditEntriesSeen, buildHumanDiff, type AuditLogEntry } from "@/lib/auth";
+import { getStatsByPaymentMethod, getTransactions } from "@/lib/data";
+import { getTransactionTimestamp } from "@/lib/transactionDates";
 import { downloadAuditReport } from "@/lib/reports";
 import { useAuth } from "@/hooks/useAuth";
-import { Download, Search, FileText, PenLine, Trash2, Plus, Shield, ChevronLeft, ChevronRight } from "lucide-react";
+import { Download, Search, FileText, PenLine, Trash2, Plus, Shield, ChevronLeft, ChevronRight, ShieldAlert, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
+import { useSearchParams } from "react-router-dom";
 
 const PAGE_SIZE = 20;
 
@@ -43,9 +35,14 @@ const actionColors: Record<string, string> = {
 
 export default function AuditLogPage() {
   const { user } = useAuth();
+  const [searchParams] = useSearchParams();
+  const focus = searchParams.get("focus") || "";
   const [entries, setEntries] = useState<AuditLogEntry[]>([]);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
+  const integrity = getAuditIntegrityStatus();
+
+  const txs = getTransactions();
 
   useEffect(() => {
     const log = getAuditLog();
@@ -54,6 +51,19 @@ export default function AuditLogPage() {
       markAuditEntriesSeen();
     }
   }, [user]);
+
+  useEffect(() => {
+    if (focus === "dup-tx") {
+      setSearch("création");
+      setPage(1);
+    } else if (focus === "unusual-expenses") {
+      setSearch("dépense");
+      setPage(1);
+    } else if (focus === "cash-concentration") {
+      setSearch("");
+      setPage(1);
+    }
+  }, [focus]);
 
   if (!user || user.role !== 'superadmin') {
     return (
@@ -78,20 +88,44 @@ export default function AuditLogPage() {
   const currentPage = Math.min(page, totalPages);
   const paginated = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
 
+  const duplicateCases = (() => {
+    const grouped = new Map<string, { count: number; person: string; amount: number; date: string; category: string }>();
+    for (const tx of txs) {
+      const day = new Date(getTransactionTimestamp(tx.date)).toISOString().slice(0, 10);
+      const key = `${day}|${tx.type}|${tx.departmentId}|${tx.category}|${tx.personName}|${tx.amount}`;
+      const existing = grouped.get(key);
+      if (existing) {
+        existing.count += 1;
+      } else {
+        grouped.set(key, { count: 1, person: tx.personName || "—", amount: tx.amount, date: tx.date, category: tx.category });
+      }
+    }
+    return [...grouped.values()].filter(item => item.count > 1).slice(0, 5);
+  })();
+
+  const unusualExpensesCases = (() => {
+    const now = new Date();
+    const monthExpenses = txs.filter((tx) => {
+      if (tx.type !== "expense") return false;
+      const d = new Date(getTransactionTimestamp(tx.date));
+      return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+    });
+    const avg = monthExpenses.length > 0 ? monthExpenses.reduce((sum, tx) => sum + tx.amount, 0) / monthExpenses.length : 0;
+    return monthExpenses.filter(tx => avg > 0 && tx.amount >= avg * 2).slice(0, 5);
+  })();
+
+  const cashConcentrationCase = (() => {
+    const stats = getStatsByPaymentMethod();
+    const totalFlow = stats.reduce((sum, item) => sum + item.income + item.expenses, 0);
+    const leader = [...stats].sort((a, b) => (b.income + b.expenses) - (a.income + a.expenses))[0];
+    if (!leader || totalFlow <= 0) return null;
+    const share = Math.round(((leader.income + leader.expenses) / totalFlow) * 100);
+    return { leader, share };
+  })();
+
   const handleExport = async () => {
     await downloadAuditReport();
     toast.success("Rapport d'audit généré");
-  };
-
-  const handleDelete = (entryId: string) => {
-    if (!user) return;
-    const success = deleteAuditEntry(entryId, { userId: user.id, username: user.username });
-    if (success) {
-      setEntries(getAuditLog());
-      toast.success("Entrée d'audit supprimée");
-    } else {
-      toast.error("Erreur lors de la suppression");
-    }
   };
 
   return (
@@ -120,6 +154,59 @@ export default function AuditLogPage() {
         />
       </div>
 
+      <Card className="border-0 shadow-sm">
+        <CardContent className="py-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-2 text-sm">
+            {integrity.audit.ok ? <ShieldCheck className="h-4 w-4 text-success" /> : <ShieldAlert className="h-4 w-4 text-destructive" />}
+            <span>
+              Intégrité journal audit: {integrity.audit.ok ? 'valide' : 'altération détectée'}
+            </span>
+          </div>
+          <p className="text-xs text-muted-foreground">Journal append-only: suppression désactivée</p>
+        </CardContent>
+      </Card>
+
+      {focus === "dup-tx" && duplicateCases.length > 0 && (
+        <Card className="border-destructive/30 bg-destructive/5">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">Cas signalés: doublons potentiels</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-1.5 text-xs">
+            {duplicateCases.map((item, index) => (
+              <div key={index} className="rounded border border-destructive/30 px-2 py-1">
+                {item.person} · {item.category} · {item.count} occurrences · {new Date(item.date).toLocaleDateString('fr-FR')} · {item.amount.toLocaleString('fr-FR')} FCFA
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {focus === "unusual-expenses" && unusualExpensesCases.length > 0 && (
+        <Card className="border-amber-400/40 bg-amber-50/70 dark:bg-amber-950/20">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">Cas signalés: dépenses atypiques</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-1.5 text-xs">
+            {unusualExpensesCases.map((item) => (
+              <div key={item.id} className="rounded border border-amber-400/40 px-2 py-1">
+                {new Date(item.date).toLocaleDateString('fr-FR')} · {item.personName || '—'} · {item.category} · {item.amount.toLocaleString('fr-FR')} FCFA
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {focus === "cash-concentration" && cashConcentrationCase && (
+        <Card className="border-amber-400/40 bg-amber-50/70 dark:bg-amber-950/20">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">Cas signalé: concentration de flux</CardTitle>
+          </CardHeader>
+          <CardContent className="text-xs">
+            La caisse {cashConcentrationCase.leader.label} concentre {cashConcentrationCase.share}% des flux. Action recommandée: revue des opérations et répartition des encaissements.
+          </CardContent>
+        </Card>
+      )}
+
       {filtered.length === 0 ? (
         <div className="text-center py-12 text-muted-foreground">
           <FileText className="h-12 w-12 mx-auto mb-4 opacity-50" />
@@ -137,7 +224,6 @@ export default function AuditLogPage() {
                     <TableHead>Action</TableHead>
                     <TableHead>Détails</TableHead>
                     <TableHead>Justification</TableHead>
-                    <TableHead className="w-[60px]"></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -165,29 +251,6 @@ export default function AuditLogPage() {
                           {entry.justification ? (
                             <span className="italic">{entry.justification}</span>
                           ) : '—'}
-                        </TableCell>
-                        <TableCell>
-                          <AlertDialog>
-                            <AlertDialogTrigger asChild>
-                              <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive">
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
-                            </AlertDialogTrigger>
-                            <AlertDialogContent>
-                              <AlertDialogHeader>
-                                <AlertDialogTitle>Supprimer cette entrée ?</AlertDialogTitle>
-                                <AlertDialogDescription>
-                                  Cette action sera enregistrée dans le Super Audit. L'entrée sera définitivement supprimée du journal.
-                                </AlertDialogDescription>
-                              </AlertDialogHeader>
-                              <AlertDialogFooter>
-                                <AlertDialogCancel>Annuler</AlertDialogCancel>
-                                <AlertDialogAction onClick={() => handleDelete(entry.id)} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-                                  Supprimer
-                                </AlertDialogAction>
-                              </AlertDialogFooter>
-                            </AlertDialogContent>
-                          </AlertDialog>
                         </TableCell>
                       </TableRow>
                     );

@@ -1,4 +1,4 @@
-import { LayoutDashboard, Plus, Users, FileText, Bell, UserCircle, Package, GraduationCap, CreditCard, ShieldCheck } from "lucide-react";
+import { LayoutDashboard, Plus, Users, FileText, Bell, UserCircle, Package, GraduationCap, CreditCard, ShieldCheck, Sparkles } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
 import { departments } from "@/lib/data";
@@ -189,6 +189,18 @@ export function AppSidebar() {
                   >
                     <CreditCard className="mr-2 h-4 w-4" />
                     {!collapsed && <span>Suivi paiements</span>}
+                  </NavLink>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild>
+                  <NavLink
+                    to="/ai-comptabilite"
+                    className="hover:bg-sidebar-accent"
+                    activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
+                  >
+                    <Sparkles className="mr-2 h-4 w-4" />
+                    {!collapsed && <span>Chat IA compta</span>}
                   </NavLink>
                 </SidebarMenuButton>
               </SidebarMenuItem>

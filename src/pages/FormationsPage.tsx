@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,14 +15,15 @@ import {
   getFormationsCatalog, addFormationCatalog, updateFormationCatalog, deleteFormationCatalog,
   getStockItems, getStockKits,
   getEnrollmentsByFormation, addEnrollment, updateEnrollment, deleteEnrollment,
-  addPaymentPlan,
+  addPaymentPlan, getPaymentPlans, getRemainingAmount, getOverdueTranches, getAllocationSummary,
   type FormationCatalog, type FormationPack, type FormationTranche, type PackAdvantage, type PackKitItem, type PackKitReference, type StockItem, type StockKit,
-  type FormationEnrollment,
+  type FormationEnrollment, type PaymentPlan, type PaymentReminder,
 } from "@/lib/stock";
 import { toast } from "sonner";
+import { downloadFormationPaymentScheduleReport } from "@/lib/reports";
 import {
   GraduationCap, Plus, Pencil, Trash2, Package, Star, Award, ChevronDown, ChevronUp, Search, Calendar, CreditCard, Boxes,
-  Users, UserPlus, Phone, Mail, MoreVertical, Eye, EyeOff,
+  Users, UserPlus, Phone, Mail, MoreVertical, Eye, EyeOff, MessageCircle,
 } from "lucide-react";
 
 // ==================== PACK EDITOR COMPONENT ====================
@@ -334,6 +335,7 @@ export default function FormationsPage() {
   const currentUser = getCurrentUser();
   const canEdit = hasPermission(currentUser, 'canEditTransaction');
   const canCreate = hasPermission(currentUser, 'canCreateTransaction');
+  const canExport = hasPermission(currentUser, 'canExportData');
 
   const [formations, setFormations] = useState<FormationCatalog[]>([]);
   const [stockItems, setStockItems] = useState<StockItem[]>([]);
@@ -352,6 +354,10 @@ export default function FormationsPage() {
   const [enrollments, setEnrollments] = useState<Record<string, FormationEnrollment[]>>({});
   const [showEnrollments, setShowEnrollments] = useState<string | null>(null);
   const [deleteEnrollmentId, setDeleteEnrollmentId] = useState<string | null>(null);
+  const [paymentPlans, setPaymentPlans] = useState<PaymentPlan[]>([]);
+  const [overdueTranches, setOverdueTranches] = useState<PaymentReminder[]>([]);
+  const [suiviSearch, setSuiviSearch] = useState("");
+  const [suiviStatus, setSuiviStatus] = useState<'all' | 'a_relancer' | FormationEnrollment['status']>("all");
   // Enrollment form
   const [enrFullName, setEnrFullName] = useState("");
   const [enrPhone, setEnrPhone] = useState("");
@@ -384,6 +390,8 @@ export default function FormationsPage() {
     setFormations(fms);
     setStockItems(getStockItems());
     setStockKits(getStockKits());
+    setPaymentPlans(getPaymentPlans());
+    setOverdueTranches(getOverdueTranches());
     // Load enrollments for all formations
     const enrMap: Record<string, FormationEnrollment[]> = {};
     fms.forEach(f => { enrMap[f.id] = getEnrollmentsByFormation(f.id); });
@@ -401,6 +409,123 @@ export default function FormationsPage() {
     }
     return true;
   });
+
+  const allEnrollmentRows = useMemo(() => {
+    const formationMap = new Map(formations.map(f => [f.id, f]));
+    const planMap = new Map<string, PaymentPlan>();
+
+    paymentPlans.forEach((plan) => {
+      if (!plan.formationId) return;
+      const key = `${plan.formationId}|${plan.clientName.trim().toLowerCase()}`;
+      const existing = planMap.get(key);
+      if (!existing) {
+        planMap.set(key, plan);
+        return;
+      }
+      if (existing.status !== 'en_cours' && plan.status === 'en_cours') {
+        planMap.set(key, plan);
+      }
+    });
+
+    const overdueByClient = new Set(overdueTranches.map(o => o.clientName.trim().toLowerCase()));
+
+    const rows: Array<{
+      enrollment: FormationEnrollment;
+      formation?: FormationCatalog;
+      plan?: PaymentPlan;
+      remainingAmount: number;
+      totalTranches: number;
+      unpaidTranches: number;
+      nextTrancheName?: string;
+      nextTrancheAmount?: number;
+      nextTrancheDueDate?: string;
+      isFormed: boolean;
+      isNotYetFormed: boolean;
+      hasOverdue: boolean;
+      contactMissing: boolean;
+      riskScore: number;
+      riskLevel: 'faible' | 'moyen' | 'élevé';
+      needsFollowUp: boolean;
+    }> = [];
+
+    Object.values(enrollments).forEach((list) => {
+      list.forEach((enrollment) => {
+        const formation = formationMap.get(enrollment.formationId);
+        const plan = planMap.get(`${enrollment.formationId}|${enrollment.fullName.trim().toLowerCase()}`);
+        const remainingAmount = plan ? Math.max(getRemainingAmount(plan), 0) : 0;
+        const allocation = plan ? getAllocationSummary(plan) : [];
+        const nextAllocationIndex = allocation.findIndex(a => a.status !== 'paid');
+        const nextTranche = nextAllocationIndex >= 0 && plan?.scheduledTranches?.[nextAllocationIndex]
+          ? plan.scheduledTranches[nextAllocationIndex]
+          : undefined;
+        const unpaidTranches = allocation.filter(a => a.status !== 'paid').length;
+        const totalTranches = allocation.length;
+        const isFormed = enrollment.status === 'terminé';
+        const isNotYetFormed = enrollment.status === 'inscrit' || enrollment.status === 'en_cours';
+
+        const statusRisk = enrollment.status === 'inscrit' ? 20 : enrollment.status === 'en_cours' ? 10 : 0;
+        const overdueRisk = overdueByClient.has(enrollment.fullName.trim().toLowerCase()) ? 45 : 0;
+        const contactRisk = (!enrollment.phone?.trim() && !enrollment.email?.trim()) ? 25 : 0;
+        const paymentRisk = remainingAmount > 0 ? 10 : 0;
+        const noPlanRisk = !plan && enrollment.status !== 'annulé' ? 15 : 0;
+        const riskScore = Math.min(statusRisk + overdueRisk + contactRisk + paymentRisk + noPlanRisk, 100);
+        const riskLevel: 'faible' | 'moyen' | 'élevé' = riskScore >= 70 ? 'élevé' : riskScore >= 40 ? 'moyen' : 'faible';
+        const needsFollowUp = overdueRisk > 0 || contactRisk > 0 || enrollment.status === 'inscrit';
+
+        rows.push({
+          enrollment,
+          formation,
+          plan,
+          remainingAmount,
+          totalTranches,
+          unpaidTranches,
+          nextTrancheName: nextTranche?.name,
+          nextTrancheAmount: nextTranche?.amount,
+          nextTrancheDueDate: nextTranche?.dueDate,
+          isFormed,
+          isNotYetFormed,
+          hasOverdue: overdueRisk > 0,
+          contactMissing: contactRisk > 0,
+          riskScore,
+          riskLevel,
+          needsFollowUp: needsFollowUp || isNotYetFormed,
+        });
+      });
+    });
+
+    return rows.sort((a, b) => new Date(b.enrollment.enrolledAt).getTime() - new Date(a.enrollment.enrolledAt).getTime());
+  }, [enrollments, formations, paymentPlans, overdueTranches]);
+
+  const suiviRows = useMemo(() => {
+    return allEnrollmentRows
+      .filter((row) => {
+        if (suiviStatus === 'a_relancer') {
+          return row.needsFollowUp;
+        }
+        if (suiviStatus !== 'all' && row.enrollment.status !== suiviStatus) return false;
+
+        const q = suiviSearch.trim().toLowerCase();
+        if (!q) return true;
+        return (
+          row.enrollment.fullName.toLowerCase().includes(q) ||
+          (row.formation?.name || '').toLowerCase().includes(q) ||
+          (row.enrollment.phone || '').toLowerCase().includes(q) ||
+          (row.enrollment.email || '').toLowerCase().includes(q)
+        );
+      })
+      .slice(0, 15);
+  }, [allEnrollmentRows, suiviSearch, suiviStatus]);
+
+  const suiviStats = useMemo(() => {
+    const total = allEnrollmentRows.length;
+    const actifs = allEnrollmentRows.filter(r => r.enrollment.status === 'inscrit' || r.enrollment.status === 'en_cours').length;
+    const termines = allEnrollmentRows.filter(r => r.enrollment.status === 'terminé').length;
+    const nonFormes = allEnrollmentRows.filter(r => r.isNotYetFormed).length;
+    const formes = allEnrollmentRows.filter(r => r.isFormed).length;
+    const aRelancer = allEnrollmentRows.filter(r => r.needsFollowUp).length;
+    const sansPlan = allEnrollmentRows.filter(r => !r.plan && r.enrollment.status !== 'annulé').length;
+    return { total, actifs, termines, nonFormes, formes, aRelancer, sansPlan };
+  }, [allEnrollmentRows]);
 
   const newEmptyPack = (): FormationPack => ({
     id: crypto.randomUUID(),
@@ -672,6 +797,58 @@ export default function FormationsPage() {
   const getStockItemName = (id: string) => stockItems.find(s => s.id === id)?.name ?? "";
   const getDeptName = (id: string) => departments.find(d => d.id === id)?.name ?? id;
 
+  const normalizePhoneForChannel = (phone?: string) => {
+    if (!phone) return '';
+    let digits = phone.replace(/[^\d+]/g, '');
+    if (digits.startsWith('00')) digits = digits.slice(2);
+    if (digits.startsWith('+')) digits = digits.slice(1);
+    if (digits.startsWith('0') && digits.length === 9) {
+      // Default country fallback for local numbers.
+      digits = `237${digits.slice(1)}`;
+    }
+    return digits;
+  };
+
+  const buildRelanceMessage = (row: { enrollment: FormationEnrollment; formation?: FormationCatalog; remainingAmount: number; hasOverdue: boolean; }) => {
+    const intro = `Bonjour ${row.enrollment.fullName},`;
+    const formation = row.formation?.name ? `concernant votre formation "${row.formation.name}"` : "concernant votre formation";
+    const payment = row.remainingAmount > 0 ? `il reste ${formatCurrency(row.remainingAmount)} a regler` : "votre dossier administratif doit etre finalise";
+    const urgency = row.hasOverdue ? "Une echeance est depassee." : "Merci de revenir vers nous rapidement.";
+    return `${intro} ${formation}, ${payment}. ${urgency}`;
+  };
+
+  const handleRelance = (channel: 'whatsapp' | 'sms' | 'mail', row: { enrollment: FormationEnrollment; formation?: FormationCatalog; remainingAmount: number; hasOverdue: boolean; }) => {
+    const message = buildRelanceMessage(row);
+    const encodedMessage = encodeURIComponent(message);
+    const phone = normalizePhoneForChannel(row.enrollment.phone);
+
+    if (channel === 'whatsapp') {
+      if (!phone) {
+        toast.error("Numéro manquant pour WhatsApp");
+        return;
+      }
+      window.open(`https://wa.me/${phone}?text=${encodedMessage}`, '_blank');
+      return;
+    }
+
+    if (channel === 'sms') {
+      if (!phone) {
+        toast.error("Numéro manquant pour SMS");
+        return;
+      }
+      window.open(`sms:${phone}?body=${encodedMessage}`, '_blank');
+      return;
+    }
+
+    if (!row.enrollment.email?.trim()) {
+      toast.error("Email manquant pour envoyer un mail");
+      return;
+    }
+
+    const subject = encodeURIComponent(`Relance formation - ${row.formation?.name || 'Dossier'}`);
+    window.open(`mailto:${row.enrollment.email}?subject=${subject}&body=${encodedMessage}`, '_blank');
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -683,12 +860,27 @@ export default function FormationsPage() {
           </h2>
           <p className="text-sm text-muted-foreground">{formations.length} formation{formations.length > 1 ? 's' : ''} configurée{formations.length > 1 ? 's' : ''}</p>
         </div>
-        {canCreate && (
-          <Button onClick={openCreate} className="gap-2 self-start sm:self-auto">
-            <Plus className="h-4 w-4" />
-            Nouvelle formation
-          </Button>
-        )}
+        <div className="flex flex-wrap gap-2 self-start sm:self-auto">
+          {canExport && (
+            <Button
+              variant="outline"
+              onClick={async () => {
+                await downloadFormationPaymentScheduleReport();
+                toast.success('Rapport formations et échéances généré');
+              }}
+              className="gap-2"
+            >
+              <Calendar className="h-4 w-4" />
+              Rapport suivi
+            </Button>
+          )}
+          {canCreate && (
+            <Button onClick={openCreate} className="gap-2">
+              <Plus className="h-4 w-4" />
+              Nouvelle formation
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Filters */}
@@ -714,6 +906,189 @@ export default function FormationsPage() {
           </SelectContent>
         </Select>
       </div>
+
+      {/* Global follow-up cockpit */}
+      <Card className="border-0 shadow-md">
+        <CardHeader>
+          <CardTitle className="text-lg flex items-center gap-2">
+            <Users className="h-5 w-5" />
+            Suivi global des inscriptions et apprenants
+          </CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Priorisez les relances, suivez les états de formation et gardez une vue claire des dossiers incomplets.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
+            <div className="rounded-xl border p-3 bg-muted/30">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">Inscrits total</p>
+              <p className="mt-1 text-xl font-bold">{suiviStats.total}</p>
+            </div>
+            <div className="rounded-xl border p-3 bg-muted/30">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">Formés</p>
+              <p className="mt-1 text-xl font-bold text-success">{suiviStats.formes}</p>
+            </div>
+            <div className="rounded-xl border p-3 bg-muted/30">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">Pas encore formés</p>
+              <p className="mt-1 text-xl font-bold text-primary">{suiviStats.nonFormes}</p>
+            </div>
+            <div className="rounded-xl border p-3 bg-muted/30">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">À relancer</p>
+              <p className="mt-1 text-xl font-bold text-destructive">{suiviStats.aRelancer}</p>
+            </div>
+            <div className="rounded-xl border p-3 bg-muted/30">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">Sans plan de paiement</p>
+              <p className="mt-1 text-xl font-bold">{suiviStats.sansPlan}</p>
+            </div>
+            <div className="rounded-xl border p-3 bg-muted/30">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">En cours de formation</p>
+              <p className="mt-1 text-xl font-bold text-amber-600 dark:text-amber-400">{suiviStats.actifs}</p>
+            </div>
+          </div>
+
+          {overdueTranches.length > 0 && (
+            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3">
+              <p className="text-sm font-semibold text-destructive mb-2">Relances urgentes (échéances dépassées)</p>
+              <div className="space-y-1.5">
+                {overdueTranches.slice(0, 5).map((item, idx) => (
+                  <div key={idx} className="flex items-center justify-between gap-2 text-xs">
+                    <span><strong>{item.clientName}</strong> - {item.label} - {item.trancheName}</span>
+                    <span className="font-medium">{new Date(item.dueDate).toLocaleDateString('fr-FR')} - {formatCurrency(item.trancheAmount)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="flex flex-col sm:flex-row gap-3">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Rechercher un apprenant, téléphone ou formation..."
+                value={suiviSearch}
+                onChange={(e) => setSuiviSearch(e.target.value)}
+                className="pl-9"
+              />
+            </div>
+            <Select value={suiviStatus} onValueChange={(v) => setSuiviStatus(v as 'all' | 'a_relancer' | FormationEnrollment['status'])}>
+              <SelectTrigger className="w-[220px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Tous les inscrits</SelectItem>
+                <SelectItem value="a_relancer">A relancer en priorité</SelectItem>
+                <SelectItem value="inscrit">Inscrit</SelectItem>
+                <SelectItem value="en_cours">En cours</SelectItem>
+                <SelectItem value="terminé">Terminé</SelectItem>
+                <SelectItem value="annulé">Annulé</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="rounded-lg border overflow-hidden">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="bg-muted/50 text-left">
+                  <th className="px-3 py-2 font-medium">Apprenant</th>
+                  <th className="px-3 py-2 font-medium hidden md:table-cell">Formation</th>
+                  <th className="px-3 py-2 font-medium">Parcours</th>
+                  <th className="px-3 py-2 font-medium hidden sm:table-cell">Paiement</th>
+                  <th className="px-3 py-2 font-medium hidden md:table-cell">Prochaine échéance</th>
+                  <th className="px-3 py-2 font-medium hidden lg:table-cell">Contact</th>
+                  <th className="px-3 py-2 font-medium hidden lg:table-cell">Risque</th>
+                  <th className="px-3 py-2 font-medium">Relance</th>
+                </tr>
+              </thead>
+              <tbody>
+                {suiviRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="px-3 py-5 text-center text-muted-foreground">Aucun résultat sur ce filtre</td>
+                  </tr>
+                ) : (
+                  suiviRows.map((row) => (
+                    <tr key={row.enrollment.id} className="border-t">
+                      <td className="px-3 py-2">
+                        <p className="font-medium">{row.enrollment.fullName}</p>
+                        <p className="text-[11px] text-muted-foreground">Inscrit le {new Date(row.enrollment.enrolledAt).toLocaleDateString('fr-FR')}</p>
+                      </td>
+                      <td className="px-3 py-2 hidden md:table-cell">{row.formation?.name || 'Formation supprimée'}</td>
+                      <td className="px-3 py-2">
+                        <div className="flex flex-wrap gap-1">
+                          <Badge className={`${statusColors[row.enrollment.status]} text-[10px]`}>{statusLabels[row.enrollment.status]}</Badge>
+                          {row.isFormed && <Badge className="text-[10px] bg-success/10 text-success border-success/30" variant="outline">Formé</Badge>}
+                          {row.isNotYetFormed && <Badge className="text-[10px] bg-primary/10 text-primary border-primary/30" variant="outline">Non formé</Badge>}
+                          {row.hasOverdue && <Badge variant="destructive" className="text-[10px]">Retard paiement</Badge>}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 hidden sm:table-cell">
+                        {!row.plan ? (
+                          <Badge variant="secondary" className="text-[10px]">Pas de plan</Badge>
+                        ) : row.remainingAmount <= 0 ? (
+                          <Badge className="text-[10px] bg-success/10 text-success border-success/30" variant="outline">Soldé</Badge>
+                        ) : (
+                          <div className="space-y-0.5">
+                            <p className="font-medium text-destructive">{formatCurrency(row.remainingAmount)} restant</p>
+                            {row.totalTranches > 0 && (
+                              <p className="text-[10px] text-muted-foreground">{row.unpaidTranches}/{row.totalTranches} tranche(s) non soldée(s)</p>
+                            )}
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 hidden md:table-cell">
+                        {row.nextTrancheDueDate ? (
+                          <div className="space-y-0.5">
+                            <p className="font-medium">{row.nextTrancheName || 'Tranche suivante'}</p>
+                            <p className="text-[10px] text-muted-foreground">{new Date(row.nextTrancheDueDate).toLocaleDateString('fr-FR')} - {formatCurrency(row.nextTrancheAmount || 0)}</p>
+                          </div>
+                        ) : (
+                          <span className="text-muted-foreground">Aucune échéance tranche</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 hidden lg:table-cell">
+                        {row.contactMissing ? (
+                          <Badge variant="secondary" className="text-[10px]">Contact incomplet</Badge>
+                        ) : (
+                          <span className="text-muted-foreground">{row.enrollment.phone || row.enrollment.email}</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 hidden lg:table-cell">
+                        <div className="flex items-center gap-2">
+                          <Badge
+                            variant="outline"
+                            className={`text-[10px] ${row.riskLevel === 'élevé' ? 'border-destructive/50 text-destructive bg-destructive/5' : row.riskLevel === 'moyen' ? 'border-amber-500/50 text-amber-700 bg-amber-50 dark:text-amber-400 dark:bg-amber-900/20' : 'border-success/30 text-success bg-success/5'}`}
+                          >
+                            {row.riskLevel} - {row.riskScore}%
+                          </Badge>
+                        </div>
+                      </td>
+                      <td className="px-3 py-2">
+                        {row.needsFollowUp ? (
+                          <div className="flex flex-wrap items-center gap-1">
+                            <Button type="button" variant="outline" size="sm" className="h-7 text-[11px]" onClick={() => handleRelance('whatsapp', row)}>
+                              Relancer
+                            </Button>
+                            <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleRelance('whatsapp', row)}>
+                              <Phone className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleRelance('sms', row)}>
+                              <MessageCircle className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleRelance('mail', row)}>
+                              <Mail className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                        ) : (
+                          <Badge variant="outline" className="text-[10px]">Pas de relance</Badge>
+                        )}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Formation cards */}
       {filtered.length === 0 ? (

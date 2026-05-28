@@ -6,15 +6,18 @@ import { DepartmentCard } from "@/components/DepartmentCard";
 import { TransactionList } from "@/components/TransactionList";
 import { FinanceChart } from "@/components/FinanceChart";
 import { ReportDialog } from "@/components/ReportDialog";
-import { departments, getGlobalStats, getTransactions, getStatsByPaymentMethod } from "@/lib/data";
+import { DepartmentAnalysis } from "@/components/DepartmentAnalysis";
+import { departments, getGlobalStats, getTransactions, getStatsByPaymentMethod, getMonthlyStats, computeTrend, getTransactionsByMonth } from "@/lib/data";
 import { getCurrentUser, hasPermission, hasDepartmentAccess } from "@/lib/auth";
+import { getTreasuryControlAlerts } from "@/lib/controlAlerts";
 import { toast } from "sonner";
 import { downloadDashboardReport, downloadTransactionsReport } from "@/lib/reports";
-import type { ReportOptions } from "@/lib/reports";
 import logoGuimsGroup from "@/assets/logo-guims-group.jpg";
 import { getTransactionTimestamp } from "@/lib/transactionDates";
+import { useNavigate } from "react-router-dom";
 
 export default function Dashboard() {
+  const navigate = useNavigate();
   const sortTransactionsByRecency = <T extends { date: string; createdAt?: string }>(items: T[]) => {
     return [...items].sort((a, b) => {
       const ta = getTransactionTimestamp(a.createdAt || a.date);
@@ -26,12 +29,27 @@ export default function Dashboard() {
   const [stats, setStats] = useState(getGlobalStats());
   const [transactions, setTransactions] = useState(getTransactions());
   const [paymentStats, setPaymentStats] = useState(getStatsByPaymentMethod());
+  const [controlAlerts, setControlAlerts] = useState(getTreasuryControlAlerts());
   const [reportOpen, setReportOpen] = useState(false);
+  const [dashboardView, setDashboardView] = useState<'global' | 'monthly'>('global');
+
+  const now = new Date();
+  const isSuperAdmin = getCurrentUser()?.role === 'superadmin';
+  const currentMonthStats = getMonthlyStats(now.getFullYear(), now.getMonth());
+  const previousMonthStats = now.getMonth() === 0
+    ? getMonthlyStats(now.getFullYear() - 1, 11)
+    : getMonthlyStats(now.getFullYear(), now.getMonth() - 1);
+  const currentMonthTransactions = getTransactionsByMonth(now.getFullYear(), now.getMonth());
+
+  const incomeTrend = computeTrend(currentMonthStats.income, previousMonthStats.income);
+  const expenseTrend = computeTrend(currentMonthStats.expenses, previousMonthStats.expenses);
+  const balanceTrend = computeTrend(currentMonthStats.balance, previousMonthStats.balance);
 
   const refresh = () => {
     setStats(getGlobalStats());
     setTransactions(getTransactions());
     setPaymentStats(getStatsByPaymentMethod());
+    setControlAlerts(getTreasuryControlAlerts());
   };
 
   const generateCurrentMonthReport = async () => {
@@ -70,7 +88,27 @@ export default function Dashboard() {
         <img src={logoGuimsGroup} alt="Guims Group" className="h-12 w-12 sm:h-16 sm:w-16 rounded-2xl object-cover shadow-md hidden sm:block" />
         <div className="flex-1">
           <h2 className="text-xl sm:text-2xl font-bold text-foreground">Tableau de bord</h2>
-          <p className="text-muted-foreground text-sm">Vue globale des finances de Guims Group</p>
+          <p className="text-muted-foreground text-sm">
+            {dashboardView === 'global' ? 'Vue globale des finances de Guims Group' : `Vue mensuelle (${now.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' })})`}
+          </p>
+          <div className="mt-3 inline-flex rounded-lg border bg-background p-1">
+            <Button
+              size="sm"
+              variant={dashboardView === 'global' ? 'default' : 'ghost'}
+              onClick={() => setDashboardView('global')}
+              className="h-8"
+            >
+              Vue globale
+            </Button>
+            <Button
+              size="sm"
+              variant={dashboardView === 'monthly' ? 'default' : 'ghost'}
+              onClick={() => setDashboardView('monthly')}
+              className="h-8"
+            >
+              Vue mensuelle
+            </Button>
+          </div>
         </div>
         <div className="flex gap-2">
           {hasPermission(getCurrentUser(), 'canExportData') && (
@@ -93,49 +131,118 @@ export default function Dashboard() {
         onGenerate={async (opts) => { await downloadDashboardReport(opts); toast.success('Rapport généré'); }}
       />
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatsCard title="Revenus totaux" value={stats.income} icon={ArrowUpRight} colorClass="text-success" />
-        <StatsCard title="Dépenses totales" value={stats.expenses} icon={ArrowDownRight} colorClass="text-destructive" />
-        <StatsCard title="Solde" value={stats.balance} icon={TrendingUp} colorClass={stats.balance >= 0 ? "text-success" : "text-destructive"} />
-        <StatsCard title="Transactions" value={stats.count} icon={Receipt} isCurrency={false} />
-      </div>
-
-      <div>
-        <h3 className="text-lg font-semibold text-foreground mb-4">Départements</h3>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {departments.filter(d => hasDepartmentAccess(getCurrentUser(), d.id)).map((dept) => (
-            <DepartmentCard key={dept.id} department={dept} />
-          ))}
-        </div>
-      </div>
-
-      {/* Soldes par caisse */}
-      {paymentStats.length > 0 && (
-        <div>
-          <h3 className="text-lg font-semibold text-foreground mb-4">Soldes par caisse</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {paymentStats.map((ps) => {
-              const icon = ps.method === 'especes' ? Banknote : ps.method === 'momo' ? Smartphone : ps.method === 'om' ? Wallet : Building2;
-              return (
-                <StatsCard
-                  key={ps.method}
-                  title={ps.label}
-                  value={ps.balance}
-                  icon={icon}
-                  colorClass={ps.balance >= 0 ? 'text-success' : 'text-destructive'}
-                />
-              );
-            })}
+      {dashboardView === 'global' ? (
+        <>
+          <div className="space-y-4">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-lg font-semibold text-foreground">Vue globale (toutes périodes)</h3>
+              <p className="text-xs sm:text-sm text-muted-foreground">Depuis le début des enregistrements</p>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <StatsCard title="Revenus totaux" value={stats.income} icon={ArrowUpRight} colorClass="text-success" />
+              <StatsCard title="Dépenses totales" value={stats.expenses} icon={ArrowDownRight} colorClass="text-destructive" />
+              <StatsCard title="Solde global" value={stats.balance} icon={TrendingUp} colorClass={stats.balance >= 0 ? "text-success" : "text-destructive"} />
+              <StatsCard title="Transactions globales" value={stats.count} icon={Receipt} isCurrency={false} />
+            </div>
           </div>
+
+          <div>
+            <h3 className="text-lg font-semibold text-foreground mb-4">Départements</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              {departments.filter(d => hasDepartmentAccess(getCurrentUser(), d.id)).map((dept) => (
+                <DepartmentCard key={dept.id} department={dept} />
+              ))}
+            </div>
+          </div>
+
+          {/* Soldes par caisse */}
+          {paymentStats.length > 0 && (
+            <div>
+              <h3 className="text-lg font-semibold text-foreground mb-4">Soldes par caisse</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                {paymentStats.map((ps) => {
+                  const icon = ps.method === 'especes' ? Banknote : ps.method === 'momo' ? Smartphone : ps.method === 'om' ? Wallet : Building2;
+                  return (
+                    <StatsCard
+                      key={ps.method}
+                      title={ps.label}
+                      value={ps.balance}
+                      icon={icon}
+                      colorClass={ps.balance >= 0 ? 'text-success' : 'text-destructive'}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <FinanceChart transactions={transactions} title="Analyse globale" />
+
+          <DepartmentAnalysis />
+
+          {isSuperAdmin && (
+          <div className="rounded-2xl border bg-card p-4 sm:p-5">
+            <div className="flex items-center justify-between gap-2 mb-3">
+              <h3 className="text-lg font-semibold text-foreground">Indicateurs de vigilance trésorerie</h3>
+              <span className="text-xs text-muted-foreground">Pilotage des écarts opérationnels</span>
+            </div>
+            <div className="space-y-2">
+              {controlAlerts.map((alert) => (
+                <button
+                  key={alert.id}
+                  type="button"
+                  onClick={() => navigate(alert.actionPath)}
+                  className={`w-full rounded-lg border px-3 py-2 text-left transition-colors hover:bg-muted/40 ${alert.severity === 'high' ? 'border-destructive/40 bg-destructive/5' : alert.severity === 'medium' ? 'border-amber-500/40 bg-amber-50/70 dark:bg-amber-950/20' : 'border-success/30 bg-success/5'}`}
+                >
+                  <p className="text-sm font-semibold text-foreground text-left">{alert.title}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">{alert.details}</p>
+                  <p className="text-xs mt-1 text-primary text-left">Action: {alert.actionLabel}</p>
+                </button>
+              ))}
+            </div>
+          </div>
+          )}
+
+          <div>
+            <h3 className="text-lg font-semibold text-foreground mb-4">Dernières transactions (global)</h3>
+            <TransactionList transactions={sortTransactionsByRecency(transactions).slice(0, 10)} onDelete={refresh} showDepartment />
+          </div>
+        </>
+      ) : (
+        <div className="rounded-2xl border bg-card p-4 sm:p-5 space-y-4">
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-lg font-semibold text-foreground">Vue mensuelle (distincte)</h3>
+            <p className="text-xs sm:text-sm text-muted-foreground">
+              {now.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' })}
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <StatsCard title="Revenus du mois" value={currentMonthStats.income} icon={ArrowUpRight} colorClass="text-success" trend={incomeTrend} />
+            <StatsCard title="Dépenses du mois" value={currentMonthStats.expenses} icon={ArrowDownRight} colorClass="text-destructive" trend={expenseTrend} invertTrend />
+            <StatsCard title="Solde du mois" value={currentMonthStats.balance} icon={TrendingUp} colorClass={currentMonthStats.balance >= 0 ? "text-success" : "text-destructive"} trend={balanceTrend} />
+            <StatsCard title="Transactions du mois" value={currentMonthStats.count} icon={Receipt} isCurrency={false} />
+          </div>
+
+          {currentMonthTransactions.length > 0 ? (
+            <>
+              <FinanceChart
+                transactions={currentMonthTransactions}
+                title={`Analyse du mois (${now.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' })})`}
+              />
+
+              <div>
+                <h4 className="text-base font-semibold text-foreground mb-3">
+                  Transactions du mois ({now.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' })})
+                </h4>
+                <TransactionList transactions={sortTransactionsByRecency(currentMonthTransactions)} onDelete={refresh} showDepartment />
+              </div>
+            </>
+          ) : (
+            <p className="text-sm text-muted-foreground">Aucune transaction enregistrée pour ce mois.</p>
+          )}
         </div>
       )}
-
-      <FinanceChart transactions={transactions} title="Analyse globale" />
-
-      <div>
-        <h3 className="text-lg font-semibold text-foreground mb-4">Dernières transactions</h3>
-        <TransactionList transactions={sortTransactionsByRecency(transactions).slice(0, 10)} onDelete={refresh} showDepartment />
-      </div>
     </div>
   );
 }

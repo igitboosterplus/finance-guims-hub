@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { ReportOptions } from "@/lib/reports";
 import { getConfiguredAIProviders, getPreferredAIProvider, type AIProvider } from "@/lib/aiReports";
+import { PAYMENT_METHODS, getPaymentMethodLabel, type PaymentMethod } from "@/lib/data";
 
 type PeriodPreset = "all" | "this-month" | "last-month" | "custom";
 
@@ -34,6 +35,8 @@ export function ReportDialog({ open, onOpenChange, title, onGenerate }: ReportDi
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [personName, setPersonName] = useState("");
+  const [transactionType, setTransactionType] = useState<"all" | "income" | "expense">("all");
+  const [paymentMethod, setPaymentMethod] = useState<"all" | PaymentMethod>("all");
   const [useAI, setUseAI] = useState(providers.length > 0);
   const [aiProvider, setAiProvider] = useState<AIProvider | "auto">(getPreferredAIProvider() || "auto");
   const [isGenerating, setIsGenerating] = useState(false);
@@ -44,6 +47,8 @@ export function ReportDialog({ open, onOpenChange, title, onGenerate }: ReportDi
     setStartDate("");
     setEndDate("");
     setPersonName("");
+    setTransactionType("all");
+    setPaymentMethod("all");
     setUseAI(providers.length > 0);
     setAiProvider(getPreferredAIProvider() || "auto");
   }, [open, providers.length]);
@@ -61,6 +66,8 @@ export function ReportDialog({ open, onOpenChange, title, onGenerate }: ReportDi
       if (endDate) opts.endDate = endDate;
     }
     if (personName.trim()) opts.personName = personName.trim();
+    if (transactionType !== "all") opts.transactionType = transactionType;
+    if (paymentMethod !== "all") opts.paymentMethod = paymentMethod;
     if (providers.length > 0) {
       opts.useAI = useAI;
       if (useAI && aiProvider !== "auto") {
@@ -118,6 +125,31 @@ export function ReportDialog({ open, onOpenChange, title, onGenerate }: ReportDi
               maxLength={100}
             />
             <p className="text-xs text-muted-foreground">Laissez vide pour inclure toutes les personnes</p>
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label>Type d'opération</Label>
+              <Select value={transactionType} onValueChange={value => setTransactionType(value as "all" | "income" | "expense")}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Tous les types</SelectItem>
+                  <SelectItem value="income">Revenus seulement</SelectItem>
+                  <SelectItem value="expense">Dépenses seulement</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Caisse</Label>
+              <Select value={paymentMethod} onValueChange={value => setPaymentMethod(value as "all" | PaymentMethod)}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Toutes les caisses</SelectItem>
+                  {PAYMENT_METHODS.map((method) => (
+                    <SelectItem key={method.value} value={method.value}>{getPaymentMethodLabel(method.value)}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
           <div className="space-y-2 rounded-lg border p-3 bg-muted/30">
             <Label>Analyse IA du rapport</Label>

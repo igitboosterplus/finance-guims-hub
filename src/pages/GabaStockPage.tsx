@@ -25,16 +25,16 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
-import { getCurrentUser, hasDepartmentAccess } from "@/lib/auth";
-import { formatCurrency, departments, type DepartmentId, addTransaction, getPaymentMethodsForDepartment, type PaymentMethod, getTransactionsByDepartment } from "@/lib/data";
+import { getCurrentUser, getUserPermissions, hasDepartmentAccess } from "@/lib/auth";
+import { formatCurrency, departments, type DepartmentId, addTransaction, getPaymentMethodsForDepartment, type PaymentMethod, getTransactionsByDepartment, updateTransaction } from "@/lib/data";
 import { downloadStockReport } from "@/lib/reports";
-import type { ReportOptions } from "@/lib/reports";
 import { ReportDialog } from "@/components/ReportDialog";
 import {
   getStockCategoriesForDept, getStockItems, addStockItem, updateStockItem, deleteStockItem,
   addStockMovement, getStockMovements, getStockStats, getCategoryLabel,
-  exportStockCSV, getTrainings, addTraining, deleteTraining, getMovementTypeLabel,
+  exportStockCSV, getTrainings, addTraining, deleteTraining,
   getStockKits, addStockKit, updateStockKit, deleteStockKit, checkKitAvailability, sellKit, useKitForTraining,
+  generateSaleTicketNumber, updateStockMovementLink,
   type StockItem, type StockMovement, type MovementType, type Training, type TrainingType, type TraineeKit,
   type StockKit, type KitComponent, type TrainingKitUsage,
 } from "@/lib/stock";
@@ -45,10 +45,21 @@ const ENTRY_REASONS = ['Achat', 'Don reçu', 'Production', 'Retour', 'Autre'];
 const EXIT_REASONS = ['Vente', 'Utilisation', 'Perte/Mortalité', 'Don', 'Autre'];
 const TRAINING_REASONS = ['Usage formation', 'Substrat formation', 'Démonstration', 'Autre'];
 const GIFT_REASONS = ['Don au formé', 'Kit de démarrage', 'Échantillon', 'Autre'];
+const DECIMAL_STEP = '0.01';
+
+type StockCorrectionMode = 'create-movement' | 'link-transaction' | 'create-transaction';
+type StockCorrectionTarget =
+  | { kind: 'missing-movement'; transactionId: string }
+  | { kind: 'orphan-movement'; movementId: string }
+  | { kind: 'broken-movement'; movementId: string };
+
+const parseDecimal = (value: string) => Number.parseFloat(value.replace(',', '.'));
+const formatQuantity = (value: number) => new Intl.NumberFormat('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(value);
 
 export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }: { departmentId?: DepartmentId }) {
   const navigate = useNavigate();
   const user = getCurrentUser();
+  const userPermissions = getUserPermissions(user);
   const dept = departments.find(d => d.id === departmentId)!;
   const STOCK_CATEGORIES = getStockCategoriesForDept(departmentId);
 
@@ -113,6 +124,23 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
   const [sellKitId, setSellKitId] = useState<string | null>(null);
   const [sellKitForm, setSellKitForm] = useState({ quantity: '1', date: new Date().toISOString().slice(0, 10), clientName: '', phoneNumber: '', paymentMethod: 'especes' as PaymentMethod, description: '' });
   const [deleteKitId, setDeleteKitId] = useState<string | null>(null);
+  const [correctionDialog, setCorrectionDialog] = useState(false);
+  const [correctionTarget, setCorrectionTarget] = useState<StockCorrectionTarget | null>(null);
+  const [correctionMode, setCorrectionMode] = useState<StockCorrectionMode>('create-movement');
+  const [correctionForm, setCorrectionForm] = useState({
+    itemId: '',
+    movementId: '',
+    transactionId: '',
+    quantity: '',
+    unitPrice: '',
+    amount: '',
+    paymentMethod: getPaymentMethodsForDepartment(departmentId)[0]?.value ?? 'especes',
+    personName: '',
+    phoneNumber: '',
+    description: '',
+    date: new Date().toISOString().slice(0, 10),
+    reason: 'Vente',
+  });
 
   // ==================== FILTERED DATA ====================
 
@@ -144,6 +172,218 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
       .filter(m => m.itemId === historyItem.id)
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   }, [historyItem, movements]);
+
+  const departmentTransactions = useMemo(
+    () => getTransactionsByDepartment(departmentId as DepartmentId),
+    [departmentId, movements],
+  );
+
+  const incomeTransactions = useMemo(
+    () => departmentTransactions
+      .filter(tx => tx.type === 'income')
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()),
+    [departmentTransactions],
+  );
+
+  const transactionsById = useMemo(
+    () => new Map(departmentTransactions.map(tx => [tx.id, tx])),
+    [departmentTransactions],
+  );
+
+  const stockControl = useMemo(() => {
+    const stockTxs = departmentTransactions
+      .filter(tx => tx.type === 'income' && (tx.stockItemId || tx.saleTicketNumber || tx.category.toLowerCase().includes('vente')));
+
+    const movementByTxId = new Map<string, StockMovement>();
+    const movementByTicket = new Map<string, StockMovement>();
+    movements.forEach((mv) => {
+      if (mv.transactionId) movementByTxId.set(mv.transactionId, mv);
+      if (mv.saleTicketNumber) movementByTicket.set(mv.saleTicketNumber, mv);
+    });
+
+    const missingMovementTxs = stockTxs.filter((tx) => {
+      const byId = movementByTxId.get(tx.id);
+      const byTicket = tx.saleTicketNumber ? movementByTicket.get(tx.saleTicketNumber) : undefined;
+      return !byId && !byTicket;
+    });
+
+    const saleMovements = movements.filter(mv => mv.type === 'exit' && mv.reason.toLowerCase().includes('vente'));
+    const orphanSaleMovements = saleMovements.filter(mv => !mv.transactionId && !mv.saleTicketNumber);
+    const brokenLinkedMovements = saleMovements.filter(mv => mv.transactionId && !stockTxs.some(tx => tx.id === mv.transactionId));
+
+    const criticalLowItems = items
+      .filter(item => item.alertThreshold > 0 && item.currentQuantity <= item.alertThreshold / 2)
+      .sort((a, b) => a.currentQuantity - b.currentQuantity);
+
+    return {
+      missingMovementTxs,
+      orphanSaleMovements,
+      brokenLinkedMovements,
+      criticalLowItems,
+      flaggedMovementIds: new Set<string>([
+        ...orphanSaleMovements.map(mv => mv.id),
+        ...brokenLinkedMovements.map(mv => mv.id),
+      ]),
+    };
+  }, [departmentTransactions, movements, items]);
+
+  const quickOpenMovementForRestock = (itemId: string) => {
+    openMovement('entry', itemId);
+  };
+
+  const allowedExitReasons = useMemo(
+    () => userPermissions.canRecordStockExitWithoutPrice ? EXIT_REASONS : EXIT_REASONS.filter(reason => reason === 'Vente'),
+    [userPermissions.canRecordStockExitWithoutPrice],
+  );
+
+  const openCorrectionForMissingMovement = (transactionId: string) => {
+    const tx = transactionsById.get(transactionId);
+    if (!tx) return;
+
+    const quantity = typeof tx.quantity === 'number' && tx.quantity > 0 ? String(tx.quantity) : '';
+    const inferredPrice = typeof tx.quantity === 'number' && tx.quantity > 0 ? String(tx.amount / tx.quantity) : '';
+
+    setCorrectionTarget({ kind: 'missing-movement', transactionId });
+    setCorrectionMode('create-movement');
+    setCorrectionForm({
+      itemId: tx.stockItemId || items[0]?.id || '',
+      movementId: '',
+      transactionId: tx.id,
+      quantity,
+      unitPrice: inferredPrice,
+      amount: String(tx.amount),
+      paymentMethod: tx.paymentMethod,
+      personName: tx.personName || '',
+      phoneNumber: tx.phoneNumber || '',
+      description: tx.description || tx.category,
+      date: tx.date,
+      reason: 'Vente',
+    });
+    setCorrectionDialog(true);
+  };
+
+  const openCorrectionForMovement = (movementId: string, mode: StockCorrectionMode) => {
+    const movement = movements.find(entry => entry.id === movementId);
+    if (!movement) return;
+    const linkedTx = movement.transactionId ? transactionsById.get(movement.transactionId) : undefined;
+
+    setCorrectionTarget({ kind: movement.transactionId ? 'broken-movement' : 'orphan-movement', movementId });
+    setCorrectionMode(mode);
+    setCorrectionForm({
+      itemId: movement.itemId,
+      movementId: movement.id,
+      transactionId: linkedTx?.id || '',
+      quantity: String(movement.quantity),
+      unitPrice: movement.unitPrice > 0 ? String(movement.unitPrice) : '',
+      amount: linkedTx ? String(linkedTx.amount) : movement.unitPrice > 0 ? String(movement.unitPrice * movement.quantity) : '',
+      paymentMethod: linkedTx?.paymentMethod || getPaymentMethodsForDepartment(departmentId)[0]?.value || 'especes',
+      personName: linkedTx?.personName || '',
+      phoneNumber: linkedTx?.phoneNumber || '',
+      description: linkedTx?.description || movement.reason,
+      date: linkedTx?.date || movement.date,
+      reason: movement.reason || 'Vente',
+    });
+    setCorrectionDialog(true);
+  };
+
+  const handleApplyCorrection = () => {
+    if (!correctionTarget) return;
+
+    if (correctionMode === 'create-movement') {
+      const qty = parseDecimal(correctionForm.quantity);
+      const unitPrice = correctionForm.unitPrice.trim() ? parseDecimal(correctionForm.unitPrice) : 0;
+      if (!correctionForm.itemId) { toast.error('Article à sortir requis'); return; }
+      if (!Number.isFinite(qty) || qty <= 0) { toast.error('Quantité invalide'); return; }
+      if (!Number.isFinite(unitPrice) || unitPrice < 0) { toast.error('Prix unitaire invalide'); return; }
+
+      const tx = transactionsById.get(correctionTarget.transactionId);
+      if (!tx) { toast.error('Transaction introuvable'); return; }
+
+      const saleTicketNumber = tx.saleTicketNumber || generateSaleTicketNumber(new Date(correctionForm.date));
+      const result = addStockMovement(
+        correctionForm.itemId,
+        'exit',
+        qty,
+        unitPrice,
+        correctionForm.reason.trim() || 'Vente',
+        correctionForm.date,
+        user?.displayName ?? 'Inconnu',
+        undefined,
+        undefined,
+        departmentId,
+        tx.id,
+        saleTicketNumber,
+      );
+
+      if (!result.success) {
+        toast.error(result.error);
+        return;
+      }
+
+      updateTransaction(tx.id, {
+        stockItemId: correctionForm.itemId,
+        quantity: qty,
+        saleTicketNumber,
+      });
+
+      toast.success('Sortie stock créée et liée à la transaction');
+      setCorrectionDialog(false);
+      refresh();
+      return;
+    }
+
+    const movement = movements.find(entry => entry.id === correctionTarget.movementId);
+    if (!movement) { toast.error('Mouvement introuvable'); return; }
+
+    if (correctionMode === 'link-transaction') {
+      if (!correctionForm.transactionId) { toast.error('Sélectionnez une transaction'); return; }
+      const tx = transactionsById.get(correctionForm.transactionId);
+      if (!tx) { toast.error('Transaction introuvable'); return; }
+
+      const alreadyLinked = movements.find(entry => entry.id !== movement.id && entry.transactionId === tx.id);
+      if (alreadyLinked) {
+        toast.error('Cette transaction est déjà liée à un autre mouvement');
+        return;
+      }
+
+      const saleTicketNumber = movement.saleTicketNumber || tx.saleTicketNumber || generateSaleTicketNumber(new Date(correctionForm.date));
+      updateStockMovementLink(movement.id, { transactionId: tx.id, saleTicketNumber }, departmentId);
+      updateTransaction(tx.id, {
+        stockItemId: movement.itemId,
+        quantity: movement.quantity,
+        saleTicketNumber,
+      });
+
+      toast.success('Mouvement relié à la transaction');
+      setCorrectionDialog(false);
+      refresh();
+      return;
+    }
+
+    const amount = parseDecimal(correctionForm.amount);
+    if (!Number.isFinite(amount) || amount <= 0) { toast.error('Montant invalide'); return; }
+
+    const saleTicketNumber = movement.saleTicketNumber || generateSaleTicketNumber(new Date(correctionForm.date));
+    const createdTx = addTransaction({
+      departmentId: departmentId as DepartmentId,
+      type: 'income',
+      paymentMethod: correctionForm.paymentMethod,
+      category: 'Vente stock',
+      personName: correctionForm.personName.trim() || 'Client',
+      phoneNumber: correctionForm.phoneNumber.trim() || undefined,
+      description: correctionForm.description.trim() || movement.reason,
+      amount,
+      date: correctionForm.date,
+      quantity: movement.quantity,
+      stockItemId: movement.itemId,
+      saleTicketNumber,
+    });
+
+    updateStockMovementLink(movement.id, { transactionId: createdTx.id, saleTicketNumber }, departmentId);
+    toast.success('Transaction créée et liée au mouvement');
+    setCorrectionDialog(false);
+    refresh();
+  };
 
   // --- Access check (after all hooks) ---
   if (!hasDepartmentAccess(user, departmentId)) {
@@ -178,9 +418,9 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
 
   const handleSaveItem = () => {
     if (!itemForm.name.trim()) { toast.error('Nom de l\'article requis'); return; }
-    const threshold = parseInt(itemForm.alertThreshold, 10);
-    const pPrice = parseInt(itemForm.purchasePrice, 10);
-    const sPrice = parseInt(itemForm.sellingPrice, 10);
+    const threshold = parseDecimal(itemForm.alertThreshold);
+    const pPrice = parseDecimal(itemForm.purchasePrice);
+    const sPrice = parseDecimal(itemForm.sellingPrice);
     if (isNaN(threshold) || threshold < 0) { toast.error('Seuil d\'alerte invalide'); return; }
     if (isNaN(pPrice) || pPrice < 0) { toast.error('Prix d\'achat invalide'); return; }
     if (isNaN(sPrice) || sPrice < 0) { toast.error('Prix de vente invalide'); return; }
@@ -221,16 +461,26 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
   const openMovement = (type: MovementType, itemId?: string) => {
     setMoveType(type);
     setMoveItemId(itemId ?? (items.length > 0 ? items[0].id : ''));
-    const defaultReason = type === 'entry' ? ENTRY_REASONS[0] : type === 'training' ? TRAINING_REASONS[0] : type === 'gift' ? GIFT_REASONS[0] : EXIT_REASONS[0];
+    const defaultReason = type === 'entry'
+      ? ENTRY_REASONS[0]
+      : type === 'training'
+        ? TRAINING_REASONS[0]
+        : type === 'gift'
+          ? GIFT_REASONS[0]
+          : allowedExitReasons[0];
     setMoveForm({ quantity: '', unitPrice: '', reason: defaultReason, date: new Date().toISOString().slice(0, 10), parkName: '', traineeName: '', transactionId: '' });
     setMoveDialog(true);
   };
 
   const handleSaveMovement = () => {
-    const qty = parseInt(moveForm.quantity, 10);
+    const qty = parseDecimal(moveForm.quantity);
     if (isNaN(qty) || qty <= 0) { toast.error('Quantité invalide'); return; }
-    const price = (moveType === 'training' || moveType === 'gift') ? 0 : (parseInt(moveForm.unitPrice, 10) || 0);
+    const price = (moveType === 'training' || moveType === 'gift') ? 0 : (parseDecimal(moveForm.unitPrice) || 0);
     if (!moveForm.reason.trim()) { toast.error('Motif requis'); return; }
+    if (moveType === 'exit' && moveForm.reason !== 'Vente' && !userPermissions.canRecordStockExitWithoutPrice) {
+      toast.error('Seuls les utilisateurs autorisés par le Super Admin peuvent enregistrer une sortie sans prix');
+      return;
+    }
     if ((moveType === 'training' || moveType === 'gift') && !moveForm.parkName.trim()) { toast.error('Nom du parc requis'); return; }
     if (moveType === 'gift' && !moveForm.traineeName.trim()) { toast.error('Nom du formé requis'); return; }
 
@@ -286,7 +536,7 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
     // Record material usage movements (GABA only)
     if (trainingForm.trainingType === 'gaba') {
       for (const mat of trainingForm.materials) {
-        const qty = parseInt(mat.quantity, 10);
+        const qty = parseDecimal(mat.quantity);
         if (!mat.itemId || isNaN(qty) || qty <= 0) continue;
         const item = items.find(i => i.id === mat.itemId);
         const result = addStockMovement(mat.itemId, 'training', qty, 0, 'Usage formation', trainingForm.date, userName, trainingForm.parkName.trim(), undefined, departmentId);
@@ -295,7 +545,7 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
 
       // Record gifts movements
       for (const gift of trainingForm.gifts) {
-        const qty = parseInt(gift.quantity, 10);
+        const qty = parseDecimal(gift.quantity);
         if (!gift.itemId || isNaN(qty) || qty <= 0 || !gift.traineeName.trim()) continue;
         const item = items.find(i => i.id === gift.itemId);
         const result = addStockMovement(gift.itemId, 'gift', qty, 0, `Don à ${gift.traineeName.trim()}`, trainingForm.date, userName, trainingForm.parkName.trim(), gift.traineeName.trim(), departmentId);
@@ -322,7 +572,7 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
         otherItems: trainingForm.gifts.filter(g => g.traineeName.trim() === k.traineeName.trim()).map(g => ({
           traineeName: g.traineeName.trim(),
           itemId: g.itemId,
-          quantity: parseInt(g.quantity, 10) || 0,
+          quantity: parseDecimal(g.quantity) || 0,
         })),
       }));
 
@@ -335,8 +585,8 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
       description: trainingForm.description.trim(),
       trainees: traineeList,
       traineeKits,
-      materialsUsed: trainingForm.materials.filter(m => m.itemId && parseInt(m.quantity, 10) > 0).map(m => ({ itemId: m.itemId, quantity: parseInt(m.quantity, 10) })),
-      giftsGiven: trainingForm.gifts.filter(g => g.itemId && parseInt(g.quantity, 10) > 0 && g.traineeName.trim()).map(g => ({ traineeName: g.traineeName.trim(), itemId: g.itemId, quantity: parseInt(g.quantity, 10) })),
+      materialsUsed: trainingForm.materials.filter(m => m.itemId && parseDecimal(m.quantity) > 0).map(m => ({ itemId: m.itemId, quantity: parseDecimal(m.quantity) })),
+      giftsGiven: trainingForm.gifts.filter(g => g.itemId && parseDecimal(g.quantity) > 0 && g.traineeName.trim()).map(g => ({ traineeName: g.traineeName.trim(), itemId: g.itemId, quantity: parseDecimal(g.quantity) })),
       kitsUsed: trainingForm.kitUsages.filter(ku => ku.kitId && parseInt(ku.quantity, 10) > 0).map(ku => ({ kitId: ku.kitId, quantity: parseInt(ku.quantity, 10) })),
       ...(trainingForm.trainingType === 'guims-academy' ? { tranche: trainingForm.tranche } : {}),
       createdBy: userName,
@@ -392,11 +642,11 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
 
   const handleSaveKit = () => {
     if (!kitForm.name.trim()) { toast.error('Nom du kit requis'); return; }
-    const price = parseInt(kitForm.sellingPrice);
+    const price = parseDecimal(kitForm.sellingPrice);
     if (isNaN(price) || price < 0) { toast.error('Prix de vente invalide'); return; }
     const components: KitComponent[] = kitForm.components
-      .filter(c => c.stockItemId && parseInt(c.quantity) > 0)
-      .map(c => ({ stockItemId: c.stockItemId, quantity: parseInt(c.quantity) }));
+      .filter(c => c.stockItemId && parseDecimal(c.quantity) > 0)
+      .map(c => ({ stockItemId: c.stockItemId, quantity: parseDecimal(c.quantity) }));
     if (components.length === 0) { toast.error('Ajoutez au moins un composant'); return; }
 
     if (editKit) {
@@ -526,6 +776,92 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
         </Card>
       </div>
 
+      <Card className="border-0 shadow-sm">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">Contrôle de cohérence stock</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className={`rounded-lg border px-3 py-2 ${stockControl.missingMovementTxs.length > 0 ? 'border-destructive/40 bg-destructive/5' : 'border-success/30 bg-success/5'}`}>
+              <p className="text-xs text-muted-foreground">Ventes compta sans sortie stock</p>
+              <p className="text-lg font-bold">{stockControl.missingMovementTxs.length}</p>
+            </div>
+            <div className={`rounded-lg border px-3 py-2 ${stockControl.orphanSaleMovements.length > 0 ? 'border-destructive/40 bg-destructive/5' : 'border-success/30 bg-success/5'}`}>
+              <p className="text-xs text-muted-foreground">Sorties vente sans transaction</p>
+              <p className="text-lg font-bold">{stockControl.orphanSaleMovements.length}</p>
+            </div>
+            <div className={`rounded-lg border px-3 py-2 ${stockControl.brokenLinkedMovements.length > 0 ? 'border-amber-500/40 bg-amber-50/70 dark:bg-amber-950/20' : 'border-success/30 bg-success/5'}`}>
+              <p className="text-xs text-muted-foreground">Liens stock/compta cassés</p>
+              <p className="text-lg font-bold">{stockControl.brokenLinkedMovements.length}</p>
+            </div>
+            <div className={`rounded-lg border px-3 py-2 ${stockControl.criticalLowItems.length > 0 ? 'border-amber-500/40 bg-amber-50/70 dark:bg-amber-950/20' : 'border-success/30 bg-success/5'}`}>
+              <p className="text-xs text-muted-foreground">Stock critique (sous 50% seuil)</p>
+              <p className="text-lg font-bold">{stockControl.criticalLowItems.length}</p>
+            </div>
+          </div>
+
+          {(stockControl.missingMovementTxs.length > 0 || stockControl.orphanSaleMovements.length > 0 || stockControl.criticalLowItems.length > 0) && (
+            <div className="space-y-2">
+              {stockControl.missingMovementTxs.slice(0, 3).map((tx) => (
+                <div key={tx.id} className="rounded-md border border-destructive/30 px-3 py-2 text-xs flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                  <span>
+                    <strong>Cas signalé:</strong> vente {formatCurrency(tx.amount)} ({tx.category}) sans sortie stock liée.
+                  </span>
+                  <div className="flex gap-2">
+                    <Button size="sm" className="h-7 text-[11px]" onClick={() => openCorrectionForMissingMovement(tx.id)}>
+                      Corriger
+                    </Button>
+                    {tx.stockItemId && (
+                      <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => openMovement('exit', tx.stockItemId)}>
+                        Sortie manuelle
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              ))}
+
+              {stockControl.orphanSaleMovements.slice(0, 3).map((mv) => (
+                <div key={mv.id} className="rounded-md border border-destructive/30 px-3 py-2 text-xs flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                  <span>
+                    <strong>Cas signalé:</strong> sortie vente "{mv.reason}" sans transaction liée.
+                  </span>
+                  <div className="flex gap-2">
+                    <Button size="sm" className="h-7 text-[11px]" onClick={() => openCorrectionForMovement(mv.id, 'create-transaction')}>
+                      Corriger
+                    </Button>
+                    <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => { setTab('movements'); setSearch(mv.reason); }}>
+                      Vérifier
+                    </Button>
+                  </div>
+                </div>
+              ))}
+
+              {stockControl.brokenLinkedMovements.slice(0, 3).map((mv) => (
+                <div key={mv.id} className="rounded-md border border-amber-500/40 px-3 py-2 text-xs flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 bg-amber-50/70 dark:bg-amber-950/20">
+                  <span>
+                    <strong>Cas signalé:</strong> lien cassé pour la sortie "{mv.reason}".
+                  </span>
+                  <Button size="sm" className="h-7 text-[11px]" onClick={() => openCorrectionForMovement(mv.id, 'link-transaction')}>
+                    Corriger
+                  </Button>
+                </div>
+              ))}
+
+              {stockControl.criticalLowItems.slice(0, 3).map((item) => (
+                <div key={item.id} className="rounded-md border border-amber-500/40 px-3 py-2 text-xs flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 bg-amber-50/70 dark:bg-amber-950/20">
+                  <span>
+                    <strong>Cas signalé:</strong> {item.name} à {formatQuantity(item.currentQuantity)} {item.unit} (seuil {formatQuantity(item.alertThreshold)}).
+                  </span>
+                  <Button size="sm" className="h-7 text-[11px]" onClick={() => quickOpenMovementForRestock(item.id)}>
+                    Enregistrer entrée
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       {/* Tabs: Articles / Mouvements */}
       <Tabs value={tab} onValueChange={setTab}>
         <div className="flex items-center justify-between flex-wrap gap-3">
@@ -598,7 +934,7 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
                       <TableCell>
                         <Badge variant="secondary">{getCategoryLabel(item.categoryId, departmentId)}</Badge>
                       </TableCell>
-                      <TableCell className="text-right font-semibold">{item.currentQuantity}</TableCell>
+                      <TableCell className="text-right font-semibold">{formatQuantity(item.currentQuantity)}</TableCell>
                       <TableCell>{item.unit}</TableCell>
                       <TableCell className="text-right">{formatCurrency(item.purchasePrice)}</TableCell>
                       <TableCell className="text-right">{formatCurrency(item.sellingPrice)}</TableCell>
@@ -661,7 +997,7 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
                   {filteredMovements.map(mv => {
                     const item = getItemById(mv.itemId);
                     return (
-                      <TableRow key={mv.id}>
+                      <TableRow key={mv.id} className={stockControl.flaggedMovementIds.has(mv.id) ? 'bg-destructive/5' : ''}>
                         <TableCell className="whitespace-nowrap">{new Date(mv.date).toLocaleDateString('fr-FR')}</TableCell>
                         <TableCell className="font-medium">{item?.name ?? '—'}</TableCell>
                         <TableCell>
@@ -673,20 +1009,20 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
                         </TableCell>
                         <TableCell>{mv.reason}{mv.parkName ? ` (${mv.parkName})` : ''}{mv.traineeName ? ` → ${mv.traineeName}` : ''}</TableCell>
                         <TableCell className="text-right font-semibold">
-                          {mv.type === 'entry' ? '+' : (mv.type === 'exit' || mv.type === 'training' || mv.type === 'gift') ? '-' : '='}{mv.quantity}
+                          {mv.type === 'entry' ? '+' : (mv.type === 'exit' || mv.type === 'training' || mv.type === 'gift') ? '-' : '='}{formatQuantity(mv.quantity)}
                         </TableCell>
-                        <TableCell className="text-right text-muted-foreground">{mv.previousQuantity}</TableCell>
-                        <TableCell className="text-right font-semibold">{mv.newQuantity}</TableCell>
+                        <TableCell className="text-right text-muted-foreground">{formatQuantity(mv.previousQuantity)}</TableCell>
+                        <TableCell className="text-right font-semibold">{formatQuantity(mv.newQuantity)}</TableCell>
                         <TableCell className="text-right">{mv.unitPrice > 0 ? formatCurrency(mv.unitPrice) : '—'}</TableCell>
                         <TableCell className="text-sm">
                           {mv.transactionId ? (() => {
-                            const tx = getTransactionsByDepartment(departmentId as DepartmentId).find(t => t.id === mv.transactionId);
+                            const tx = transactionsById.get(mv.transactionId);
                             return tx ? (
                               <span className="text-blue-600 dark:text-blue-400" title={`${tx.description || tx.category} — ${formatCurrency(tx.amount)}`}>
                                 {new Date(tx.date).toLocaleDateString('fr-FR')} — {formatCurrency(tx.amount)}
                               </span>
-                            ) : <span className="text-muted-foreground">—</span>;
-                          })() : '—'}
+                            ) : <span className="text-destructive">Lien cassé</span>;
+                          })() : mv.reason.toLowerCase().includes('vente') ? <span className="text-destructive">A relier</span> : '—'}
                         </TableCell>
                         <TableCell className="text-muted-foreground text-sm">{mv.createdBy}</TableCell>
                       </TableRow>
@@ -908,16 +1244,16 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Seuil d'alerte (stock bas)</Label>
-                <Input type="number" min="0" value={itemForm.alertThreshold} onChange={e => setItemForm(f => ({ ...f, alertThreshold: e.target.value }))} />
+                <Input type="number" min="0" step={DECIMAL_STEP} value={itemForm.alertThreshold} onChange={e => setItemForm(f => ({ ...f, alertThreshold: e.target.value }))} />
               </div>
               <div className="space-y-2">
                 <Label>Prix d'achat (FCFA)</Label>
-                <Input type="number" min="0" value={itemForm.purchasePrice} onChange={e => setItemForm(f => ({ ...f, purchasePrice: e.target.value }))} />
+                <Input type="number" min="0" step={DECIMAL_STEP} value={itemForm.purchasePrice} onChange={e => setItemForm(f => ({ ...f, purchasePrice: e.target.value }))} />
               </div>
             </div>
             <div className="space-y-2">
               <Label>Prix de vente (FCFA)</Label>
-              <Input type="number" min="0" value={itemForm.sellingPrice} onChange={e => setItemForm(f => ({ ...f, sellingPrice: e.target.value }))} />
+              <Input type="number" min="0" step={DECIMAL_STEP} value={itemForm.sellingPrice} onChange={e => setItemForm(f => ({ ...f, sellingPrice: e.target.value }))} />
             </div>
           </div>
           <DialogFooter>
@@ -946,7 +1282,7 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
                 <SelectContent>
                   {items.map(i => (
                     <SelectItem key={i.id} value={i.id}>
-                      {i.name} ({i.currentQuantity} {i.unit})
+                      {i.name} ({formatQuantity(i.currentQuantity)} {i.unit})
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -955,12 +1291,12 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Quantité</Label>
-                <Input type="number" min="1" placeholder="0" value={moveForm.quantity} onChange={e => setMoveForm(f => ({ ...f, quantity: e.target.value }))} />
+                <Input type="number" min="0" step={DECIMAL_STEP} placeholder="0" value={moveForm.quantity} onChange={e => setMoveForm(f => ({ ...f, quantity: e.target.value }))} />
               </div>
               {moveType !== 'training' && moveType !== 'gift' && (
                 <div className="space-y-2">
                   <Label>Prix unitaire (FCFA)</Label>
-                  <Input type="number" min="0" placeholder="0" value={moveForm.unitPrice} onChange={e => setMoveForm(f => ({ ...f, unitPrice: e.target.value }))} />
+                  <Input type="number" min="0" step={DECIMAL_STEP} placeholder="0" value={moveForm.unitPrice} onChange={e => setMoveForm(f => ({ ...f, unitPrice: e.target.value }))} />
                 </div>
               )}
             </div>
@@ -981,12 +1317,17 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
               <Select value={moveForm.reason} onValueChange={v => setMoveForm(f => ({ ...f, reason: v, transactionId: '' }))}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {(moveType === 'entry' ? ENTRY_REASONS : moveType === 'training' ? TRAINING_REASONS : moveType === 'gift' ? GIFT_REASONS : EXIT_REASONS).map(r => (
+                  {(moveType === 'entry' ? ENTRY_REASONS : moveType === 'training' ? TRAINING_REASONS : moveType === 'gift' ? GIFT_REASONS : allowedExitReasons).map(r => (
                     <SelectItem key={r} value={r}>{r}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
+            {moveType === 'exit' && !userPermissions.canRecordStockExitWithoutPrice && (
+              <div className="rounded-lg border border-amber-500/30 bg-amber-50/70 p-3 text-sm text-amber-700 dark:border-amber-700/40 dark:bg-amber-950/20 dark:text-amber-400">
+                Les sorties sans prix comme utilisation, perte ou don sont réservées aux utilisateurs autorisés par le Super Admin.
+              </div>
+            )}
             {moveType === 'exit' && moveForm.reason === 'Vente' && (() => {
               const deptTransactions = getTransactionsByDepartment(departmentId as DepartmentId)
                 .filter(t => t.type === 'income')
@@ -1021,7 +1362,7 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
             {moveItemId && (
               <div className="bg-muted/50 rounded-lg p-3 text-sm">
                 <p className="text-muted-foreground">
-                  Stock actuel : <span className="font-semibold text-foreground">{items.find(i => i.id === moveItemId)?.currentQuantity ?? 0} {items.find(i => i.id === moveItemId)?.unit}</span>
+                  Stock actuel : <span className="font-semibold text-foreground">{formatQuantity(items.find(i => i.id === moveItemId)?.currentQuantity ?? 0)} {items.find(i => i.id === moveItemId)?.unit}</span>
                 </p>
               </div>
             )}
@@ -1059,7 +1400,7 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
           <DialogHeader>
             <DialogTitle>Historique — {historyItem?.name}</DialogTitle>
             <DialogDescription>
-              Stock actuel : {historyItem?.currentQuantity} {historyItem?.unit} · Catégorie : {historyItem ? getCategoryLabel(historyItem.categoryId, departmentId) : ''}
+              Stock actuel : {formatQuantity(historyItem?.currentQuantity ?? 0)} {historyItem?.unit} · Catégorie : {historyItem ? getCategoryLabel(historyItem.categoryId, departmentId) : ''}
             </DialogDescription>
           </DialogHeader>
           {itemMovements.length === 0 ? (
@@ -1091,10 +1432,10 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
                       </TableCell>
                       <TableCell>{mv.reason}{mv.parkName ? ` (${mv.parkName})` : ''}{mv.traineeName ? ` → ${mv.traineeName}` : ''}</TableCell>
                       <TableCell className="text-right font-semibold">
-                        {mv.type === 'entry' ? '+' : (mv.type === 'exit' || mv.type === 'training' || mv.type === 'gift') ? '-' : '='}{mv.quantity}
+                        {mv.type === 'entry' ? '+' : (mv.type === 'exit' || mv.type === 'training' || mv.type === 'gift') ? '-' : '='}{formatQuantity(mv.quantity)}
                       </TableCell>
-                      <TableCell className="text-right text-muted-foreground">{mv.previousQuantity}</TableCell>
-                      <TableCell className="text-right font-semibold">{mv.newQuantity}</TableCell>
+                      <TableCell className="text-right text-muted-foreground">{formatQuantity(mv.previousQuantity)}</TableCell>
+                      <TableCell className="text-right font-semibold">{formatQuantity(mv.newQuantity)}</TableCell>
                       <TableCell className="text-muted-foreground text-sm">{mv.createdBy}</TableCell>
                     </TableRow>
                   ))}
@@ -1238,7 +1579,7 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
                         </SelectContent>
                       </Select>
                     </div>
-                    <Input className="w-20" type="number" min="1" placeholder="Qté" value={mat.quantity} onChange={e => { const m = [...trainingForm.materials]; m[idx].quantity = e.target.value; setTrainingForm(f => ({ ...f, materials: m })); }} />
+                        <Input className="w-20" type="number" min="0" step={DECIMAL_STEP} placeholder="Qté" value={mat.quantity} onChange={e => { const m = [...trainingForm.materials]; m[idx].quantity = e.target.value; setTrainingForm(f => ({ ...f, materials: m })); }} />
                     <Button type="button" variant="ghost" size="icon" className="h-9 w-9" onClick={() => setTrainingForm(f => ({ ...f, materials: f.materials.filter((_, i) => i !== idx) }))}>
                       <Trash2 className="h-4 w-4 text-destructive" />
                     </Button>
@@ -1308,7 +1649,7 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
                         </SelectContent>
                       </Select>
                     </div>
-                    <Input className="w-20" type="number" min="1" placeholder="Qté" value={gift.quantity} onChange={e => { const g = [...trainingForm.gifts]; g[idx].quantity = e.target.value; setTrainingForm(f => ({ ...f, gifts: g })); }} />
+                    <Input className="w-20" type="number" min="0" step={DECIMAL_STEP} placeholder="Qté" value={gift.quantity} onChange={e => { const g = [...trainingForm.gifts]; g[idx].quantity = e.target.value; setTrainingForm(f => ({ ...f, gifts: g })); }} />
                     <Button type="button" variant="ghost" size="icon" className="h-9 w-9" onClick={() => setTrainingForm(f => ({ ...f, gifts: f.gifts.filter((_, i) => i !== idx) }))}>
                       <Trash2 className="h-4 w-4 text-destructive" />
                     </Button>
@@ -1372,7 +1713,7 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
             </div>
             <div className="space-y-2">
               <Label>Prix de vente du kit (FCFA)</Label>
-              <Input type="number" min="0" placeholder="Ex: 25000" value={kitForm.sellingPrice} onChange={e => setKitForm(f => ({ ...f, sellingPrice: e.target.value }))} />
+              <Input type="number" min="0" step={DECIMAL_STEP} placeholder="Ex: 25000" value={kitForm.sellingPrice} onChange={e => setKitForm(f => ({ ...f, sellingPrice: e.target.value }))} />
             </div>
             <div className="space-y-2">
               <div className="flex items-center justify-between">
@@ -1391,7 +1732,7 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
                       </SelectContent>
                     </Select>
                   </div>
-                  <Input className="w-24" type="number" min="1" placeholder="Qté" value={comp.quantity} onChange={e => { const c = [...kitForm.components]; c[idx].quantity = e.target.value; setKitForm(f => ({ ...f, components: c })); }} />
+                  <Input className="w-24" type="number" min="0" step={DECIMAL_STEP} placeholder="Qté" value={comp.quantity} onChange={e => { const c = [...kitForm.components]; c[idx].quantity = e.target.value; setKitForm(f => ({ ...f, components: c })); }} />
                   <Button type="button" variant="ghost" size="icon" className="h-9 w-9" onClick={() => setKitForm(f => ({ ...f, components: f.components.filter((_, i) => i !== idx) }))}>
                     <Trash2 className="h-4 w-4 text-destructive" />
                   </Button>
@@ -1493,6 +1834,147 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
           <DialogFooter>
             <Button variant="outline" onClick={() => setSellKitDialog(false)}>Annuler</Button>
             <Button onClick={handleSellKit}>Confirmer la vente</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={correctionDialog} onOpenChange={setCorrectionDialog}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Corriger ce cas stock</DialogTitle>
+            <DialogDescription>
+              {correctionTarget?.kind === 'missing-movement' && 'Étape 1: choisir l\'article et générer la sortie stock manquante à partir de la transaction.'}
+              {correctionTarget?.kind === 'orphan-movement' && 'Étape 1: soit créer la transaction manquante, soit rattacher ce mouvement à une transaction existante.'}
+              {correctionTarget?.kind === 'broken-movement' && 'Étape 1: rebrancher ce mouvement sur une transaction valide ou en recréer une automatiquement.'}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            {correctionTarget?.kind !== 'missing-movement' && (
+              <div className="space-y-2">
+                <Label>Action de correction</Label>
+                <Select value={correctionMode} onValueChange={(value) => setCorrectionMode(value as StockCorrectionMode)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="link-transaction">Lier à une transaction existante</SelectItem>
+                    <SelectItem value="create-transaction">Créer la transaction manquante</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            {correctionMode === 'create-movement' && (
+              <>
+                <div className="space-y-2">
+                  <Label>Article à sortir</Label>
+                  <Select value={correctionForm.itemId} onValueChange={(value) => setCorrectionForm(form => ({ ...form, itemId: value }))}>
+                    <SelectTrigger><SelectValue placeholder="Sélectionner un article" /></SelectTrigger>
+                    <SelectContent>
+                      {items.map(item => (
+                        <SelectItem key={item.id} value={item.id}>
+                          {item.name} ({formatQuantity(item.currentQuantity)} {item.unit})
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Quantité</Label>
+                    <Input type="number" min="0" step={DECIMAL_STEP} value={correctionForm.quantity} onChange={e => setCorrectionForm(form => ({ ...form, quantity: e.target.value }))} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Prix unitaire</Label>
+                    <Input type="number" min="0" step={DECIMAL_STEP} value={correctionForm.unitPrice} onChange={e => setCorrectionForm(form => ({ ...form, unitPrice: e.target.value }))} />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Motif</Label>
+                    <Input value={correctionForm.reason} onChange={e => setCorrectionForm(form => ({ ...form, reason: e.target.value }))} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Date</Label>
+                    <Input type="date" value={correctionForm.date} onChange={e => setCorrectionForm(form => ({ ...form, date: e.target.value }))} />
+                  </div>
+                </div>
+              </>
+            )}
+
+            {correctionMode === 'link-transaction' && (
+              <div className="space-y-2">
+                <Label>Transaction de vente</Label>
+                <Select value={correctionForm.transactionId || '__none__'} onValueChange={value => setCorrectionForm(form => ({ ...form, transactionId: value === '__none__' ? '' : value }))}>
+                  <SelectTrigger><SelectValue placeholder="Sélectionner une transaction" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">Aucune</SelectItem>
+                    {incomeTransactions.map(tx => (
+                      <SelectItem key={tx.id} value={tx.id}>
+                        {new Date(tx.date).toLocaleDateString('fr-FR')} — {tx.description || tx.category} — {formatCurrency(tx.amount)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            {correctionMode === 'create-transaction' && (
+              <>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Montant</Label>
+                    <Input type="number" min="0" step={DECIMAL_STEP} value={correctionForm.amount} onChange={e => setCorrectionForm(form => ({ ...form, amount: e.target.value }))} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Moyen de paiement</Label>
+                    <Select value={correctionForm.paymentMethod} onValueChange={(value) => setCorrectionForm(form => ({ ...form, paymentMethod: value as PaymentMethod }))}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {getPaymentMethodsForDepartment(departmentId).map(method => (
+                          <SelectItem key={method.value} value={method.value}>{method.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Client</Label>
+                    <Input value={correctionForm.personName} onChange={e => setCorrectionForm(form => ({ ...form, personName: e.target.value }))} placeholder="Nom du client" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Téléphone</Label>
+                    <Input value={correctionForm.phoneNumber} onChange={e => setCorrectionForm(form => ({ ...form, phoneNumber: e.target.value }))} placeholder="Optionnel" />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Description</Label>
+                    <Input value={correctionForm.description} onChange={e => setCorrectionForm(form => ({ ...form, description: e.target.value }))} placeholder="Libellé de la vente" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Date</Label>
+                    <Input type="date" value={correctionForm.date} onChange={e => setCorrectionForm(form => ({ ...form, date: e.target.value }))} />
+                  </div>
+                </div>
+              </>
+            )}
+
+            {correctionTarget?.kind !== 'missing-movement' && correctionTarget?.movementId && (() => {
+              const movement = movements.find(entry => entry.id === correctionTarget.movementId);
+              const item = movement ? items.find(entry => entry.id === movement.itemId) : undefined;
+              if (!movement) return null;
+              return (
+                <div className="rounded-md bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
+                  Mouvement ciblé: {item?.name ?? 'Article'} · {formatQuantity(movement.quantity)} {item?.unit ?? ''} · {movement.reason}
+                </div>
+              );
+            })()}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCorrectionDialog(false)}>Annuler</Button>
+            <Button onClick={handleApplyCorrection}>Corriger</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

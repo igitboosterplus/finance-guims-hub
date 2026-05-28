@@ -4,9 +4,9 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { getSuperAuditLog, type SuperAuditEntry } from "@/lib/auth";
+import { getAuditIntegrityStatus, getSuperAuditLog, type SuperAuditEntry } from "@/lib/auth";
 import { useAuth } from "@/hooks/useAuth";
-import { Search, ShieldCheck, ChevronLeft, ChevronRight } from "lucide-react";
+import { Search, ShieldCheck, ShieldAlert, ChevronLeft, ChevronRight } from "lucide-react";
 
 const PAGE_SIZE = 20;
 
@@ -47,6 +47,7 @@ export default function SuperAuditPage() {
   const [entries, setEntries] = useState<SuperAuditEntry[]>([]);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
+  const integrity = getAuditIntegrityStatus();
 
   useEffect(() => {
     setEntries(getSuperAuditLog());
@@ -96,6 +97,13 @@ export default function SuperAuditPage() {
           className="pl-9"
         />
       </div>
+
+      <Card className="border-0 shadow-sm">
+        <CardContent className="py-3 flex items-center gap-2 text-sm">
+          {integrity.superAudit.ok ? <ShieldCheck className="h-4 w-4 text-success" /> : <ShieldAlert className="h-4 w-4 text-destructive" />}
+          <span>Intégrité Super Audit: {integrity.superAudit.ok ? 'valide' : 'altération détectée'}</span>
+        </CardContent>
+      </Card>
 
       {filtered.length === 0 ? (
         <div className="text-center py-12 text-muted-foreground">

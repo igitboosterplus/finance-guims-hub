@@ -19,6 +19,12 @@ export interface AIReportPayload {
   recentTransactions: Array<{ date: string; type: string; category: string; amount: number; department: string; description: string }>;
 }
 
+export interface AIConversationPayload {
+  question: string;
+  context: Record<string, unknown>;
+  conversationHistory?: Array<{ role: "user" | "assistant"; text: string }>;
+}
+
 import { getSupabase, initSupabase, isSupabaseConfigured } from "./firebase";
 import { getCurrentUser } from "./auth";
 
@@ -90,6 +96,36 @@ export async function generateExternalAIInsights(payload: AIReportPayload, provi
     return normalizeInsightSection(data);
   } catch (error) {
     console.warn("[AI Report] External insight generation failed", error);
+    return null;
+  }
+}
+
+export async function generateExternalAIConversation(payload: AIConversationPayload, provider?: AIProvider | null): Promise<string | null> {
+  const chosenProvider = provider || getDefaultProvider();
+  if (!chosenProvider || !isSupabaseConfigured()) return null;
+
+  try {
+    const supabase = getSupabase() || initSupabase();
+    if (!supabase) return null;
+
+    const { data, error } = await supabase.functions.invoke(EDGE_FUNCTION_NAME, {
+      body: {
+        mode: "conversation",
+        provider: chosenProvider,
+        payload,
+        requestedByRole: getCurrentUser()?.role,
+        requestedByUser: getCurrentUser()?.username,
+      },
+    });
+
+    if (error) {
+      throw error;
+    }
+
+    const reply = (data as { reply?: unknown } | null)?.reply;
+    return typeof reply === "string" && reply.trim().length > 0 ? reply.trim() : null;
+  } catch (error) {
+    console.warn("[AI Conversation] External conversation failed", error);
     return null;
   }
 }

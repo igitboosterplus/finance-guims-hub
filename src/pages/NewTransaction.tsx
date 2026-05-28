@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -6,12 +6,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { departments, addTransaction, getPaymentMethodsForDepartment, isEnrollmentCategory, isInscriptionCategory, isTranche, type DepartmentId, type PaymentMethod, formatCurrency } from "@/lib/data";
+import { departments, addTransaction, getPaymentMethodsForDepartment, isEnrollmentCategory, isInscriptionCategory, isTranche, type DepartmentId, type PaymentMethod, formatCurrency, getMonthlyStats, getTransactions } from "@/lib/data";
 import { addAuditEntry, getCurrentUser, hasPermission, hasDepartmentAccess } from "@/lib/auth";
 import { getStockItems, addStockMovement, generateSaleTicketNumber, getFormationsByDepartment, addPaymentPlan, addInstallment, getPaymentPlans, getEnrolledStudents, buildAllocationMessage, updatePlanInscription, getAllocationSummary, getRemainingAmount, addEnrollment, getEnrollmentsByFormation, updateEnrollment, type StockItem, type FormationCatalog, type FormationPack } from "@/lib/stock";
-import { findEmployeeByName, getActiveEmployeesByDepartment } from "@/lib/employees";
+import { findEmployeeByName, getActiveEmployeesByDepartment, getEmployeeSalaryStatus } from "@/lib/employees";
+import { generateExternalAIConversation, getConfiguredAIProviders, getPreferredAIProvider } from "@/lib/aiReports";
 import { toast } from "sonner";
-import { ArrowLeft, ShieldAlert, Package, GraduationCap, Star, Award, CreditCard } from "lucide-react";
+import { ArrowLeft, ShieldAlert, Package, GraduationCap, Star, Award, CreditCard, Calendar, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 
@@ -36,6 +37,13 @@ export default function NewTransaction() {
   const [formationName, setFormationName] = useState('');
   const [formationPackId, setFormationPackId] = useState('');
   const [desiredTrainingDate, setDesiredTrainingDate] = useState('');
+  const [whatIfPrompt, setWhatIfPrompt] = useState('');
+  const [whatIfMessages, setWhatIfMessages] = useState<Array<{ role: 'user' | 'assistant'; text: string; source?: 'external-ai' | 'local-fallback' }>>([]);
+  const [whatIfLoading, setWhatIfLoading] = useState(false);
+
+  const configuredAIProviders = getConfiguredAIProviders();
+  const preferredAIProvider = getPreferredAIProvider();
+  const [conversationProvider, setConversationProvider] = useState<'auto' | 'openai' | 'gemini'>(preferredAIProvider || 'auto');
 
   const selectedDept = departments.find(d => d.id === departmentId);
   const categories = selectedDept
@@ -78,6 +86,244 @@ export default function NewTransaction() {
     ? getActiveEmployeesByDepartment('charges-entreprise')
     : [];
   const isEmployeePayment = departmentId === 'charges-entreprise' && category === 'Paiement employés';
+  const selectedEmployee = isEmployeePayment && personName.trim()
+    ? findEmployeeByName('charges-entreprise', personName)
+    : null;
+
+  const amountValue = parseInt(amount, 10);
+  const parsedAmount = Number.isNaN(amountValue) ? 0 : amountValue;
+
+  const assistantInsights = useMemo(() => {
+    const insights: Array<{ level: 'info' | 'warning' | 'success'; text: string }> = [];
+    if (!departmentId || !category || parsedAmount <= 0) return insights;
+
+    const now = new Date();
+    const currentMonthStats = getMonthlyStats(now.getFullYear(), now.getMonth());
+
+    if (type === 'expense') {
+      const projectedExpenses = currentMonthStats.expenses + parsedAmount;
+      if (currentMonthStats.income > 0 && projectedExpenses > currentMonthStats.income) {
+        insights.push({
+          level: 'warning',
+          text: `Cette dépense ferait dépasser les revenus du mois (${formatCurrency(projectedExpenses)} de dépenses vs ${formatCurrency(currentMonthStats.income)} de revenus).`,
+        });
+      }
+
+      const monthExpenses = getTransactions()
+        .filter(tx => tx.type === 'expense')
+        .filter((tx) => {
+          const d = new Date(tx.date);
+          return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+        });
+      const avgExpense = monthExpenses.length > 0
+        ? monthExpenses.reduce((sum, tx) => sum + tx.amount, 0) / monthExpenses.length
+        : 0;
+
+      if (avgExpense > 0 && parsedAmount >= avgExpense * 1.5) {
+        insights.push({
+          level: 'info',
+          text: `Montant supérieur à la moyenne des dépenses du mois (${formatCurrency(Math.round(avgExpense))}). Vérifiez la justification.`,
+        });
+      }
+    }
+
+    if (isEmployeePayment && personName.trim()) {
+      if (!selectedEmployee) {
+        insights.push({
+          level: 'warning',
+          text: "Cet employé n'existe pas dans l'annuaire. Enregistrez-le d'abord avec son salaire mensuel.",
+        });
+      } else {
+        const salaryStatus = getEmployeeSalaryStatus(selectedEmployee);
+        if (!salaryStatus.monthlySalary) {
+          insights.push({
+            level: 'warning',
+            text: "Salaire mensuel non défini pour cet employé. Définissez-le avant un retrait salarial.",
+          });
+        } else {
+          const projected = salaryStatus.paidThisMonth + parsedAmount;
+          if (projected > salaryStatus.monthlySalary) {
+            insights.push({
+              level: 'warning',
+              text: `Dépassement prévu: payé ${formatCurrency(salaryStatus.paidThisMonth)} ce mois, salaire ${formatCurrency(salaryStatus.monthlySalary)}, retrait demandé ${formatCurrency(parsedAmount)}.`,
+            });
+          } else {
+            insights.push({
+              level: 'success',
+              text: `Après ce retrait, il restera ${formatCurrency(salaryStatus.monthlySalary - projected)} à payer ce mois à ${selectedEmployee.fullName}.`,
+            });
+          }
+        }
+      }
+    }
+
+    return insights.slice(0, 4);
+  }, [departmentId, category, parsedAmount, type, isEmployeePayment, personName, selectedEmployee]);
+
+  const buildLocalWhatIfReply = (prompt: string): string => {
+    const normalized = prompt.toLowerCase();
+    const amountMatch = normalized.replace(/\s/g, '').match(/(\d{3,})/);
+    const inferredAmount = amountMatch ? parseInt(amountMatch[1], 10) : parsedAmount;
+
+    const inferredType: 'income' | 'expense' =
+      normalized.includes('revenu') || normalized.includes('entrée') || normalized.includes('entree') || normalized.includes('encaisser')
+        ? 'income'
+        : normalized.includes('dépense') || normalized.includes('depense') || normalized.includes('sortie') || normalized.includes('payer')
+          ? 'expense'
+          : type;
+
+    const detectedDepartment = departments.find((d) => {
+      const name = d.name.toLowerCase();
+      return normalized.includes(name) || normalized.includes(d.id);
+    })?.id;
+
+    const simulationDepartmentId = (detectedDepartment || departmentId || '') as DepartmentId;
+    const now = new Date();
+
+    const globalMonth = getMonthlyStats(now.getFullYear(), now.getMonth());
+    const departmentMonthTx = simulationDepartmentId
+      ? getTransactions().filter((tx) => {
+          if (tx.departmentId !== simulationDepartmentId) return false;
+          const d = new Date(tx.date);
+          return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+        })
+      : [];
+
+    const deptIncome = departmentMonthTx.filter(tx => tx.type === 'income').reduce((sum, tx) => sum + tx.amount, 0);
+    const deptExpenses = departmentMonthTx.filter(tx => tx.type === 'expense').reduce((sum, tx) => sum + tx.amount, 0);
+
+    const lines: string[] = [];
+    lines.push(`Simulation pour ${now.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' })}.`);
+
+    if (!inferredAmount || inferredAmount <= 0) {
+      lines.push("Je n'ai pas détecté de montant. Ajoutez un montant dans votre question (ex: 75000).");
+    } else if (simulationDepartmentId) {
+      if (inferredType === 'expense') {
+        const projectedDeptExpenses = deptExpenses + inferredAmount;
+        const projectedGlobalExpenses = globalMonth.expenses + inferredAmount;
+        lines.push(`Si vous enregistrez une dépense de ${formatCurrency(inferredAmount)} dans ${departments.find(d => d.id === simulationDepartmentId)?.name || simulationDepartmentId}:`);
+        lines.push(`- Dépenses mensuelles du département: ${formatCurrency(deptExpenses)} -> ${formatCurrency(projectedDeptExpenses)}.`);
+        lines.push(`- Solde mensuel global: ${formatCurrency(globalMonth.balance)} -> ${formatCurrency(globalMonth.balance - inferredAmount)}.`);
+        if (projectedGlobalExpenses > globalMonth.income) {
+          lines.push(`- Alerte: les dépenses globales du mois dépasseraient les revenus (${formatCurrency(projectedGlobalExpenses)} > ${formatCurrency(globalMonth.income)}).`);
+        }
+      } else {
+        const projectedDeptIncome = deptIncome + inferredAmount;
+        lines.push(`Si vous enregistrez un revenu de ${formatCurrency(inferredAmount)} dans ${departments.find(d => d.id === simulationDepartmentId)?.name || simulationDepartmentId}:`);
+        lines.push(`- Revenus mensuels du département: ${formatCurrency(deptIncome)} -> ${formatCurrency(projectedDeptIncome)}.`);
+        lines.push(`- Solde mensuel global: ${formatCurrency(globalMonth.balance)} -> ${formatCurrency(globalMonth.balance + inferredAmount)}.`);
+      }
+    } else {
+      const projected = inferredType === 'expense' ? globalMonth.balance - inferredAmount : globalMonth.balance + inferredAmount;
+      lines.push(`Impact global estimé: solde mensuel ${formatCurrency(globalMonth.balance)} -> ${formatCurrency(projected)}.`);
+    }
+
+    const asksEmployeeSalary = normalized.includes('employ') || normalized.includes('salaire');
+    if (asksEmployeeSalary || (simulationDepartmentId === 'charges-entreprise' && inferredType === 'expense')) {
+      const employee = personName.trim()
+        ? findEmployeeByName('charges-entreprise', personName)
+        : null;
+
+      if (!employee) {
+        lines.push("Pour une simulation salaire précise, renseignez le nom de l'employé dans le champ personne.");
+      } else {
+        const salaryStatus = getEmployeeSalaryStatus(employee);
+        if (!salaryStatus.monthlySalary) {
+          lines.push(`Employé ${employee.fullName}: salaire mensuel non défini.`);
+        } else if (inferredAmount > 0) {
+          const projected = salaryStatus.paidThisMonth + (inferredType === 'expense' ? inferredAmount : 0);
+          lines.push(`Employé ${employee.fullName}: payé ce mois ${formatCurrency(salaryStatus.paidThisMonth)}.`);
+          lines.push(`Après simulation: ${formatCurrency(projected)} sur un salaire de ${formatCurrency(salaryStatus.monthlySalary)}.`);
+          if (projected > salaryStatus.monthlySalary) {
+            lines.push(`- Alerte salariale: dépassement de ${formatCurrency(projected - salaryStatus.monthlySalary)}.`);
+          } else {
+            lines.push(`- Reste salarial après simulation: ${formatCurrency(salaryStatus.monthlySalary - projected)}.`);
+          }
+        }
+      }
+    }
+
+    lines.push("Suggestion: vérifiez catégorie, département et caisse avant validation finale.");
+
+    return lines.join('\n');
+  };
+
+  const runWhatIfSimulation = async () => {
+    const prompt = whatIfPrompt.trim();
+    if (!prompt) {
+      toast.error("Saisissez une question pour la simulation");
+      return;
+    }
+
+    setWhatIfMessages((prev) => [
+      ...prev,
+      { role: 'user', text: prompt },
+    ]);
+
+    const fallbackReply = buildLocalWhatIfReply(prompt);
+    const now = new Date();
+
+    let externalReply: string | null = null;
+    let usedSource: 'external-ai' | 'local-fallback' = 'local-fallback';
+    if (configuredAIProviders.length > 0) {
+      setWhatIfLoading(true);
+      externalReply = await generateExternalAIConversation(
+        {
+          question: prompt,
+          context: {
+            formSnapshot: {
+              departmentId: departmentId || null,
+              departmentName: selectedDept?.name || null,
+              type,
+              category: category || null,
+              paymentMethod,
+              personName: personName || null,
+              amount: parsedAmount || null,
+              description: description || null,
+            },
+            monthlyOverview: getMonthlyStats(now.getFullYear(), now.getMonth()),
+            employeeSalaryContext: selectedEmployee
+              ? {
+                  employeeName: selectedEmployee.fullName,
+                  salaryStatus: getEmployeeSalaryStatus(selectedEmployee),
+                }
+              : null,
+            recentTransactions: getTransactions()
+              .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+              .slice(0, 20)
+              .map((tx) => ({
+                date: tx.date,
+                departmentId: tx.departmentId,
+                type: tx.type,
+                category: tx.category,
+                amount: tx.amount,
+                personName: tx.personName,
+              })),
+          },
+          conversationHistory: whatIfMessages.slice(-8),
+        },
+        conversationProvider === 'auto' ? preferredAIProvider : conversationProvider,
+      );
+      setWhatIfLoading(false);
+      if (externalReply) {
+        usedSource = 'external-ai';
+      }
+    }
+
+    setWhatIfMessages((prev) => [
+      ...prev,
+      {
+        role: 'assistant',
+        text: externalReply || fallbackReply,
+        source: usedSource,
+      },
+    ]);
+
+    if (!externalReply && configuredAIProviders.length > 0) {
+      toast.info("IA externe indisponible, simulation locale utilisée.");
+    }
+    setWhatIfPrompt('');
+  };
 
   const handleFormationChange = (name: string) => {
     setFormationName(name);
@@ -196,6 +442,27 @@ export default function NewTransaction() {
     if (isNaN(parsedAmount) || parsedAmount <= 0) {
       toast.error("Le montant doit être un nombre positif");
       return;
+    }
+
+    if (isEmployeePayment) {
+      const employee = findEmployeeByName('charges-entreprise', personName);
+      if (!employee) {
+        toast.error("Employé introuvable. Ajoutez d'abord cet employé dans la liste avec son salaire mensuel.");
+        return;
+      }
+
+      const salaryStatus = getEmployeeSalaryStatus(employee, transactionTimestamp);
+      if (!salaryStatus.monthlySalary) {
+        toast.error("Salaire mensuel non défini pour cet employé. Définissez-le avant un retrait salarial.");
+        return;
+      }
+
+      const projectedPaid = salaryStatus.paidThisMonth + parsedAmount;
+      if (projectedPaid > salaryStatus.monthlySalary) {
+        const over = projectedPaid - salaryStatus.monthlySalary;
+        toast.error(`Retrait refusé: dépassement de ${formatCurrency(over)} par rapport au salaire mensuel de ${formatCurrency(salaryStatus.monthlySalary)}.`);
+        return;
+      }
     }
 
     // Stock validation for GABA stock categories
@@ -524,6 +791,93 @@ export default function NewTransaction() {
                 onChange={(e) => setAmount(e.target.value)}
                 min="1"
               />
+            </div>
+
+            {assistantInsights.length > 0 && (
+              <div className="rounded-lg border border-dashed border-primary/40 bg-primary/5 p-4 space-y-2">
+                <p className="text-sm font-medium flex items-center gap-2">
+                  <Sparkles className="h-4 w-4" />
+                  Assistant intelligent
+                </p>
+                <div className="space-y-1.5">
+                  {assistantInsights.map((insight, index) => (
+                    <p
+                      key={index}
+                      className={`text-xs ${insight.level === 'warning' ? 'text-destructive' : insight.level === 'success' ? 'text-success' : 'text-muted-foreground'}`}
+                    >
+                      • {insight.text}
+                    </p>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="rounded-lg border border-dashed border-primary/40 bg-primary/5 p-4 space-y-3">
+              <p className="text-sm font-medium flex items-center gap-2">
+                <Sparkles className="h-4 w-4" />
+                Mode IA conversationnel - Que se passe-t-il si...
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {configuredAIProviders.length > 0
+                  ? `IA externe active (${configuredAIProviders.join(', ')}) avec fallback local automatique.`
+                  : "Mode local actif (IA externe non configurée)."}
+              </p>
+              <div className="space-y-2">
+                <Label>Provider IA</Label>
+                <Select
+                  value={conversationProvider}
+                  onValueChange={(value) => setConversationProvider(value as 'auto' | 'openai' | 'gemini')}
+                >
+                  <SelectTrigger className="w-full sm:w-[240px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="auto">Auto</SelectItem>
+                    <SelectItem value="openai" disabled={!configuredAIProviders.includes('openai')}>OpenAI</SelectItem>
+                    <SelectItem value="gemini" disabled={!configuredAIProviders.includes('gemini')}>Gemini</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="max-h-52 overflow-y-auto rounded-md bg-background/80 border p-2 space-y-2">
+                {whatIfMessages.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    Exemple: "Que se passe-t-il si je fais une dépense de 150000 pour paiement employés ce mois-ci ?"
+                  </p>
+                ) : (
+                  whatIfMessages.map((msg, idx) => (
+                    <div key={idx} className={`rounded-md p-2 text-xs whitespace-pre-line ${msg.role === 'user' ? 'bg-muted' : 'bg-primary/10'}`}>
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <p className="font-medium">{msg.role === 'user' ? 'Vous' : 'Assistant'}</p>
+                        {msg.role === 'assistant' && msg.source && (
+                          <Badge variant={msg.source === 'external-ai' ? 'default' : 'secondary'} className="text-[10px]">
+                            {msg.source === 'external-ai' ? 'IA externe' : 'Fallback local'}
+                          </Badge>
+                        )}
+                      </div>
+                      <p>{msg.text}</p>
+                    </div>
+                  ))
+                )}
+              </div>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <Input
+                  placeholder="Posez votre simulation..."
+                  value={whatIfPrompt}
+                  onChange={(e) => setWhatIfPrompt(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      void runWhatIfSimulation();
+                    }
+                  }}
+                />
+                <div className="flex gap-2">
+                  <Button type="button" onClick={() => void runWhatIfSimulation()} disabled={whatIfLoading}>
+                    {whatIfLoading ? 'Simulation...' : 'Simuler'}
+                  </Button>
+                  <Button type="button" variant="outline" onClick={() => setWhatIfMessages([])} disabled={whatIfLoading}>Effacer</Button>
+                </div>
+              </div>
             </div>
 
             {/* Stock fields for GABA stock categories */}
