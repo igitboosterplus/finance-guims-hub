@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Separator } from "@/components/ui/separator";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { departments, type DepartmentId, formatCurrency, addTransaction, getPaymentMethodsForDepartment, type PaymentMethod } from "@/lib/data";
 import { getCurrentUser, hasPermission, hasDepartmentAccess, addAuditEntry } from "@/lib/auth";
 import {
@@ -358,6 +359,8 @@ export default function FormationsPage() {
   const [overdueTranches, setOverdueTranches] = useState<PaymentReminder[]>([]);
   const [suiviSearch, setSuiviSearch] = useState("");
   const [suiviStatus, setSuiviStatus] = useState<'all' | 'a_relancer' | FormationEnrollment['status']>("all");
+  const [inlinePhones, setInlinePhones] = useState<Record<string, string>>({});
+  const [editingInlinePhoneId, setEditingInlinePhoneId] = useState<string | null>(null);
   // Enrollment form
   const [enrFullName, setEnrFullName] = useState("");
   const [enrPhone, setEnrPhone] = useState("");
@@ -781,6 +784,19 @@ export default function FormationsPage() {
     refresh();
   };
 
+  const startInlinePhoneEdit = (enrollment: FormationEnrollment) => {
+    setInlinePhones(prev => ({ ...prev, [enrollment.id]: enrollment.phone || '' }));
+    setEditingInlinePhoneId(enrollment.id);
+  };
+
+  const saveInlinePhone = (enrollment: FormationEnrollment) => {
+    const phone = (inlinePhones[enrollment.id] || '').trim();
+    updateEnrollment(enrollment.id, { phone: phone || undefined });
+    toast.success(phone ? 'Numéro enregistré pour les relances' : 'Numéro supprimé');
+    setEditingInlinePhoneId(null);
+    refresh();
+  };
+
   const statusLabels: Record<FormationEnrollment['status'], string> = {
     inscrit: 'Inscrit',
     en_cours: 'En cours',
@@ -997,12 +1013,13 @@ export default function FormationsPage() {
                   <th className="px-3 py-2 font-medium hidden lg:table-cell">Contact</th>
                   <th className="px-3 py-2 font-medium hidden lg:table-cell">Risque</th>
                   <th className="px-3 py-2 font-medium">Relance</th>
+                  {canEdit && <th className="px-3 py-2 font-medium w-24">Actions</th>}
                 </tr>
               </thead>
               <tbody>
                 {suiviRows.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="px-3 py-5 text-center text-muted-foreground">Aucun résultat sur ce filtre</td>
+                    <td colSpan={canEdit ? 9 : 8} className="px-3 py-5 text-center text-muted-foreground">Aucun résultat sur ce filtre</td>
                   </tr>
                 ) : (
                   suiviRows.map((row) => (
@@ -1045,10 +1062,37 @@ export default function FormationsPage() {
                         )}
                       </td>
                       <td className="px-3 py-2 hidden lg:table-cell">
-                        {row.contactMissing ? (
-                          <Badge variant="secondary" className="text-[10px]">Contact incomplet</Badge>
+                        {editingInlinePhoneId === row.enrollment.id ? (
+                          <div className="space-y-1">
+                            <Input
+                              value={inlinePhones[row.enrollment.id] ?? ''}
+                              onChange={(e) => setInlinePhones(prev => ({ ...prev, [row.enrollment.id]: e.target.value }))}
+                              placeholder="Ex: +237 6XX XXX XXX"
+                              className="h-7 text-[11px]"
+                            />
+                            <div className="flex gap-1">
+                              <Button type="button" variant="default" size="sm" className="h-6 text-[10px]" onClick={() => saveInlinePhone(row.enrollment)}>
+                                Enregistrer
+                              </Button>
+                              <Button type="button" variant="ghost" size="sm" className="h-6 text-[10px]" onClick={() => setEditingInlinePhoneId(null)}>
+                                Annuler
+                              </Button>
+                            </div>
+                          </div>
+                        ) : row.contactMissing ? (
+                          <div className="space-y-1">
+                            <Badge variant="secondary" className="text-[10px]">Contact incomplet</Badge>
+                            <Button type="button" variant="outline" size="sm" className="h-6 text-[10px]" onClick={() => startInlinePhoneEdit(row.enrollment)}>
+                              Ajouter numéro
+                            </Button>
+                          </div>
                         ) : (
-                          <span className="text-muted-foreground">{row.enrollment.phone || row.enrollment.email}</span>
+                          <div className="space-y-0.5">
+                            <span className="text-muted-foreground block">{row.enrollment.phone || row.enrollment.email}</span>
+                            <Button type="button" variant="ghost" size="sm" className="h-6 px-0 text-[10px]" onClick={() => startInlinePhoneEdit(row.enrollment)}>
+                              Modifier numéro
+                            </Button>
+                          </div>
                         )}
                       </td>
                       <td className="px-3 py-2 hidden lg:table-cell">
@@ -1067,20 +1111,57 @@ export default function FormationsPage() {
                             <Button type="button" variant="outline" size="sm" className="h-7 text-[11px]" onClick={() => handleRelance('whatsapp', row)}>
                               Relancer
                             </Button>
-                            <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleRelance('whatsapp', row)}>
-                              <Phone className="h-3.5 w-3.5" />
-                            </Button>
-                            <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleRelance('sms', row)}>
-                              <MessageCircle className="h-3.5 w-3.5" />
-                            </Button>
-                            <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleRelance('mail', row)}>
-                              <Mail className="h-3.5 w-3.5" />
-                            </Button>
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button type="button" variant="ghost" size="icon" className="h-7 w-7" aria-label="Options de relance">
+                                  <MoreVertical className="h-3.5 w-3.5" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                <DropdownMenuItem onClick={() => handleRelance('whatsapp', row)}>
+                                  <Phone className="h-3.5 w-3.5 mr-2" />
+                                  WhatsApp
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => handleRelance('sms', row)}>
+                                  <MessageCircle className="h-3.5 w-3.5 mr-2" />
+                                  SMS
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => handleRelance('mail', row)}>
+                                  <Mail className="h-3.5 w-3.5 mr-2" />
+                                  Email
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
                           </div>
                         ) : (
                           <Badge variant="outline" className="text-[10px]">Pas de relance</Badge>
                         )}
                       </td>
+                      {canEdit && (
+                        <td className="px-3 py-2">
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button type="button" variant="ghost" size="icon" className="h-7 w-7" aria-label="Actions inscription">
+                                <MoreVertical className="h-3.5 w-3.5" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem onClick={() => openEditEnrollment(row.enrollment)}>
+                                <Pencil className="h-3.5 w-3.5 mr-2" />
+                                Modifier inscription
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => startInlinePhoneEdit(row.enrollment)}>
+                                <Phone className="h-3.5 w-3.5 mr-2" />
+                                {row.enrollment.phone ? 'Modifier numéro' : 'Ajouter numéro'}
+                              </DropdownMenuItem>
+                              <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => setDeleteEnrollmentId(row.enrollment.id)}>
+                                <Trash2 className="h-3.5 w-3.5 mr-2" />
+                                Supprimer inscription
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </td>
+                      )}
                     </tr>
                   ))
                 )}
