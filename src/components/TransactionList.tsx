@@ -110,7 +110,22 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
         entityType: 'transaction',
         entityId: targetId,
         details: `Suppression: ${tx.category} - ${tx.description}`,
-        previousData: JSON.stringify({ type: tx.type, amount: tx.amount, category: tx.category, date: tx.date, paymentMethod: tx.paymentMethod }),
+        previousData: JSON.stringify({
+          departmentId: tx.departmentId,
+          type: tx.type,
+          paymentMethod: tx.paymentMethod,
+          category: tx.category,
+          personName: tx.personName,
+          phoneNumber: tx.phoneNumber,
+          description: tx.description,
+          amount: tx.amount,
+          date: tx.date,
+          enrollmentDate: tx.enrollmentDate,
+          tranche: tx.tranche,
+          formationName: tx.formationName,
+          desiredTrainingDate: tx.desiredTrainingDate,
+          formationKit: tx.formationKit,
+        }),
         newData: '',
       });
     }

@@ -1,15 +1,15 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { getAuditIntegrityStatus, getAuditLog, markAuditEntriesSeen, buildHumanDiff, type AuditLogEntry } from "@/lib/auth";
-import { getStatsByPaymentMethod, getTransactions } from "@/lib/data";
+import { addAuditEntry, getAuditIntegrityStatus, getAuditLog, getCurrentUser, markAuditEntriesSeen, buildHumanDiff, type AuditLogEntry } from "@/lib/auth";
+import { addTransaction, getStatsByPaymentMethod, getTransactions, type PaymentMethod, type Transaction } from "@/lib/data";
 import { getTransactionTimestamp } from "@/lib/transactionDates";
 import { downloadAuditReport } from "@/lib/reports";
 import { useAuth } from "@/hooks/useAuth";
-import { Download, Search, FileText, PenLine, Trash2, Plus, Shield, ChevronLeft, ChevronRight, ShieldAlert, ShieldCheck } from "lucide-react";
+import { Download, Search, FileText, PenLine, Trash2, Plus, Shield, ChevronLeft, ChevronRight, ShieldAlert, ShieldCheck, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { useSearchParams } from "react-router-dom";
 
@@ -40,9 +40,10 @@ export default function AuditLogPage() {
   const [entries, setEntries] = useState<AuditLogEntry[]>([]);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
+  const [restoringId, setRestoringId] = useState<string | null>(null);
   const integrity = getAuditIntegrityStatus();
 
-  const txs = getTransactions();
+  const txs = useMemo(() => getTransactions(), [entries.length]);
 
   useEffect(() => {
     const log = getAuditLog();
@@ -74,21 +75,23 @@ export default function AuditLogPage() {
     );
   }
 
-  const filtered = entries
-    .filter(e => {
-      const q = search.toLowerCase();
-      return !q ||
-        e.username.toLowerCase().includes(q) ||
-        e.details.toLowerCase().includes(q) ||
-        actionLabels[e.action]?.toLowerCase().includes(q);
-    })
-    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  const filtered = useMemo(() => {
+    return entries
+      .filter(e => {
+        const q = search.toLowerCase();
+        return !q ||
+          e.username.toLowerCase().includes(q) ||
+          e.details.toLowerCase().includes(q) ||
+          actionLabels[e.action]?.toLowerCase().includes(q);
+      })
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  }, [entries, search]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const currentPage = Math.min(page, totalPages);
   const paginated = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
 
-  const duplicateCases = (() => {
+  const duplicateCases = useMemo(() => {
     const grouped = new Map<string, { count: number; person: string; amount: number; date: string; category: string }>();
     for (const tx of txs) {
       const day = new Date(getTransactionTimestamp(tx.date)).toISOString().slice(0, 10);
@@ -101,9 +104,9 @@ export default function AuditLogPage() {
       }
     }
     return [...grouped.values()].filter(item => item.count > 1).slice(0, 5);
-  })();
+  }, [txs]);
 
-  const unusualExpensesCases = (() => {
+  const unusualExpensesCases = useMemo(() => {
     const now = new Date();
     const monthExpenses = txs.filter((tx) => {
       if (tx.type !== "expense") return false;
@@ -112,20 +115,118 @@ export default function AuditLogPage() {
     });
     const avg = monthExpenses.length > 0 ? monthExpenses.reduce((sum, tx) => sum + tx.amount, 0) / monthExpenses.length : 0;
     return monthExpenses.filter(tx => avg > 0 && tx.amount >= avg * 2).slice(0, 5);
-  })();
+  }, [txs]);
 
-  const cashConcentrationCase = (() => {
+  const cashConcentrationCase = useMemo(() => {
     const stats = getStatsByPaymentMethod();
     const totalFlow = stats.reduce((sum, item) => sum + item.income + item.expenses, 0);
     const leader = [...stats].sort((a, b) => (b.income + b.expenses) - (a.income + a.expenses))[0];
     if (!leader || totalFlow <= 0) return null;
     const share = Math.round(((leader.income + leader.expenses) / totalFlow) * 100);
     return { leader, share };
-  })();
+  }, [entries.length]);
+
+  const restoredDeleteAuditIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const e of entries) {
+      if (e.action !== 'create' || e.entityType !== 'transaction') continue;
+      if (!e.newData) continue;
+      try {
+        const raw = JSON.parse(e.newData) as Record<string, unknown>;
+        const sourceId = typeof raw.restoredFromAuditId === 'string' ? raw.restoredFromAuditId : '';
+        if (sourceId) ids.add(sourceId);
+      } catch {
+        // Ignore malformed historical payloads
+      }
+    }
+    return ids;
+  }, [entries]);
 
   const handleExport = async () => {
     await downloadAuditReport();
     toast.success("Rapport d'audit généré");
+  };
+
+  const buildRestoredTransaction = (entry: AuditLogEntry): Omit<Transaction, 'id' | 'createdAt'> | null => {
+    let raw: Record<string, unknown> = {};
+    try {
+      raw = entry.previousData ? JSON.parse(entry.previousData) : {};
+    } catch {
+      raw = {};
+    }
+
+    const fallbackCategory = entry.details.includes('Suppression:')
+      ? entry.details.replace('Suppression:', '').trim().split(' - ')[0]?.trim() || 'Autres revenus'
+      : 'Autres revenus';
+
+    const fallbackDescription = entry.details.includes(' - ')
+      ? entry.details.split(' - ').slice(1).join(' - ').trim()
+      : `Restauration audit ${entry.id}`;
+
+    const amount = Number(raw.amount ?? 0);
+    if (!Number.isFinite(amount) || amount <= 0) return null;
+
+    const type = raw.type === 'expense' ? 'expense' : 'income';
+    const paymentMethod = (typeof raw.paymentMethod === 'string' ? raw.paymentMethod : 'especes') as PaymentMethod;
+
+    return {
+      departmentId: (typeof raw.departmentId === 'string' ? raw.departmentId : 'charges-entreprise') as Transaction['departmentId'],
+      type,
+      paymentMethod,
+      category: typeof raw.category === 'string' && raw.category.trim() ? raw.category : fallbackCategory,
+      personName: typeof raw.personName === 'string' && raw.personName.trim() ? raw.personName : 'Restauration audit',
+      phoneNumber: typeof raw.phoneNumber === 'string' && raw.phoneNumber.trim() ? raw.phoneNumber : undefined,
+      description: typeof raw.description === 'string' && raw.description.trim() ? raw.description : fallbackDescription,
+      amount,
+      date: typeof raw.date === 'string' && raw.date ? raw.date : entry.timestamp,
+    };
+  };
+
+  const handleRestore = (entry: AuditLogEntry) => {
+    if (restoringId) return;
+    if (restoredDeleteAuditIds.has(entry.id)) {
+      toast.info('Cette suppression a deja ete restauree.');
+      return;
+    }
+    const restored = buildRestoredTransaction(entry);
+    if (!restored) {
+      toast.error('Impossible de restaurer: donnees insuffisantes dans l\'audit.');
+      return;
+    }
+
+    const confirmed = window.confirm('Confirmer la restauration de cette transaction supprimee ?');
+    if (!confirmed) return;
+
+    setRestoringId(entry.id);
+    try {
+      const tx = addTransaction(restored);
+      const current = getCurrentUser();
+      if (current) {
+        addAuditEntry({
+          userId: current.id,
+          username: current.username,
+          action: 'create',
+          entityType: 'transaction',
+          entityId: tx.id,
+          details: `Restauration depuis audit #${entry.id}: ${tx.category} - ${tx.description}`,
+          previousData: '',
+          newData: JSON.stringify({
+            type: tx.type,
+            amount: tx.amount,
+            category: tx.category,
+            date: tx.date,
+            paymentMethod: tx.paymentMethod,
+            restoredFromAuditId: entry.id,
+          }),
+        });
+      }
+      setEntries(getAuditLog());
+      toast.success('Transaction restauree depuis le journal d\'audit');
+    } catch {
+      toast.error('Echec de restauration. Reessayez.');
+    } finally {
+      setRestoringId(null);
+    }
   };
 
   return (
@@ -224,6 +325,7 @@ export default function AuditLogPage() {
                     <TableHead>Action</TableHead>
                     <TableHead>Détails</TableHead>
                     <TableHead>Justification</TableHead>
+                    <TableHead>Restauration</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -251,6 +353,23 @@ export default function AuditLogPage() {
                           {entry.justification ? (
                             <span className="italic">{entry.justification}</span>
                           ) : '—'}
+                        </TableCell>
+                        <TableCell>
+                          {entry.entityType === 'transaction' && entry.action === 'delete' ? (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="h-7 gap-1"
+                              onClick={() => handleRestore(entry)}
+                              disabled={restoringId === entry.id || restoredDeleteAuditIds.has(entry.id)}
+                            >
+                              <RotateCcw className="h-3.5 w-3.5" />
+                              {restoredDeleteAuditIds.has(entry.id) ? 'Restauree' : 'Restaurer'}
+                            </Button>
+                          ) : (
+                            <span className="text-muted-foreground text-xs">—</span>
+                          )}
                         </TableCell>
                       </TableRow>
                     );
