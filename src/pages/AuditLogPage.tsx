@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { addAuditEntry, getAuditIntegrityStatus, getAuditLog, getCurrentUser, markAuditEntriesSeen, buildHumanDiff, type AuditLogEntry } from "@/lib/auth";
 import { addTransaction, getStatsByPaymentMethod, getTransactions, type PaymentMethod, type Transaction } from "@/lib/data";
+import { pushAllToSupabase } from "@/lib/sync";
 import { getTransactionTimestamp } from "@/lib/transactionDates";
 import { downloadAuditReport } from "@/lib/reports";
 import { useAuth } from "@/hooks/useAuth";
@@ -25,13 +26,20 @@ const actionLabels: Record<string, string> = {
   create: 'Création',
   update: 'Modification',
   delete: 'Suppression',
+  delete_transaction: 'Suppression',
 };
 
 const actionColors: Record<string, string> = {
   create: 'bg-success/10 text-success border-success/30',
   update: 'bg-warning/10 text-warning border-warning/30',
   delete: 'bg-destructive/10 text-destructive border-destructive/30',
+  delete_transaction: 'bg-destructive/10 text-destructive border-destructive/30',
 };
+
+function isDeleteLikeAction(action: string): boolean {
+  const normalized = action.toLowerCase();
+  return normalized === 'delete' || normalized === 'delete_transaction' || normalized.includes('delete') || normalized.includes('suppression');
+}
 
 function safeParseAuditPayload(value?: string): Record<string, unknown> {
   if (!value) return {};
@@ -215,7 +223,7 @@ export default function AuditLogPage() {
   };
 
   const isRestorableDelete = (entry: AuditLogEntry): boolean => {
-    if (entry.action !== 'delete') return false;
+    if (!isDeleteLikeAction(String(entry.action ?? ''))) return false;
     if (restoredDeleteAuditIds.has(entry.id)) return true;
     if (entry.entityType === 'transaction') return true;
 
@@ -225,7 +233,7 @@ export default function AuditLogPage() {
     return hasTxShape && detailsLooksLikeDelete;
   };
 
-  const handleRestore = (entry: AuditLogEntry) => {
+  const handleRestore = async (entry: AuditLogEntry) => {
     if (restoringId) return;
     if (restoredDeleteAuditIds.has(entry.id)) {
       toast.info('Cette suppression a deja ete restauree.');
@@ -243,6 +251,11 @@ export default function AuditLogPage() {
     setRestoringId(entry.id);
     try {
       const tx = addTransaction(restored);
+      await pushAllToSupabase();
+      const persisted = getTransactions().some(item => item.id === tx.id);
+      if (!persisted) {
+        throw new Error('Transaction non persistée après synchronisation');
+      }
       const current = getCurrentUser();
       if (current) {
         addAuditEntry({
@@ -373,8 +386,9 @@ export default function AuditLogPage() {
                 </TableHeader>
                 <TableBody>
                   {paginated.map(entry => {
-                    const Icon = actionIcons[entry.action] || FileText;
-                    const readableDetails = entry.action === 'update' && entry.previousData && entry.newData
+                    const normalizedAction = String(entry.action ?? '').toLowerCase();
+                    const Icon = actionIcons[normalizedAction] || FileText;
+                    const readableDetails = normalizedAction === 'update' && entry.previousData && entry.newData
                       ? buildHumanDiff(entry.previousData, entry.newData)
                       : entry.details;
                     return (
@@ -384,9 +398,9 @@ export default function AuditLogPage() {
                         </TableCell>
                         <TableCell className="text-sm font-medium">{entry.username}</TableCell>
                         <TableCell>
-                          <Badge variant="outline" className={actionColors[entry.action]}>
+                          <Badge variant="outline" className={actionColors[normalizedAction] || actionColors.delete}>
                             <Icon className="h-3 w-3 mr-1" />
-                            {actionLabels[entry.action]}
+                            {actionLabels[normalizedAction] || entry.action}
                           </Badge>
                         </TableCell>
                         <TableCell className="text-sm max-w-[350px]">
