@@ -33,6 +33,41 @@ const actionColors: Record<string, string> = {
   delete: 'bg-destructive/10 text-destructive border-destructive/30',
 };
 
+function safeParseAuditPayload(value?: string): Record<string, unknown> {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value);
+    if (typeof parsed === 'string') {
+      return safeParseAuditPayload(parsed);
+    }
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {};
+  } catch {
+    // Legacy fallback: attempt a best-effort conversion from single-quoted pseudo JSON.
+    const normalized = value.replace(/'/g, '"');
+    try {
+      const parsed = JSON.parse(normalized);
+      return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {};
+    } catch {
+      return {};
+    }
+  }
+}
+
+function parseAmountFromAuditDetails(details: string): number {
+  const withFcfa = details.match(/([\d\s.,]+)\s*FCFA/i);
+  if (withFcfa?.[1]) {
+    const normalized = withFcfa[1].replace(/\s/g, '').replace(/,/g, '.');
+    const amount = Number(normalized);
+    if (Number.isFinite(amount) && amount > 0) return amount;
+  }
+  const generic = details.match(/([\d\s]{3,})/);
+  if (generic?.[1]) {
+    const amount = Number(generic[1].replace(/\s/g, ''));
+    if (Number.isFinite(amount) && amount > 0) return amount;
+  }
+  return 0;
+}
+
 export default function AuditLogPage() {
   const { user } = useAuth();
   const [searchParams] = useSearchParams();
@@ -148,12 +183,9 @@ export default function AuditLogPage() {
   };
 
   const buildRestoredTransaction = (entry: AuditLogEntry): Omit<Transaction, 'id' | 'createdAt'> | null => {
-    let raw: Record<string, unknown> = {};
-    try {
-      raw = entry.previousData ? JSON.parse(entry.previousData) : {};
-    } catch {
-      raw = {};
-    }
+    const previousRaw = safeParseAuditPayload(entry.previousData);
+    const newRaw = safeParseAuditPayload(entry.newData);
+    const raw = Object.keys(previousRaw).length > 0 ? previousRaw : newRaw;
 
     const fallbackCategory = entry.details.includes('Suppression:')
       ? entry.details.replace('Suppression:', '').trim().split(' - ')[0]?.trim() || 'Autres revenus'
@@ -163,7 +195,7 @@ export default function AuditLogPage() {
       ? entry.details.split(' - ').slice(1).join(' - ').trim()
       : `Restauration audit ${entry.id}`;
 
-    const amount = Number(raw.amount ?? 0);
+    const amount = Number(raw.amount ?? parseAmountFromAuditDetails(entry.details));
     if (!Number.isFinite(amount) || amount <= 0) return null;
 
     const type = raw.type === 'expense' ? 'expense' : 'income';
@@ -180,6 +212,17 @@ export default function AuditLogPage() {
       amount,
       date: typeof raw.date === 'string' && raw.date ? raw.date : entry.timestamp,
     };
+  };
+
+  const isRestorableDelete = (entry: AuditLogEntry): boolean => {
+    if (entry.action !== 'delete') return false;
+    if (restoredDeleteAuditIds.has(entry.id)) return true;
+    if (entry.entityType === 'transaction') return true;
+
+    const payload = safeParseAuditPayload(entry.previousData);
+    const hasTxShape = Boolean(payload.type || payload.paymentMethod || payload.category || payload.amount || payload.date);
+    const detailsLooksLikeDelete = /suppression|delete/i.test(entry.details);
+    return hasTxShape && detailsLooksLikeDelete;
   };
 
   const handleRestore = (entry: AuditLogEntry) => {
@@ -355,7 +398,7 @@ export default function AuditLogPage() {
                           ) : '—'}
                         </TableCell>
                         <TableCell>
-                          {entry.entityType === 'transaction' && entry.action === 'delete' ? (
+                          {isRestorableDelete(entry) ? (
                             <Button
                               type="button"
                               size="sm"
