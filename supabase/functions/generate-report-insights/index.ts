@@ -92,8 +92,7 @@ async function getRoleFromJwt(request: Request): Promise<string | null> {
     const { data, error } = await client.auth.getUser();
     if (error || !data?.user) return null;
     const appRole = data.user.app_metadata?.role;
-    const userRole = data.user.user_metadata?.role;
-    const role = typeof appRole === "string" ? appRole : (typeof userRole === "string" ? userRole : null);
+    const role = typeof appRole === "string" ? appRole : null;
     return role ? role.toLowerCase() : null;
   } catch {
     return null;

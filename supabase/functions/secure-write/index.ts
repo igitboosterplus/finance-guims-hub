@@ -60,11 +60,9 @@ function getAllowedRoles(): string[] {
   return roles.length > 0 ? roles : ["superadmin", "admin"];
 }
 
-function getRoleFromUser(user: { app_metadata?: Record<string, unknown>; user_metadata?: Record<string, unknown> }): string {
+function getRoleFromUser(user: { app_metadata?: Record<string, unknown> }): string {
   const appRole = user.app_metadata?.role;
   if (typeof appRole === "string" && appRole) return appRole.toLowerCase();
-  const userRole = user.user_metadata?.role;
-  if (typeof userRole === "string" && userRole) return userRole.toLowerCase();
   return "";
 }
 

@@ -110,6 +110,7 @@ const PASSWORD_KDF = 'pbkdf2';
 const PASSWORD_KDF_ITERATIONS = 120000;
 const PASSWORD_SALT_BYTES = 16;
 const AUTH_EMAIL_DOMAIN = String(import.meta.env.VITE_SUPABASE_AUTH_EMAIL_DOMAIN || 'auth.guims.local').trim();
+const AUTH_ROLE_CLAIM_FUNCTION = String(import.meta.env.VITE_AUTH_ROLE_CLAIM_FUNCTION_NAME || 'provision-auth-claim').trim();
 
 function normalizeUsername(username: string): string {
   return username.trim().toLowerCase();
@@ -122,6 +123,25 @@ function usernameToAuthEmail(username: string): string {
 function authEmailToUsername(email: string): string {
   const [raw] = String(email || '').split('@');
   return normalizeUsername(raw || '');
+}
+
+async function provisionSupabaseRoleClaim(username: string): Promise<void> {
+  if (!isSupabaseConfigured()) return;
+  const supabase = getSupabase() || initSupabase();
+  if (!supabase) return;
+
+  try {
+    const { error } = await supabase.functions.invoke(AUTH_ROLE_CLAIM_FUNCTION, {
+      body: {
+        username: normalizeUsername(username),
+      },
+    });
+    if (error) {
+      console.warn('[Auth] Role claim provisioning failed:', error.message || error);
+    }
+  } catch (error) {
+    console.warn('[Auth] Role claim provisioning failed:', error);
+  }
 }
 
 function bytesToHex(bytes: Uint8Array): string {
@@ -355,6 +375,9 @@ export async function login(username: string, password: string): Promise<{ succe
     saveUsers(users);
   }
 
+  // Ensure JWT app_metadata.role mirrors approved role from users table.
+  await provisionSupabaseRoleClaim(user.username);
+
   localStorage.setItem(SESSION_KEY, JSON.stringify({ userId: user.id, loginAt: new Date().toISOString() }));
   return { success: true, user };
 }
@@ -380,7 +403,7 @@ export async function syncSessionFromSupabase(): Promise<void> {
     return;
   }
 
-  const metaUsername = data.user.user_metadata?.username;
+  const metaUsername = data.user.app_metadata?.username;
   const username = typeof metaUsername === 'string' && metaUsername.trim()
     ? normalizeUsername(metaUsername)
     : authEmailToUsername(data.user.email || '');
@@ -396,6 +419,8 @@ export async function syncSessionFromSupabase(): Promise<void> {
     localStorage.removeItem(SESSION_KEY);
     return;
   }
+
+  await provisionSupabaseRoleClaim(appUser.username);
 
   localStorage.setItem(SESSION_KEY, JSON.stringify({ userId: appUser.id, loginAt: new Date().toISOString() }));
 }

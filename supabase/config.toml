@@ -3,3 +3,6 @@ verify_jwt = false
 
 [functions.secure-write]
 verify_jwt = true
+
+[functions.provision-auth-claim]
+verify_jwt = true
