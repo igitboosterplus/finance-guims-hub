@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -43,6 +43,8 @@ export default function LoginPage() {
   const { refresh } = useAuth();
   const [activeTab, setActiveTab] = useState("login");
   const [isFirstSetup, setIsFirstSetup] = useState(() => getAllUsers().length === 0);
+  const publicRegistrationEnabled = String(import.meta.env.VITE_ENABLE_PUBLIC_REGISTRATION || 'false').toLowerCase() === 'true';
+  const canRegister = isFirstSetup || publicRegistrationEnabled;
 
   // Login state
   const [loginUsername, setLoginUsername] = useState("");
@@ -58,6 +60,12 @@ export default function LoginPage() {
   const [regLoading, setRegLoading] = useState(false);
   const [showRegPwd, setShowRegPwd] = useState(false);
   const [regSuccess, setRegSuccess] = useState(false);
+
+  useEffect(() => {
+    if (!canRegister && activeTab === 'register') {
+      setActiveTab('login');
+    }
+  }, [activeTab, canRegister]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -78,6 +86,10 @@ export default function LoginPage() {
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canRegister) {
+      toast.error("Inscription publique désactivée");
+      return;
+    }
     if (!regUsername.trim() || !regPassword || !regDisplayName.trim()) {
       toast.error("Veuillez remplir tous les champs");
       return;
@@ -133,9 +145,11 @@ export default function LoginPage() {
                 <TabsTrigger value="login" className="flex-1 gap-1.5">
                   <LogIn className="h-3.5 w-3.5" /> Connexion
                 </TabsTrigger>
-                <TabsTrigger value="register" className="flex-1 gap-1.5">
-                  <UserPlus className="h-3.5 w-3.5" /> Créer un compte
-                </TabsTrigger>
+                {canRegister && (
+                  <TabsTrigger value="register" className="flex-1 gap-1.5">
+                    <UserPlus className="h-3.5 w-3.5" /> Créer un compte
+                  </TabsTrigger>
+                )}
               </TabsList>
             </CardHeader>
             <CardContent>

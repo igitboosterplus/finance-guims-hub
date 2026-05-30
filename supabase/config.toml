@@ -1,2 +1,5 @@
 [functions.generate-report-insights]
 verify_jwt = false
+
+[functions.secure-write]
+verify_jwt = true

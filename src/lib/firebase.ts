@@ -127,20 +127,15 @@ CREATE TABLE audit_log (
   data JSONB
 );
 
--- Désactiver RLS pour commencer (mode test)
+-- Activer RLS (mode strict)
 ALTER TABLE transactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE employees ENABLE ROW LEVEL SECURITY;
 ALTER TABLE stock_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE stock_movements ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit_log ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "Allow all" ON transactions FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all" ON users FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all" ON employees FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all" ON stock_items FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all" ON stock_movements FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all" ON audit_log FOR ALL USING (true) WITH CHECK (true);
+-- IMPORTANT: ne créez PAS de policy permissive "Allow all" en production.
+-- Appliquez la migration stricte: supabase/migrations/20260530_security_rls_strict.sql
 
 -- ==================== NOUVELLES TABLES ====================
 
@@ -166,10 +161,6 @@ ALTER TABLE formations_catalog ENABLE ROW LEVEL SECURITY;
 ALTER TABLE payment_plans ENABLE ROW LEVEL SECURITY;
 ALTER TABLE stock_kits ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Allow all" ON formations_catalog FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all" ON payment_plans FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all" ON stock_kits FOR ALL USING (true) WITH CHECK (true);
-
 CREATE TABLE enrollments (
   id UUID PRIMARY KEY,
   data JSONB,
@@ -177,7 +168,6 @@ CREATE TABLE enrollments (
 );
 
 ALTER TABLE enrollments ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow all" ON enrollments FOR ALL USING (true) WITH CHECK (true);
 
 -- ==================== TABLE SUPPRESSIONS DEFINITIVES ====================
 -- Cette table est CRITIQUE. Elle garantit que tout élément supprimé ne réapparaît
@@ -190,6 +180,5 @@ CREATE TABLE deleted_ids (
 );
 
 ALTER TABLE deleted_ids ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Allow all" ON deleted_ids FOR ALL USING (true) WITH CHECK (true);
 
 */

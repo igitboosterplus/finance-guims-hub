@@ -13,11 +13,44 @@
 //   4. Le localStorage n est JAMAIS une source pour reinjecter des donnees dans Supabase.
 
 type TableName = typeof TABLES[keyof typeof TABLES];
+type CriticalTableName = typeof TABLES.transactions | typeof TABLES.users | typeof TABLES.auditLog | typeof TABLES.superAudit;
 
 const STOCK_DEPTS = ['gaba', 'guims-academy', 'guims-educ', 'digitboosterplus'] as const;
+const SECURE_WRITE_FUNCTION = (import.meta.env.VITE_SECURE_WRITE_FUNCTION_NAME || 'secure-write').trim();
+const ALLOW_INSECURE_DIRECT_SYNC = String(import.meta.env.VITE_ALLOW_INSECURE_DIRECT_SYNC || 'false').toLowerCase() === 'true';
+const CRITICAL_TABLES = new Set<CriticalTableName>([
+  TABLES.transactions,
+  TABLES.users,
+  TABLES.auditLog,
+  TABLES.superAudit,
+]);
 
 function stockStorageKey(dept: string, suffix: string): string {
   return `${dept === 'gaba' ? 'gaba' : dept}-${suffix}`;
+}
+
+function isCriticalTable(tableName: TableName): tableName is CriticalTableName {
+  return CRITICAL_TABLES.has(tableName as CriticalTableName);
+}
+
+async function invokeSecureWrite(body: Record<string, unknown>): Promise<boolean> {
+  const sb = getSupabase();
+  if (!sb) return false;
+  try {
+    const { data, error } = await sb.functions.invoke(SECURE_WRITE_FUNCTION, { body });
+    if (error) {
+      console.error('[Sync] Secure write invoke error:', error);
+      return false;
+    }
+    if (data && typeof data === 'object' && 'success' in data && data.success === false) {
+      console.error('[Sync] Secure write rejected:', data);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.error('[Sync] Secure write failed:', e);
+    return false;
+  }
 }
 
 // ==================== DELETED IDS (Supabase-persisted) ====================
@@ -68,6 +101,30 @@ async function persistDeleteToSupabase(tableName: string, itemId: string): Promi
   const sb = getSupabase();
   if (!sb) return;
   try {
+    if (isCriticalTable(tableName as TableName)) {
+      const tombstoneOk = await invokeSecureWrite({
+        operation: 'upsert',
+        table: 'deleted_ids',
+        row: {
+          table_name: tableName,
+          item_id: itemId,
+          deleted_at: new Date().toISOString(),
+        },
+      });
+      const deleteOk = await invokeSecureWrite({
+        operation: 'delete_by_id',
+        table: tableName,
+        id: itemId,
+      });
+      if (tombstoneOk && deleteOk) {
+        cloudDeletedIds.add(`${tableName}:${itemId}`);
+        return;
+      }
+      if (!ALLOW_INSECURE_DIRECT_SYNC) {
+        throw new Error('Secure delete required but unavailable');
+      }
+    }
+
     await sb.from('deleted_ids').upsert(
       { table_name: tableName, item_id: itemId, deleted_at: new Date().toISOString() },
       { onConflict: 'table_name,item_id' }
@@ -203,6 +260,23 @@ export async function pullAllFromSupabase(): Promise<{ success: boolean; error?:
 async function pushArrayToSupabase(tableName: TableName, items: { id: string }[]) {
   const sb = getSupabase();
   if (!sb || items.length === 0) return;
+
+  if (isCriticalTable(tableName)) {
+    const ok = await invokeSecureWrite({
+      operation: 'upsert_collection',
+      table: tableName,
+      rows: items.map(item => ({ id: item.id, data: item })),
+    });
+    if (!ok) {
+      if (!ALLOW_INSECURE_DIRECT_SYNC) {
+        throw new Error(`Secure write rejected for critical table: ${tableName}`);
+      }
+      console.warn(`[Sync] Falling back to direct sync for critical table ${tableName} because VITE_ALLOW_INSECURE_DIRECT_SYNC=true`);
+    } else {
+      return;
+    }
+  }
+
   const rows = items.map(item => ({ id: item.id, data: item }));
   const { error } = await sb.from(tableName).upsert(rows, { onConflict: "id" });
   if (error) throw error;
@@ -283,6 +357,23 @@ export async function purgeAllSupabase(): Promise<void> {
 export function syncSetDoc(tableName: TableName, item: { id: string }) {
   const sb = getSupabase();
   if (!sb) return;
+
+  if (isCriticalTable(tableName)) {
+    invokeSecureWrite({
+      operation: 'upsert',
+      table: tableName,
+      row: { id: item.id, data: item },
+    }).then((ok) => {
+      if (!ok && ALLOW_INSECURE_DIRECT_SYNC) {
+        sb.from(tableName).upsert({ id: item.id, data: item }, { onConflict: "id" })
+          .then(({ error }) => {
+            if (error) console.error(`[Sync] Erreur ecriture ${tableName}/${item.id}:`, error);
+          });
+      }
+    });
+    return;
+  }
+
   sb.from(tableName).upsert({ id: item.id, data: item }, { onConflict: "id" })
     .then(({ error }) => {
       if (error) console.error(`[Sync] Erreur ecriture ${tableName}/${item.id}:`, error);
