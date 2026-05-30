@@ -14,7 +14,7 @@ import { getAllUsers, approveUser, rejectUser, deleteUser, createUser, resetUser
 import { departments, STOCK_ENABLED_DEPARTMENT_IDS } from "@/lib/data";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
-import { UserPlus, Check, X, Trash2, KeyRound, Shield, ShieldCheck, Settings2, Building2, Plus, PenLine, Download, Upload, Package, LineChart, Sparkles, CreditCard, GraduationCap, FileText, RotateCcw } from "lucide-react";
+import { UserPlus, Users, Check, X, Trash2, KeyRound, Shield, ShieldCheck, Settings2, Building2, Plus, PenLine, Download, Upload, Package, LineChart, Sparkles, CreditCard, GraduationCap, FileText, RotateCcw } from "lucide-react";
 
 type ActionPermissionKey = keyof Omit<UserPermissions, 'departments' | 'stockDepartments'>;
 
