@@ -6,3 +6,6 @@ verify_jwt = true
 
 [functions.provision-auth-claim]
 verify_jwt = true
+
+[functions.auth-admin-user]
+verify_jwt = true

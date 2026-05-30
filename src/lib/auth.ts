@@ -111,6 +111,7 @@ const PASSWORD_KDF_ITERATIONS = 120000;
 const PASSWORD_SALT_BYTES = 16;
 const AUTH_EMAIL_DOMAIN = String(import.meta.env.VITE_SUPABASE_AUTH_EMAIL_DOMAIN || 'auth.guims.local').trim();
 const AUTH_ROLE_CLAIM_FUNCTION = String(import.meta.env.VITE_AUTH_ROLE_CLAIM_FUNCTION_NAME || 'provision-auth-claim').trim();
+const AUTH_ADMIN_FUNCTION = String(import.meta.env.VITE_AUTH_ADMIN_FUNCTION_NAME || 'auth-admin-user').trim();
 
 function normalizeUsername(username: string): string {
   return username.trim().toLowerCase();
@@ -141,6 +142,36 @@ async function provisionSupabaseRoleClaim(username: string): Promise<void> {
     }
   } catch (error) {
     console.warn('[Auth] Role claim provisioning failed:', error);
+  }
+}
+
+async function invokeAuthAdminFunction(body: Record<string, unknown>): Promise<{ success: boolean; error?: string }> {
+  if (!isSupabaseConfigured()) {
+    return { success: false, error: 'Supabase non configuré' };
+  }
+
+  const supabase = getSupabase() || initSupabase();
+  if (!supabase) {
+    return { success: false, error: 'Supabase non initialisé' };
+  }
+
+  try {
+    const { data, error } = await supabase.functions.invoke(AUTH_ADMIN_FUNCTION, { body });
+    if (error) {
+      return { success: false, error: error.message || 'Erreur fonction auth admin' };
+    }
+
+    if (data && typeof data === 'object' && 'success' in data && data.success === false) {
+      const maybeError = (data as { error?: string }).error;
+      return { success: false, error: maybeError || 'Opération auth admin refusée' };
+    }
+
+    return { success: true };
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : 'Erreur auth admin inattendue',
+    };
   }
 }
 
@@ -471,15 +502,35 @@ export async function createUser(username: string, password: string, displayName
     return { success: false, error: 'Seul un Super Admin peut créer un autre Super Admin' };
   }
 
-  const hash = await hashPassword(password);
   const effectiveRole: UserRole = isFirstAccount ? 'superadmin' : role;
+  const approved = isFirstAccount || currentUser?.role === 'superadmin';
+
+  if (isSupabaseConfigured() && !isFirstAccount) {
+    const authCreate = await invokeAuthAdminFunction({
+      operation: 'create_user',
+      username: cleanUsername,
+      password,
+      displayName,
+      role: effectiveRole,
+      approved,
+      email: usernameToAuthEmail(cleanUsername),
+    });
+    if (!authCreate.success) {
+      return { success: false, error: authCreate.error || 'Création compte Supabase impossible' };
+    }
+  }
+
+  const hash = (isSupabaseConfigured() && !isFirstAccount)
+    ? 'supabase$managed'
+    : await hashPassword(password);
+
   const newUser: User = {
     id: crypto.randomUUID(),
     username: cleanUsername,
     passwordHash: hash,
     displayName,
     role: effectiveRole,
-    approved: isFirstAccount || currentUser?.role === 'superadmin',
+    approved,
     createdAt: new Date().toISOString(),
   };
   users.push(newUser);
@@ -521,7 +572,20 @@ export async function resetUserPassword(userId: string, newPassword: string): Pr
   const users = getUsers();
   const idx = users.findIndex(u => u.id === userId);
   if (idx !== -1) {
-    users[idx].passwordHash = await hashPassword(newPassword);
+    if (isSupabaseConfigured()) {
+      const authReset = await invokeAuthAdminFunction({
+        operation: 'reset_password',
+        username: users[idx].username,
+        newPassword,
+        email: usernameToAuthEmail(users[idx].username),
+      });
+      if (!authReset.success) {
+        return { success: false, error: authReset.error || 'Réinitialisation Supabase impossible' };
+      }
+      users[idx].passwordHash = 'supabase$managed';
+    } else {
+      users[idx].passwordHash = await hashPassword(newPassword);
+    }
     saveUsers(users);
     return { success: true };
   }
@@ -560,6 +624,21 @@ export async function changePassword(userId: string, currentPassword: string, ne
   const users = getUsers();
   const idx = users.findIndex(u => u.id === userId);
   if (idx === -1) return { success: false, error: 'Utilisateur introuvable' };
+
+  if (isSupabaseConfigured()) {
+    const supabase = getSupabase() || initSupabase();
+    if (!supabase) return { success: false, error: 'Supabase non initialisé' };
+
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    if (error) {
+      return { success: false, error: error.message || 'Impossible de changer le mot de passe Supabase' };
+    }
+
+    users[idx].passwordHash = 'supabase$managed';
+    saveUsers(users);
+    return { success: true };
+  }
+
   const ok = await verifyPassword(currentPassword, users[idx].passwordHash);
   if (!ok) return { success: false, error: 'Mot de passe actuel incorrect' };
   users[idx].passwordHash = await hashPassword(newPassword);
