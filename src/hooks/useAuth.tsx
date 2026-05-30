@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
-import { getCurrentUser, initDefaultSuperAdmin, logout as doLogout, type User } from '@/lib/auth';
+import { getCurrentUser, initDefaultSuperAdmin, logout as doLogout, syncSessionFromSupabase, type User } from '@/lib/auth';
 import { pullAllFromSupabase } from '@/lib/sync';
 import { isSupabaseConfigured } from '@/lib/firebase';
 import { migrateInscriptionInstallments, cleanupOrphanedInstallments } from '@/lib/stock';
@@ -37,6 +37,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const result = await pullAllFromSupabase();
       if (result.success) console.log("[Sync] Auto-sync OK");
       else console.warn("[Sync] Auto-sync échouée:", result.error);
+      await syncSessionFromSupabase();
+      refresh();
     } catch (err) {
       console.error("[Sync] Erreur auto-sync:", err);
     }
@@ -60,6 +62,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const result = await pullAllFromSupabase();
           if (result.success) console.log("[Auth] Sync Supabase OK");
           else console.warn("[Auth] Sync échouée:", result.error);
+          await syncSessionFromSupabase();
         } catch (err) {
           console.error("[Auth] Erreur sync:", err);
         }

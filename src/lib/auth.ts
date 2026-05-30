@@ -1,7 +1,7 @@
 export type UserRole = 'superadmin' | 'admin';
 
 import { syncFullCollection, syncDeleteDoc } from './sync';
-import { TABLES } from './firebase';
+import { getSupabase, initSupabase, isSupabaseConfigured, TABLES } from './firebase';
 import { STOCK_ENABLED_DEPARTMENT_IDS } from './data';
 
 export interface UserPermissions {
@@ -109,9 +109,19 @@ const AUDIT_KEY = 'finance-audit-log';
 const PASSWORD_KDF = 'pbkdf2';
 const PASSWORD_KDF_ITERATIONS = 120000;
 const PASSWORD_SALT_BYTES = 16;
+const AUTH_EMAIL_DOMAIN = String(import.meta.env.VITE_SUPABASE_AUTH_EMAIL_DOMAIN || 'auth.guims.local').trim();
 
 function normalizeUsername(username: string): string {
   return username.trim().toLowerCase();
+}
+
+function usernameToAuthEmail(username: string): string {
+  return `${normalizeUsername(username)}@${AUTH_EMAIL_DOMAIN}`;
+}
+
+function authEmailToUsername(email: string): string {
+  const [raw] = String(email || '').split('@');
+  return normalizeUsername(raw || '');
 }
 
 function bytesToHex(bytes: Uint8Array): string {
@@ -288,23 +298,106 @@ export async function login(username: string, password: string): Promise<{ succe
   const user = users.find(u => normalizeUsername(u.username) === normalized);
   if (!user) return { success: false, error: 'Nom d\'utilisateur inconnu' };
 
-  const ok = await verifyPassword(password, user.passwordHash);
-  if (!ok) return { success: false, error: 'Mot de passe incorrect' };
+  if (!user.approved) return { success: false, error: 'Votre compte est en attente d\'approbation par le Super Admin' };
+
+  const hasLegacyHash = !user.passwordHash.startsWith(`${PASSWORD_KDF}$`);
+
+  if (isSupabaseConfigured()) {
+    const supabase = getSupabase() || initSupabase();
+    if (!supabase) {
+      return { success: false, error: 'Supabase non initialisé' };
+    }
+
+    const email = usernameToAuthEmail(user.username);
+    let signInError: string | null = null;
+
+    const signInAttempt = await supabase.auth.signInWithPassword({ email, password });
+    if (signInAttempt.error) {
+      signInError = signInAttempt.error.message;
+
+      // Backward-compatible migration path:
+      // if the user has a valid local password but no Supabase account yet,
+      // create auth identity and retry sign in.
+      const localPasswordOk = await verifyPassword(password, user.passwordHash);
+      if (!localPasswordOk) {
+        return { success: false, error: 'Mot de passe incorrect' };
+      }
+
+      const signUpResult = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            username: user.username,
+            displayName: user.displayName,
+            role: user.role,
+          },
+        },
+      });
+
+      if (signUpResult.error && !/already registered|already been registered/i.test(signUpResult.error.message)) {
+        return { success: false, error: `Erreur provisionnement Supabase: ${signUpResult.error.message}` };
+      }
+
+      const secondAttempt = await supabase.auth.signInWithPassword({ email, password });
+      if (secondAttempt.error) {
+        return { success: false, error: signInError || secondAttempt.error.message || 'Connexion Supabase impossible' };
+      }
+    }
+  } else {
+    const ok = await verifyPassword(password, user.passwordHash);
+    if (!ok) return { success: false, error: 'Mot de passe incorrect' };
+  }
 
   // Transparent migration: upgrade legacy hashes after a successful login.
-  if (!user.passwordHash.startsWith(`${PASSWORD_KDF}$`)) {
+  if (hasLegacyHash) {
     user.passwordHash = await hashPassword(password);
     saveUsers(users);
   }
-
-  if (!user.approved) return { success: false, error: 'Votre compte est en attente d\'approbation par le Super Admin' };
 
   localStorage.setItem(SESSION_KEY, JSON.stringify({ userId: user.id, loginAt: new Date().toISOString() }));
   return { success: true, user };
 }
 
 export function logout() {
+  if (isSupabaseConfigured()) {
+    const supabase = getSupabase() || initSupabase();
+    if (supabase) {
+      supabase.auth.signOut().catch(err => console.warn('[Auth] Supabase signOut failed:', err));
+    }
+  }
   localStorage.removeItem(SESSION_KEY);
+}
+
+export async function syncSessionFromSupabase(): Promise<void> {
+  if (!isSupabaseConfigured()) return;
+  const supabase = getSupabase() || initSupabase();
+  if (!supabase) return;
+
+  const { data, error } = await supabase.auth.getUser();
+  if (error || !data?.user) {
+    localStorage.removeItem(SESSION_KEY);
+    return;
+  }
+
+  const metaUsername = data.user.user_metadata?.username;
+  const username = typeof metaUsername === 'string' && metaUsername.trim()
+    ? normalizeUsername(metaUsername)
+    : authEmailToUsername(data.user.email || '');
+
+  if (!username) {
+    localStorage.removeItem(SESSION_KEY);
+    return;
+  }
+
+  const users = getUsers();
+  const appUser = users.find(u => normalizeUsername(u.username) === username);
+  if (!appUser || !appUser.approved) {
+    localStorage.removeItem(SESSION_KEY);
+    return;
+  }
+
+  localStorage.setItem(SESSION_KEY, JSON.stringify({ userId: appUser.id, loginAt: new Date().toISOString() }));
 }
 
 export function getCurrentUser(): User | null {
