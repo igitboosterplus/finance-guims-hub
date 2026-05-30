@@ -111,15 +111,6 @@ export default function AuditLogPage() {
     }
   }, [focus]);
 
-  if (!user || !canViewAudit) {
-    return (
-      <div className="text-center py-12 text-muted-foreground">
-        <Shield className="h-12 w-12 mx-auto mb-4" />
-        <p className="text-lg">Accès réservé au Super Admin</p>
-      </div>
-    );
-  }
-
   const filtered = useMemo(() => {
     return entries
       .filter(e => {
@@ -290,6 +281,15 @@ export default function AuditLogPage() {
       setRestoringId(null);
     }
   };
+
+  if (!user || !canViewAudit) {
+    return (
+      <div className="text-center py-12 text-muted-foreground">
+        <Shield className="h-12 w-12 mx-auto mb-4" />
+        <p className="text-lg">Accès réservé au Super Admin</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
