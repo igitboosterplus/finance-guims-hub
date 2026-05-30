@@ -112,6 +112,7 @@ const PASSWORD_SALT_BYTES = 16;
 const AUTH_EMAIL_DOMAIN = String(import.meta.env.VITE_SUPABASE_AUTH_EMAIL_DOMAIN || 'auth.guims.local').trim();
 const AUTH_ROLE_CLAIM_FUNCTION = String(import.meta.env.VITE_AUTH_ROLE_CLAIM_FUNCTION_NAME || 'provision-auth-claim').trim();
 const AUTH_ADMIN_FUNCTION = String(import.meta.env.VITE_AUTH_ADMIN_FUNCTION_NAME || 'auth-admin-user').trim();
+const ENABLE_LEGACY_LOGIN_MIGRATION = String(import.meta.env.VITE_ENABLE_LEGACY_LOGIN_MIGRATION || 'false').toLowerCase() === 'true';
 
 function normalizeUsername(username: string): string {
   return username.trim().toLowerCase();
@@ -351,7 +352,8 @@ export async function login(username: string, password: string): Promise<{ succe
 
   if (!user.approved) return { success: false, error: 'Votre compte est en attente d\'approbation par le Super Admin' };
 
-  const hasLegacyHash = !user.passwordHash.startsWith(`${PASSWORD_KDF}$`);
+  const isSupabaseManagedHash = user.passwordHash === 'supabase$managed';
+  const hasLegacyHash = !isSupabaseManagedHash && !user.passwordHash.startsWith(`${PASSWORD_KDF}$`);
 
   if (isSupabaseConfigured()) {
     const supabase = getSupabase() || initSupabase();
@@ -366,33 +368,38 @@ export async function login(username: string, password: string): Promise<{ succe
     if (signInAttempt.error) {
       signInError = signInAttempt.error.message;
 
-      // Backward-compatible migration path:
-      // if the user has a valid local password but no Supabase account yet,
-      // create auth identity and retry sign in.
-      const localPasswordOk = await verifyPassword(password, user.passwordHash);
-      if (!localPasswordOk) {
-        return { success: false, error: 'Mot de passe incorrect' };
-      }
+      if (ENABLE_LEGACY_LOGIN_MIGRATION && !isSupabaseManagedHash) {
+        // Controlled migration mode only: allow one-time bridge from local hash.
+        const localPasswordOk = await verifyPassword(password, user.passwordHash);
+        if (!localPasswordOk) {
+          return { success: false, error: 'Mot de passe incorrect' };
+        }
 
-      const signUpResult = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          data: {
-            username: user.username,
-            displayName: user.displayName,
-            role: user.role,
+        const signUpResult = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            data: {
+              username: user.username,
+              displayName: user.displayName,
+              role: user.role,
+            },
           },
-        },
-      });
+        });
 
-      if (signUpResult.error && !/already registered|already been registered/i.test(signUpResult.error.message)) {
-        return { success: false, error: `Erreur provisionnement Supabase: ${signUpResult.error.message}` };
-      }
+        if (signUpResult.error && !/already registered|already been registered/i.test(signUpResult.error.message)) {
+          return { success: false, error: `Erreur provisionnement Supabase: ${signUpResult.error.message}` };
+        }
 
-      const secondAttempt = await supabase.auth.signInWithPassword({ email, password });
-      if (secondAttempt.error) {
-        return { success: false, error: signInError || secondAttempt.error.message || 'Connexion Supabase impossible' };
+        const secondAttempt = await supabase.auth.signInWithPassword({ email, password });
+        if (secondAttempt.error) {
+          return { success: false, error: signInError || secondAttempt.error.message || 'Connexion Supabase impossible' };
+        }
+      } else {
+        return {
+          success: false,
+          error: 'Connexion Supabase impossible. Si le compte est legacy, demander un reset de mot de passe admin.',
+        };
       }
     }
   } else {
@@ -400,8 +407,12 @@ export async function login(username: string, password: string): Promise<{ succe
     if (!ok) return { success: false, error: 'Mot de passe incorrect' };
   }
 
-  // Transparent migration: upgrade legacy hashes after a successful login.
-  if (hasLegacyHash) {
+  // Supabase is now source of truth for password verification when configured.
+  if (isSupabaseConfigured()) {
+    user.passwordHash = 'supabase$managed';
+    saveUsers(users);
+  } else if (hasLegacyHash) {
+    // Local-only mode: transparently upgrade legacy hashes.
     user.passwordHash = await hashPassword(password);
     saveUsers(users);
   }
