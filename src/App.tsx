@@ -52,7 +52,7 @@ function StockGuard({ departmentId, children }: { departmentId: string; children
   return <>{children}</>;
 }
 
-function PermGuard({ perm, children }: { perm: 'canManageUsers' | 'canViewAudit' | 'canViewSuperAudit' | 'canCreateTransaction'; children: React.ReactNode }) {
+function PermGuard({ perm, children }: { perm: 'canManageUsers' | 'canViewAudit' | 'canViewBalanceDelta' | 'canViewSuperAudit' | 'canCreateTransaction'; children: React.ReactNode }) {
   const { user } = useAuth();
   if (!hasPermission(user, perm)) return <Navigate to="/" replace />;
   return <>{children}</>;
@@ -85,7 +85,7 @@ const App = () => (
                     <Route path="/formations" element={<FormationsPage />} />
                     <Route path="/paiements" element={<PaymentTrackingPage />} />
                     <Route path="/ai-comptabilite" element={<PermGuard perm="canCreateTransaction"><AIAccountingChatPage /></PermGuard>} />
-                    <Route path="/ecart-solde" element={<PermGuard perm="canViewAudit"><BalanceDeltaPage /></PermGuard>} />
+                    <Route path="/ecart-solde" element={<PermGuard perm="canViewBalanceDelta"><BalanceDeltaPage /></PermGuard>} />
                     <Route path="*" element={<NotFound />} />
                   </Routes>
                 </Layout>

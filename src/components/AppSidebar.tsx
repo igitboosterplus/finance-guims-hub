@@ -28,6 +28,7 @@ export function AppSidebar() {
   const pendingUsers = isSuperAdmin ? getAllUsers().filter(u => !u.approved).length : 0;
   const accessibleDepts = departments.filter(d => hasDepartmentAccess(user, d.id));
   const canCreate = hasPermission(user, 'canCreateTransaction');
+  const canViewBalanceDelta = hasPermission(user, 'canViewBalanceDelta');
 
   return (
     <Sidebar collapsible="icon">
@@ -231,79 +232,87 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {isSuperAdmin && (
+        {(isSuperAdmin || canViewBalanceDelta) && (
           <SidebarGroup>
             <SidebarGroupLabel className="text-sidebar-foreground/40 text-[10px] uppercase tracking-widest font-semibold">
               Administration
             </SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
-                <SidebarMenuItem>
-                  <SidebarMenuButton asChild>
-                    <NavLink
-                      to="/users"
-                      className="hover:bg-sidebar-accent"
-                      activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
-                    >
-                      <Users className="mr-2 h-4 w-4" />
-                      {!collapsed && (
-                        <span className="flex items-center gap-2">
-                          Utilisateurs
-                          {pendingUsers > 0 && (
-                            <span className="inline-flex items-center justify-center h-5 min-w-[20px] rounded-full bg-warning text-warning-foreground text-[10px] font-bold px-1">
-                              {pendingUsers}
-                            </span>
-                          )}
-                        </span>
-                      )}
-                    </NavLink>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-                <SidebarMenuItem>
-                  <SidebarMenuButton asChild>
-                    <NavLink
-                      to="/audit"
-                      className="hover:bg-sidebar-accent"
-                      activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
-                    >
-                      <FileText className="mr-2 h-4 w-4" />
-                      {!collapsed && (
-                        <span className="flex items-center gap-2">
-                          Journal d'audit
-                          {unseenCount > 0 && (
-                            <span className="inline-flex items-center justify-center h-5 min-w-[20px] rounded-full bg-destructive text-destructive-foreground text-[10px] font-bold px-1">
-                              {unseenCount}
-                            </span>
-                          )}
-                        </span>
-                      )}
-                    </NavLink>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-                <SidebarMenuItem>
-                  <SidebarMenuButton asChild>
-                    <NavLink
-                      to="/ecart-solde"
-                      className="hover:bg-sidebar-accent"
-                      activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
-                    >
-                      <LineChart className="mr-2 h-4 w-4" />
-                      {!collapsed && <span>Ecart de solde</span>}
-                    </NavLink>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-                <SidebarMenuItem>
-                  <SidebarMenuButton asChild>
-                    <NavLink
-                      to="/super-audit"
-                      className="hover:bg-sidebar-accent"
-                      activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
-                    >
-                      <ShieldCheck className="mr-2 h-4 w-4" />
-                      {!collapsed && <span>Super Audit</span>}
-                    </NavLink>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
+                {isSuperAdmin && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild>
+                      <NavLink
+                        to="/users"
+                        className="hover:bg-sidebar-accent"
+                        activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
+                      >
+                        <Users className="mr-2 h-4 w-4" />
+                        {!collapsed && (
+                          <span className="flex items-center gap-2">
+                            Utilisateurs
+                            {pendingUsers > 0 && (
+                              <span className="inline-flex items-center justify-center h-5 min-w-[20px] rounded-full bg-warning text-warning-foreground text-[10px] font-bold px-1">
+                                {pendingUsers}
+                              </span>
+                            )}
+                          </span>
+                        )}
+                      </NavLink>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
+                {isSuperAdmin && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild>
+                      <NavLink
+                        to="/audit"
+                        className="hover:bg-sidebar-accent"
+                        activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
+                      >
+                        <FileText className="mr-2 h-4 w-4" />
+                        {!collapsed && (
+                          <span className="flex items-center gap-2">
+                            Journal d'audit
+                            {unseenCount > 0 && (
+                              <span className="inline-flex items-center justify-center h-5 min-w-[20px] rounded-full bg-destructive text-destructive-foreground text-[10px] font-bold px-1">
+                                {unseenCount}
+                              </span>
+                            )}
+                          </span>
+                        )}
+                      </NavLink>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
+                {canViewBalanceDelta && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild>
+                      <NavLink
+                        to="/ecart-solde"
+                        className="hover:bg-sidebar-accent"
+                        activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
+                      >
+                        <LineChart className="mr-2 h-4 w-4" />
+                        {!collapsed && <span>Ecart de solde</span>}
+                      </NavLink>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
+                {isSuperAdmin && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild>
+                      <NavLink
+                        to="/super-audit"
+                        className="hover:bg-sidebar-accent"
+                        activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
+                      >
+                        <ShieldCheck className="mr-2 h-4 w-4" />
+                        {!collapsed && <span>Super Audit</span>}
+                      </NavLink>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>

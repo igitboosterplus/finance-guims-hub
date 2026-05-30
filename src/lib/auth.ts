@@ -14,6 +14,7 @@ export interface UserPermissions {
   canImportData: boolean;
   canManageUsers: boolean;
   canViewAudit: boolean;
+  canViewBalanceDelta: boolean;
   canViewSuperAudit: boolean;
 }
 
@@ -27,6 +28,7 @@ export const DEFAULT_PERMISSIONS: UserPermissions = {
   canImportData: false,
   canManageUsers: false,
   canViewAudit: false,
+  canViewBalanceDelta: false,
   canViewSuperAudit: false,
 };
 
@@ -40,6 +42,7 @@ export const FULL_PERMISSIONS: UserPermissions = {
   canImportData: true,
   canManageUsers: true,
   canViewAudit: true,
+  canViewBalanceDelta: true,
   canViewSuperAudit: true,
 };
 

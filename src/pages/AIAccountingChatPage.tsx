@@ -28,6 +28,9 @@ type LocalIntent = {
   wantsTopCategory: boolean;
   wantsRecentMovements: boolean;
   wantsComparison: boolean;
+  wantsEnrollmentCount: boolean;
+  targetDate?: Date;
+  targetDepartmentId?: string;
 };
 
 const isSameLocalDay = (left: string, right: Date) => {
@@ -46,6 +49,69 @@ const ACTION_LABELS: Record<string, string> = {
 };
 
 const normalizeQuestion = (value: string) => value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+const FRENCH_MONTHS: Record<string, number> = {
+  janvier: 0,
+  fevrier: 1,
+  mars: 2,
+  avril: 3,
+  mai: 4,
+  juin: 5,
+  juillet: 6,
+  aout: 7,
+  septembre: 8,
+  octobre: 9,
+  novembre: 10,
+  decembre: 11,
+};
+
+const sameCalendarDay = (left: Date, right: Date) => (
+  left.getFullYear() === right.getFullYear() &&
+  left.getMonth() === right.getMonth() &&
+  left.getDate() === right.getDate()
+);
+
+const parseTargetDateFromQuestion = (question: string, now: Date): Date | undefined => {
+  const q = normalizeQuestion(question);
+
+  if (/\bhier\b/.test(q)) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - 1);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }
+
+  const slashMatch = q.match(/\b(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})\b/);
+  if (slashMatch) {
+    const day = Number(slashMatch[1]);
+    const month = Number(slashMatch[2]) - 1;
+    const yearRaw = Number(slashMatch[3]);
+    const year = yearRaw < 100 ? 2000 + yearRaw : yearRaw;
+    const d = new Date(year, month, day);
+    if (!Number.isNaN(d.getTime())) return d;
+  }
+
+  const wordsMatch = q.match(/\b(\d{1,2})\s+(janvier|fevrier|mars|avril|mai|juin|juillet|aout|septembre|octobre|novembre|decembre)(?:\s+(\d{4}))?\b/);
+  if (wordsMatch) {
+    const day = Number(wordsMatch[1]);
+    const month = FRENCH_MONTHS[wordsMatch[2]];
+    const year = wordsMatch[3] ? Number(wordsMatch[3]) : now.getFullYear();
+    const d = new Date(year, month, day);
+    if (!Number.isNaN(d.getTime())) return d;
+  }
+
+  return undefined;
+};
+
+const inferDepartmentFromQuestion = (question: string): string | undefined => {
+  const q = normalizeQuestion(question);
+  if (/(guims\s*academy|guims\s*academique|academy|academique)/.test(q)) return "guims-academy";
+  if (/(guims\s*educ|educ)/.test(q)) return "guims-educ";
+  if (/(digitbooster|digit\s*booster)/.test(q)) return "digitboosterplus";
+  if (/(direction\s*generale|charges\s*entreprise|entreprise)/.test(q)) return "charges-entreprise";
+  if (/\bgaba\b/.test(q)) return "gaba";
+  return undefined;
+};
 
 const startOfWeek = (date: Date) => {
   const d = new Date(date);
@@ -76,6 +142,9 @@ const periodLabel = (period: PeriodKey, now: Date) => {
 
 const parseIntent = (question: string): LocalIntent => {
   const q = normalizeQuestion(question);
+  const now = new Date();
+  const targetDate = parseTargetDateFromQuestion(q, now);
+  const targetDepartmentId = inferDepartmentFromQuestion(q);
   const period: PeriodKey =
     /(aujourd|ce jour|du jour|today|journee)/.test(q)
       ? "today"
@@ -87,6 +156,7 @@ const parseIntent = (question: string): LocalIntent => {
 
   const asksInteractions = /(interaction|audit|journal|mouvement|mouvements|operation|operations|activite|activites|action|actions)/.test(q);
   const asksReport = /(rapport|bilan|resume|resumer|montre|donne|liste|detail|details)/.test(q);
+  const wantsEnrollmentCount = /((combien|nombre|total|nb).*(inscription|inscriptions))|((inscription|inscriptions).*(combien|nombre|total|nb))/.test(q);
 
   return {
     period,
@@ -97,6 +167,9 @@ const parseIntent = (question: string): LocalIntent => {
     wantsTopCategory: /(plus gros|principal|top|categorie|poste)/.test(q),
     wantsRecentMovements: /(dernier|derniers|recent|recents|historique)/.test(q),
     wantsComparison: /(compar|vs|contre|evolution|variation|tendance)/.test(q),
+    wantsEnrollmentCount,
+    targetDate,
+    targetDepartmentId,
   };
 };
 
@@ -136,6 +209,40 @@ function buildLocalReply(
   const income = scopedTxs.filter(tx => tx.type === "income").reduce((sum, tx) => sum + tx.amount, 0);
   const expenses = scopedTxs.filter(tx => tx.type === "expense").reduce((sum, tx) => sum + tx.amount, 0);
   const balance = income - expenses;
+
+  if (intent.wantsEnrollmentCount) {
+    const scopedByDepartment = intent.targetDepartmentId
+      ? txs.filter(tx => tx.departmentId === intent.targetDepartmentId)
+      : txs;
+
+    const scopedByDate = intent.targetDate
+      ? scopedByDepartment.filter((tx) => sameCalendarDay(new Date(getTransactionTimestamp(tx.createdAt || tx.date)), intent.targetDate!))
+      : scopedByDepartment.filter((tx) => isWithinPeriod(tx.createdAt || tx.date, intent.period, now));
+
+    const enrollmentTxs = scopedByDate.filter((tx) => {
+      const hay = normalizeQuestion(`${tx.category} ${tx.description}`);
+      return tx.type === "income" && /inscription/.test(hay);
+    });
+
+    const total = enrollmentTxs.reduce((sum, tx) => sum + tx.amount, 0);
+    const deptLabel = intent.targetDepartmentId
+      ? (departments.find((dept) => dept.id === intent.targetDepartmentId)?.name || intent.targetDepartmentId)
+      : departmentLabel;
+    const whenLabel = intent.targetDate
+      ? intent.targetDate.toLocaleDateString("fr-FR")
+      : periodLabel(intent.period, now);
+
+    const lines: string[] = [];
+    lines.push(`Inscriptions detectees pour ${deptLabel} (${whenLabel}) : ${enrollmentTxs.length}.`);
+    lines.push(`Montant total des inscriptions: ${formatCurrency(total)}.`);
+    if (enrollmentTxs.length > 0) {
+      lines.push("Details:");
+      enrollmentTxs.slice(0, 10).forEach((tx) => {
+        lines.push(`  • ${tx.personName || "Sans nom"} - ${tx.category} - ${formatCurrency(tx.amount)}.`);
+      });
+    }
+    return lines.join("\n");
+  }
 
   if (scopedTxs.length === 0 && !intent.wantsInteractionsReport) {
     return [
@@ -321,9 +428,10 @@ export default function AIAccountingChatPage() {
     const scopedAudit = allAuditEntries.filter(entry => isWithinPeriod(entry.timestamp, intent.period, now));
 
     const fallback = buildLocalReply(q, filteredTransactions, departmentLabel, allAuditEntries, canViewAudit);
+    const shouldForceLocal = intent.wantsEnrollmentCount;
 
     let externalReply: string | null = null;
-    if (providers.length > 0) {
+    if (providers.length > 0 && !shouldForceLocal) {
       setLoading(true);
       externalReply = await generateExternalAIConversation(
         {
@@ -408,7 +516,7 @@ export default function AIAccountingChatPage() {
       },
     ]);
 
-    if (!externalReply && providers.length > 0) {
+    if (!externalReply && providers.length > 0 && !shouldForceLocal) {
       toast.info("IA externe indisponible, reponse locale utilisee.");
     }
   };

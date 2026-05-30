@@ -14,7 +14,7 @@ import { getAllUsers, approveUser, rejectUser, deleteUser, createUser, resetUser
 import { departments, STOCK_ENABLED_DEPARTMENT_IDS } from "@/lib/data";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
-import { UserPlus, Check, X, Trash2, KeyRound, Shield, ShieldCheck, Settings2, Building2, Plus, PenLine, Download, Upload, Package } from "lucide-react";
+import { UserPlus, Check, X, Trash2, KeyRound, Shield, ShieldCheck, Settings2, Building2, Plus, PenLine, Download, Upload, Package, LineChart } from "lucide-react";
 
 export default function UserManagement() {
   const { user: currentUser } = useAuth();
@@ -143,6 +143,7 @@ export default function UserManagement() {
     if (p.canRecordStockExitWithoutPrice) count++;
     if (p.canExportData) count++;
     if (p.canImportData) count++;
+    if (p.canViewBalanceDelta) count++;
     return { count, depts: p.departments.length };
   };
 
@@ -463,6 +464,16 @@ export default function UserManagement() {
                     </div>
                   </div>
                   <Switch checked={permsEdit.canImportData} onCheckedChange={v => setPermsEdit(p => ({ ...p, canImportData: v }))} />
+                </div>
+                <div className="flex items-center justify-between p-2.5 rounded-lg border">
+                  <div className="flex items-center gap-2">
+                    <LineChart className="h-4 w-4 text-primary" />
+                    <div>
+                      <p className="text-sm font-medium">Voir l'écart de solde</p>
+                      <p className="text-[11px] text-muted-foreground">Accéder à la page Ecart de solde (date/période)</p>
+                    </div>
+                  </div>
+                  <Switch checked={permsEdit.canViewBalanceDelta} onCheckedChange={v => setPermsEdit(p => ({ ...p, canViewBalanceDelta: v }))} />
                 </div>
               </div>
             </div>
