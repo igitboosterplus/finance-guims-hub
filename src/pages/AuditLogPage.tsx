@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { addAuditEntry, getAuditIntegrityStatus, getAuditLog, getCurrentUser, markAuditEntriesSeen, buildHumanDiff, type AuditLogEntry } from "@/lib/auth";
+import { addAuditEntry, getAuditIntegrityStatus, getAuditLog, getCurrentUser, hasPermission, markAuditEntriesSeen, buildHumanDiff, type AuditLogEntry } from "@/lib/auth";
 import { addTransaction, getStatsByPaymentMethod, getTransactions, type PaymentMethod, type Transaction } from "@/lib/data";
 import { pushAllToSupabase } from "@/lib/sync";
 import { getTransactionTimestamp } from "@/lib/transactionDates";
@@ -78,6 +78,8 @@ function parseAmountFromAuditDetails(details: string): number {
 
 export default function AuditLogPage() {
   const { user } = useAuth();
+  const canViewAudit = hasPermission(user, 'canViewAudit');
+  const canRestoreAuditEntries = hasPermission(user, 'canRestoreAuditEntries');
   const [searchParams] = useSearchParams();
   const focus = searchParams.get("focus") || "";
   const [entries, setEntries] = useState<AuditLogEntry[]>([]);
@@ -91,10 +93,10 @@ export default function AuditLogPage() {
   useEffect(() => {
     const log = getAuditLog();
     setEntries(log);
-    if (user?.role === 'superadmin') {
+    if (canViewAudit) {
       markAuditEntriesSeen();
     }
-  }, [user]);
+  }, [canViewAudit]);
 
   useEffect(() => {
     if (focus === "dup-tx") {
@@ -109,7 +111,7 @@ export default function AuditLogPage() {
     }
   }, [focus]);
 
-  if (!user || user.role !== 'superadmin') {
+  if (!user || !canViewAudit) {
     return (
       <div className="text-center py-12 text-muted-foreground">
         <Shield className="h-12 w-12 mx-auto mb-4" />
@@ -234,6 +236,10 @@ export default function AuditLogPage() {
   };
 
   const handleRestore = async (entry: AuditLogEntry) => {
+    if (!canRestoreAuditEntries) {
+      toast.error("Vous n'avez pas le droit de restaurer depuis l'audit.");
+      return;
+    }
     if (restoringId) return;
     if (restoredDeleteAuditIds.has(entry.id)) {
       toast.info('Cette suppression a deja ete restauree.');
@@ -412,7 +418,7 @@ export default function AuditLogPage() {
                           ) : '—'}
                         </TableCell>
                         <TableCell>
-                          {isRestorableDelete(entry) ? (
+                          {isRestorableDelete(entry) && canRestoreAuditEntries ? (
                             <Button
                               type="button"
                               size="sm"

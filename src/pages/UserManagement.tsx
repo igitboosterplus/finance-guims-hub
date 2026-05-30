@@ -10,11 +10,30 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { getAllUsers, approveUser, rejectUser, deleteUser, createUser, resetUserPassword, updateUserPermissions, getUserPermissions, type User, type UserRole, type UserPermissions, DEFAULT_PERMISSIONS } from "@/lib/auth";
+import { getAllUsers, approveUser, rejectUser, deleteUser, createUser, resetUserPassword, updateUserPermissions, getUserPermissions, hasPermission, type User, type UserRole, type UserPermissions, DEFAULT_PERMISSIONS } from "@/lib/auth";
 import { departments, STOCK_ENABLED_DEPARTMENT_IDS } from "@/lib/data";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
-import { UserPlus, Check, X, Trash2, KeyRound, Shield, ShieldCheck, Settings2, Building2, Plus, PenLine, Download, Upload, Package, LineChart } from "lucide-react";
+import { UserPlus, Check, X, Trash2, KeyRound, Shield, ShieldCheck, Settings2, Building2, Plus, PenLine, Download, Upload, Package, LineChart, Sparkles, CreditCard, GraduationCap, FileText, RotateCcw } from "lucide-react";
+
+type ActionPermissionKey = keyof Omit<UserPermissions, 'departments' | 'stockDepartments'>;
+
+const ACTION_PERMISSION_KEYS: ActionPermissionKey[] = [
+  'canCreateTransaction',
+  'canEditTransaction',
+  'canDeleteTransaction',
+  'canRecordStockExitWithoutPrice',
+  'canAccessFormations',
+  'canAccessPaymentTracking',
+  'canAccessAIAccountingChat',
+  'canExportData',
+  'canImportData',
+  'canManageUsers',
+  'canViewAudit',
+  'canRestoreAuditEntries',
+  'canViewBalanceDelta',
+  'canViewSuperAudit',
+];
 
 export default function UserManagement() {
   const { user: currentUser } = useAuth();
@@ -36,7 +55,7 @@ export default function UserManagement() {
 
   useEffect(() => { refresh(); }, []);
 
-  if (!currentUser || currentUser.role !== 'superadmin') {
+  if (!currentUser || !hasPermission(currentUser, 'canManageUsers')) {
     return (
       <div className="text-center py-12 text-muted-foreground">
         <Shield className="h-12 w-12 mx-auto mb-4" />
@@ -135,15 +154,80 @@ export default function UserManagement() {
     }
   };
 
+  const buildActionsState = (enabled: boolean) => {
+    return ACTION_PERMISSION_KEYS.reduce((acc, key) => {
+      acc[key] = enabled;
+      return acc;
+    }, {} as Record<ActionPermissionKey, boolean>);
+  };
+
+  const applyActionPreset = (preset: "minimal" | "operator" | "auditor" | "manager" | "admin-delegue" | "full") => {
+    const allOff = buildActionsState(false);
+    let patch: Partial<Record<ActionPermissionKey, boolean>> = {};
+
+    if (preset === "minimal") {
+      patch = {
+        canCreateTransaction: true,
+      };
+    }
+
+    if (preset === "operator") {
+      patch = {
+        canCreateTransaction: true,
+        canEditTransaction: true,
+        canAccessFormations: true,
+        canAccessPaymentTracking: true,
+        canAccessAIAccountingChat: true,
+      };
+    }
+
+    if (preset === "auditor") {
+      patch = {
+        canViewAudit: true,
+        canViewBalanceDelta: true,
+        canExportData: true,
+      };
+    }
+
+    if (preset === "manager") {
+      patch = {
+        canCreateTransaction: true,
+        canEditTransaction: true,
+        canDeleteTransaction: true,
+        canAccessFormations: true,
+        canAccessPaymentTracking: true,
+        canAccessAIAccountingChat: true,
+        canExportData: true,
+        canImportData: true,
+        canViewAudit: true,
+        canRestoreAuditEntries: true,
+        canViewBalanceDelta: true,
+      };
+    }
+
+    if (preset === "admin-delegue") {
+      patch = {
+        ...buildActionsState(true),
+        canViewSuperAudit: false,
+      };
+    }
+
+    if (preset === "full") {
+      patch = {
+        ...buildActionsState(true),
+      };
+    }
+
+    setPermsEdit(prev => ({
+      ...prev,
+      ...allOff,
+      ...patch,
+    }));
+  };
+
   const getPermsCount = (u: User) => {
     const p = getUserPermissions(u);
-    let count = 0;
-    if (p.canCreateTransaction) count++;
-    if (p.canEditTransaction) count++;
-    if (p.canRecordStockExitWithoutPrice) count++;
-    if (p.canExportData) count++;
-    if (p.canImportData) count++;
-    if (p.canViewBalanceDelta) count++;
+    const count = ACTION_PERMISSION_KEYS.filter((k) => Boolean(p[k])).length;
     return { count, depts: p.departments.length };
   };
 
@@ -414,6 +498,21 @@ export default function UserManagement() {
             {/* Action permissions */}
             <div className="space-y-3">
               <Label className="text-sm font-semibold">Actions autorisées</Label>
+              <div className="rounded-lg border p-2.5 space-y-2">
+                <p className="text-[11px] text-muted-foreground">Profils rapides</p>
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" variant="outline" size="sm" className="text-xs" onClick={() => applyActionPreset("minimal")}>Minimal</Button>
+                  <Button type="button" variant="outline" size="sm" className="text-xs" onClick={() => applyActionPreset("operator")}>Opérateur</Button>
+                  <Button type="button" variant="outline" size="sm" className="text-xs" onClick={() => applyActionPreset("auditor")}>Auditeur</Button>
+                  <Button type="button" variant="outline" size="sm" className="text-xs" onClick={() => applyActionPreset("manager")}>Manager</Button>
+                  <Button type="button" variant="outline" size="sm" className="text-xs" onClick={() => applyActionPreset("admin-delegue")}>Admin délégué</Button>
+                  <Button type="button" variant="outline" size="sm" className="text-xs" onClick={() => applyActionPreset("full")}>Tout autoriser</Button>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" variant="outline" size="sm" className="text-xs" onClick={() => setPermsEdit(p => ({ ...p, ...buildActionsState(true) }))}>Activer toutes les actions</Button>
+                  <Button type="button" variant="outline" size="sm" className="text-xs" onClick={() => setPermsEdit(p => ({ ...p, ...buildActionsState(false) }))}>Désactiver toutes les actions</Button>
+                </div>
+              </div>
               <div className="space-y-3">
                 <div className="flex items-center justify-between p-2.5 rounded-lg border">
                   <div className="flex items-center gap-2">
@@ -434,6 +533,16 @@ export default function UserManagement() {
                     </div>
                   </div>
                   <Switch checked={permsEdit.canEditTransaction} onCheckedChange={v => setPermsEdit(p => ({ ...p, canEditTransaction: v }))} />
+                </div>
+                <div className="flex items-center justify-between p-2.5 rounded-lg border">
+                  <div className="flex items-center gap-2">
+                    <Trash2 className="h-4 w-4 text-destructive" />
+                    <div>
+                      <p className="text-sm font-medium">Supprimer des transactions</p>
+                      <p className="text-[11px] text-muted-foreground">Autoriser la suppression définitive d'une transaction</p>
+                    </div>
+                  </div>
+                  <Switch checked={permsEdit.canDeleteTransaction} onCheckedChange={v => setPermsEdit(p => ({ ...p, canDeleteTransaction: v }))} />
                 </div>
                 <div className="flex items-center justify-between p-2.5 rounded-lg border">
                   <div className="flex items-center gap-2">
@@ -467,6 +576,16 @@ export default function UserManagement() {
                 </div>
                 <div className="flex items-center justify-between p-2.5 rounded-lg border">
                   <div className="flex items-center gap-2">
+                    <Users className="h-4 w-4 text-primary" />
+                    <div>
+                      <p className="text-sm font-medium">Gérer les utilisateurs</p>
+                      <p className="text-[11px] text-muted-foreground">Créer, approuver, modifier les droits et supprimer des comptes</p>
+                    </div>
+                  </div>
+                  <Switch checked={permsEdit.canManageUsers} onCheckedChange={v => setPermsEdit(p => ({ ...p, canManageUsers: v }))} />
+                </div>
+                <div className="flex items-center justify-between p-2.5 rounded-lg border">
+                  <div className="flex items-center gap-2">
                     <LineChart className="h-4 w-4 text-primary" />
                     <div>
                       <p className="text-sm font-medium">Voir l'écart de solde</p>
@@ -474,6 +593,66 @@ export default function UserManagement() {
                     </div>
                   </div>
                   <Switch checked={permsEdit.canViewBalanceDelta} onCheckedChange={v => setPermsEdit(p => ({ ...p, canViewBalanceDelta: v }))} />
+                </div>
+                <div className="flex items-center justify-between p-2.5 rounded-lg border">
+                  <div className="flex items-center gap-2">
+                    <GraduationCap className="h-4 w-4 text-primary" />
+                    <div>
+                      <p className="text-sm font-medium">Accéder à Formations</p>
+                      <p className="text-[11px] text-muted-foreground">Ouvrir la page Formations</p>
+                    </div>
+                  </div>
+                  <Switch checked={permsEdit.canAccessFormations} onCheckedChange={v => setPermsEdit(p => ({ ...p, canAccessFormations: v }))} />
+                </div>
+                <div className="flex items-center justify-between p-2.5 rounded-lg border">
+                  <div className="flex items-center gap-2">
+                    <CreditCard className="h-4 w-4 text-primary" />
+                    <div>
+                      <p className="text-sm font-medium">Accéder à Suivi paiements</p>
+                      <p className="text-[11px] text-muted-foreground">Ouvrir la page des plans et relances</p>
+                    </div>
+                  </div>
+                  <Switch checked={permsEdit.canAccessPaymentTracking} onCheckedChange={v => setPermsEdit(p => ({ ...p, canAccessPaymentTracking: v }))} />
+                </div>
+                <div className="flex items-center justify-between p-2.5 rounded-lg border">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="h-4 w-4 text-primary" />
+                    <div>
+                      <p className="text-sm font-medium">Accéder au Chat IA compta</p>
+                      <p className="text-[11px] text-muted-foreground">Utiliser l'assistant IA comptable</p>
+                    </div>
+                  </div>
+                  <Switch checked={permsEdit.canAccessAIAccountingChat} onCheckedChange={v => setPermsEdit(p => ({ ...p, canAccessAIAccountingChat: v }))} />
+                </div>
+                <div className="flex items-center justify-between p-2.5 rounded-lg border">
+                  <div className="flex items-center gap-2">
+                    <FileText className="h-4 w-4 text-primary" />
+                    <div>
+                      <p className="text-sm font-medium">Voir le journal d'audit</p>
+                      <p className="text-[11px] text-muted-foreground">Accéder à la page Audit</p>
+                    </div>
+                  </div>
+                  <Switch checked={permsEdit.canViewAudit} onCheckedChange={v => setPermsEdit(p => ({ ...p, canViewAudit: v }))} />
+                </div>
+                <div className="flex items-center justify-between p-2.5 rounded-lg border">
+                  <div className="flex items-center gap-2">
+                    <RotateCcw className="h-4 w-4 text-primary" />
+                    <div>
+                      <p className="text-sm font-medium">Restaurer depuis l'audit</p>
+                      <p className="text-[11px] text-muted-foreground">Autoriser le bouton Restaurer dans l'audit</p>
+                    </div>
+                  </div>
+                  <Switch checked={permsEdit.canRestoreAuditEntries} onCheckedChange={v => setPermsEdit(p => ({ ...p, canRestoreAuditEntries: v }))} />
+                </div>
+                <div className="flex items-center justify-between p-2.5 rounded-lg border">
+                  <div className="flex items-center gap-2">
+                    <ShieldCheck className="h-4 w-4 text-primary" />
+                    <div>
+                      <p className="text-sm font-medium">Voir le Super Audit</p>
+                      <p className="text-[11px] text-muted-foreground">Accéder au journal de sécurité avancé</p>
+                    </div>
+                  </div>
+                  <Switch checked={permsEdit.canViewSuperAudit} onCheckedChange={v => setPermsEdit(p => ({ ...p, canViewSuperAudit: v }))} />
                 </div>
               </div>
             </div>

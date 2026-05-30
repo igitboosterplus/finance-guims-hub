@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Trash2, ArrowUpRight, ArrowDownRight, Search, Pencil, ChevronLeft, ChevronRight, Download, FileDown } from "lucide-react";
 import { formatCurrency, type Transaction, type PaymentMethod, getDepartment, deleteTransaction, updateTransaction, exportTransactionsCSV, getPaymentMethodsForDepartment, getPaymentMethodLabel, getTransactions, isInscriptionCategory } from "@/lib/data";
-import { addAuditEntry, getCurrentUser, isSuperAdmin, hasPermission, buildHumanDiff } from "@/lib/auth";
+import { addAuditEntry, getCurrentUser, hasPermission, buildHumanDiff } from "@/lib/auth";
 import { syncInstallmentFromTransaction, removeInstallmentFromTransaction, syncEditedTransaction } from "@/lib/stock";
 import { getTransactionTimestamp, transactionDateToInputValue } from "@/lib/transactionDates";
 import { findEmployeeByName } from "@/lib/employees";
@@ -89,8 +89,8 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
 
   const finalizeDelete = (targetId: string) => {
     const currentUser = getCurrentUser();
-    if (!currentUser || !isSuperAdmin(currentUser)) {
-      toast.error("Seul le Super Admin peut supprimer des transactions");
+    if (!hasPermission(currentUser, 'canDeleteTransaction')) {
+      toast.error("Vous n'avez pas le droit de supprimer des transactions");
       setDeleteId(null);
       setDoubleConfirmOpen(false);
       setDoubleConfirmText("");

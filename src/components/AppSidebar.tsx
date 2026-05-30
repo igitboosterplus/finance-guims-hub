@@ -24,8 +24,14 @@ export function AppSidebar() {
   const collapsed = state === "collapsed";
   const { user } = useAuth();
   const isSuperAdmin = user?.role === 'superadmin';
-  const unseenCount = isSuperAdmin ? getUnseenAuditCount() : 0;
-  const pendingUsers = isSuperAdmin ? getAllUsers().filter(u => !u.approved).length : 0;
+  const canManageUsers = hasPermission(user, 'canManageUsers');
+  const canViewAudit = hasPermission(user, 'canViewAudit');
+  const canViewSuperAudit = hasPermission(user, 'canViewSuperAudit');
+  const canAccessFormations = hasPermission(user, 'canAccessFormations');
+  const canAccessPaymentTracking = hasPermission(user, 'canAccessPaymentTracking');
+  const canAccessAIAccountingChat = hasPermission(user, 'canAccessAIAccountingChat');
+  const unseenCount = canViewAudit ? getUnseenAuditCount() : 0;
+  const pendingUsers = canManageUsers ? getAllUsers().filter(u => !u.approved).length : 0;
   const accessibleDepts = departments.filter(d => hasDepartmentAccess(user, d.id));
   const canCreate = hasPermission(user, 'canCreateTransaction');
   const canViewBalanceDelta = hasPermission(user, 'canViewBalanceDelta');
@@ -169,42 +175,48 @@ export function AppSidebar() {
                   </NavLink>
                 </SidebarMenuButton>
               </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild>
-                  <NavLink
-                    to="/formations"
-                    className="hover:bg-sidebar-accent"
-                    activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
-                  >
-                    <GraduationCap className="mr-2 h-4 w-4" />
-                    {!collapsed && <span>Formations</span>}
-                  </NavLink>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild>
-                  <NavLink
-                    to="/paiements"
-                    className="hover:bg-sidebar-accent"
-                    activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
-                  >
-                    <CreditCard className="mr-2 h-4 w-4" />
-                    {!collapsed && <span>Suivi paiements</span>}
-                  </NavLink>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild>
-                  <NavLink
-                    to="/ai-comptabilite"
-                    className="hover:bg-sidebar-accent"
-                    activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
-                  >
-                    <Sparkles className="mr-2 h-4 w-4" />
-                    {!collapsed && <span>Chat IA compta</span>}
-                  </NavLink>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
+              {canAccessFormations && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild>
+                    <NavLink
+                      to="/formations"
+                      className="hover:bg-sidebar-accent"
+                      activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
+                    >
+                      <GraduationCap className="mr-2 h-4 w-4" />
+                      {!collapsed && <span>Formations</span>}
+                    </NavLink>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              )}
+              {canAccessPaymentTracking && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild>
+                    <NavLink
+                      to="/paiements"
+                      className="hover:bg-sidebar-accent"
+                      activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
+                    >
+                      <CreditCard className="mr-2 h-4 w-4" />
+                      {!collapsed && <span>Suivi paiements</span>}
+                    </NavLink>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              )}
+              {canAccessAIAccountingChat && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild>
+                    <NavLink
+                      to="/ai-comptabilite"
+                      className="hover:bg-sidebar-accent"
+                      activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
+                    >
+                      <Sparkles className="mr-2 h-4 w-4" />
+                      {!collapsed && <span>Chat IA compta</span>}
+                    </NavLink>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              )}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -232,14 +244,14 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {(isSuperAdmin || canViewBalanceDelta) && (
+        {(canManageUsers || canViewAudit || canViewBalanceDelta || canViewSuperAudit) && (
           <SidebarGroup>
             <SidebarGroupLabel className="text-sidebar-foreground/40 text-[10px] uppercase tracking-widest font-semibold">
               Administration
             </SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
-                {isSuperAdmin && (
+                {canManageUsers && (
                   <SidebarMenuItem>
                     <SidebarMenuButton asChild>
                       <NavLink
@@ -262,7 +274,7 @@ export function AppSidebar() {
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 )}
-                {isSuperAdmin && (
+                {canViewAudit && (
                   <SidebarMenuItem>
                     <SidebarMenuButton asChild>
                       <NavLink
@@ -299,7 +311,7 @@ export function AppSidebar() {
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 )}
-                {isSuperAdmin && (
+                {canViewSuperAudit && (
                   <SidebarMenuItem>
                     <SidebarMenuButton asChild>
                       <NavLink

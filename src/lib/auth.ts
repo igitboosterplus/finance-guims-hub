@@ -9,11 +9,16 @@ export interface UserPermissions {
   stockDepartments: string[];  // IDs des départements dont le stock est accessible
   canCreateTransaction: boolean;
   canEditTransaction: boolean;
+  canDeleteTransaction: boolean;
   canRecordStockExitWithoutPrice: boolean;
+  canAccessFormations: boolean;
+  canAccessPaymentTracking: boolean;
+  canAccessAIAccountingChat: boolean;
   canExportData: boolean;
   canImportData: boolean;
   canManageUsers: boolean;
   canViewAudit: boolean;
+  canRestoreAuditEntries: boolean;
   canViewBalanceDelta: boolean;
   canViewSuperAudit: boolean;
 }
@@ -23,11 +28,16 @@ export const DEFAULT_PERMISSIONS: UserPermissions = {
   stockDepartments: [],
   canCreateTransaction: false,
   canEditTransaction: false,
+  canDeleteTransaction: false,
   canRecordStockExitWithoutPrice: false,
+  canAccessFormations: false,
+  canAccessPaymentTracking: false,
+  canAccessAIAccountingChat: false,
   canExportData: false,
   canImportData: false,
   canManageUsers: false,
   canViewAudit: false,
+  canRestoreAuditEntries: false,
   canViewBalanceDelta: false,
   canViewSuperAudit: false,
 };
@@ -37,11 +47,16 @@ export const FULL_PERMISSIONS: UserPermissions = {
   stockDepartments: STOCK_ENABLED_DEPARTMENT_IDS,
   canCreateTransaction: true,
   canEditTransaction: true,
+  canDeleteTransaction: true,
   canRecordStockExitWithoutPrice: true,
+  canAccessFormations: true,
+  canAccessPaymentTracking: true,
+  canAccessAIAccountingChat: true,
   canExportData: true,
   canImportData: true,
   canManageUsers: true,
   canViewAudit: true,
+  canRestoreAuditEntries: true,
   canViewBalanceDelta: true,
   canViewSuperAudit: true,
 };
@@ -386,7 +401,12 @@ export function updateUserProfile(userId: string, displayName: string): { succes
 export function getUserPermissions(user: User | null): UserPermissions {
   if (!user) return DEFAULT_PERMISSIONS;
   if (user.role === 'superadmin') return FULL_PERMISSIONS;
-  return user.permissions ?? DEFAULT_PERMISSIONS;
+  return {
+    ...DEFAULT_PERMISSIONS,
+    ...(user.permissions ?? {}),
+    departments: user.permissions?.departments ?? DEFAULT_PERMISSIONS.departments,
+    stockDepartments: user.permissions?.stockDepartments ?? DEFAULT_PERMISSIONS.stockDepartments,
+  };
 }
 
 export function hasPermission(user: User | null, key: keyof Omit<UserPermissions, 'departments' | 'stockDepartments'>): boolean {

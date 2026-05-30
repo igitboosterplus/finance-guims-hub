@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { getAuditIntegrityStatus, getSuperAuditLog, type SuperAuditEntry } from "@/lib/auth";
+import { getAuditIntegrityStatus, getSuperAuditLog, hasPermission, type SuperAuditEntry } from "@/lib/auth";
 import { useAuth } from "@/hooks/useAuth";
 import { Search, ShieldCheck, ShieldAlert, ChevronLeft, ChevronRight } from "lucide-react";
 
@@ -44,6 +44,7 @@ const actionColors: Record<string, string> = {
 
 export default function SuperAuditPage() {
   const { user } = useAuth();
+  const canViewSuperAudit = hasPermission(user, 'canViewSuperAudit');
   const [entries, setEntries] = useState<SuperAuditEntry[]>([]);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -53,7 +54,7 @@ export default function SuperAuditPage() {
     setEntries(getSuperAuditLog());
   }, []);
 
-  if (!user || user.role !== 'superadmin') {
+  if (!user || !canViewSuperAudit) {
     return (
       <div className="text-center py-12 text-muted-foreground">
         <ShieldCheck className="h-12 w-12 mx-auto mb-4" />
