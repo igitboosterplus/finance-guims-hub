@@ -106,13 +106,9 @@ const USERS_KEY = 'finance-users';
 const SESSION_KEY = 'finance-session';
 const AUDIT_KEY = 'finance-audit-log';
 
-const PASSWORD_KDF = 'pbkdf2';
-const PASSWORD_KDF_ITERATIONS = 120000;
-const PASSWORD_SALT_BYTES = 16;
 const AUTH_EMAIL_DOMAIN = String(import.meta.env.VITE_SUPABASE_AUTH_EMAIL_DOMAIN || 'auth.guims.local').trim();
 const AUTH_ROLE_CLAIM_FUNCTION = String(import.meta.env.VITE_AUTH_ROLE_CLAIM_FUNCTION_NAME || 'provision-auth-claim').trim();
 const AUTH_ADMIN_FUNCTION = String(import.meta.env.VITE_AUTH_ADMIN_FUNCTION_NAME || 'auth-admin-user').trim();
-const ENABLE_LEGACY_LOGIN_MIGRATION = String(import.meta.env.VITE_ENABLE_LEGACY_LOGIN_MIGRATION || 'false').toLowerCase() === 'true';
 
 function normalizeUsername(username: string): string {
   return username.trim().toLowerCase();
@@ -174,70 +170,6 @@ async function invokeAuthAdminFunction(body: Record<string, unknown>): Promise<{
       error: err instanceof Error ? err.message : 'Erreur auth admin inattendue',
     };
   }
-}
-
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
-function hexToBytes(hex: string): Uint8Array {
-  if (hex.length % 2 !== 0) throw new Error('Invalid hex string');
-  const arr = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < arr.length; i++) {
-    arr[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-  }
-  return arr;
-}
-
-// Legacy hash kept for backward compatibility and progressive migration.
-async function legacyHashPassword(password: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(password + 'guims-salt-2026');
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-  return bytesToHex(new Uint8Array(hashBuffer));
-}
-
-async function derivePbkdf2(password: string, saltHex: string, iterations: number): Promise<string> {
-  const encoder = new TextEncoder();
-  const keyMaterial = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(password),
-    { name: 'PBKDF2' },
-    false,
-    ['deriveBits']
-  );
-  const derivedBits = await crypto.subtle.deriveBits(
-    {
-      name: 'PBKDF2',
-      hash: 'SHA-256',
-      salt: hexToBytes(saltHex),
-      iterations,
-    },
-    keyMaterial,
-    256
-  );
-  return bytesToHex(new Uint8Array(derivedBits));
-}
-
-async function hashPassword(password: string): Promise<string> {
-  const salt = new Uint8Array(PASSWORD_SALT_BYTES);
-  crypto.getRandomValues(salt);
-  const saltHex = bytesToHex(salt);
-  const hashHex = await derivePbkdf2(password, saltHex, PASSWORD_KDF_ITERATIONS);
-  return `${PASSWORD_KDF}$${PASSWORD_KDF_ITERATIONS}$${saltHex}$${hashHex}`;
-}
-
-async function verifyPassword(password: string, storedHash: string): Promise<boolean> {
-  if (storedHash.startsWith(`${PASSWORD_KDF}$`)) {
-    const [kdf, iterationsRaw, saltHex, hashHex] = storedHash.split('$');
-    if (kdf !== PASSWORD_KDF || !iterationsRaw || !saltHex || !hashHex) return false;
-    const iterations = Number.parseInt(iterationsRaw, 10);
-    if (!Number.isFinite(iterations) || iterations <= 0) return false;
-    const candidate = await derivePbkdf2(password, saltHex, iterations);
-    return candidate === hashHex;
-  }
-  // Backward compatibility with legacy SHA-256 static-salt hashes.
-  return (await legacyHashPassword(password)) === storedHash;
 }
 
 function validatePasswordPolicy(password: string): string | null {
@@ -352,70 +284,27 @@ export async function login(username: string, password: string): Promise<{ succe
 
   if (!user.approved) return { success: false, error: 'Votre compte est en attente d\'approbation par le Super Admin' };
 
-  const isSupabaseManagedHash = user.passwordHash === 'supabase$managed';
-  const hasLegacyHash = !isSupabaseManagedHash && !user.passwordHash.startsWith(`${PASSWORD_KDF}$`);
-
-  if (isSupabaseConfigured()) {
-    const supabase = getSupabase() || initSupabase();
-    if (!supabase) {
-      return { success: false, error: 'Supabase non initialisé' };
-    }
-
-    const email = usernameToAuthEmail(user.username);
-    let signInError: string | null = null;
-
-    const signInAttempt = await supabase.auth.signInWithPassword({ email, password });
-    if (signInAttempt.error) {
-      signInError = signInAttempt.error.message;
-
-      if (ENABLE_LEGACY_LOGIN_MIGRATION && !isSupabaseManagedHash) {
-        // Controlled migration mode only: allow one-time bridge from local hash.
-        const localPasswordOk = await verifyPassword(password, user.passwordHash);
-        if (!localPasswordOk) {
-          return { success: false, error: 'Mot de passe incorrect' };
-        }
-
-        const signUpResult = await supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            data: {
-              username: user.username,
-              displayName: user.displayName,
-              role: user.role,
-            },
-          },
-        });
-
-        if (signUpResult.error && !/already registered|already been registered/i.test(signUpResult.error.message)) {
-          return { success: false, error: `Erreur provisionnement Supabase: ${signUpResult.error.message}` };
-        }
-
-        const secondAttempt = await supabase.auth.signInWithPassword({ email, password });
-        if (secondAttempt.error) {
-          return { success: false, error: signInError || secondAttempt.error.message || 'Connexion Supabase impossible' };
-        }
-      } else {
-        return {
-          success: false,
-          error: 'Connexion Supabase impossible. Si le compte est legacy, demander un reset de mot de passe admin.',
-        };
-      }
-    }
-  } else {
-    const ok = await verifyPassword(password, user.passwordHash);
-    if (!ok) return { success: false, error: 'Mot de passe incorrect' };
+  if (!isSupabaseConfigured()) {
+    return { success: false, error: 'Supabase Auth requis: configuration manquante' };
   }
 
-  // Supabase is now source of truth for password verification when configured.
-  if (isSupabaseConfigured()) {
-    user.passwordHash = 'supabase$managed';
-    saveUsers(users);
-  } else if (hasLegacyHash) {
-    // Local-only mode: transparently upgrade legacy hashes.
-    user.passwordHash = await hashPassword(password);
-    saveUsers(users);
+  const supabase = getSupabase() || initSupabase();
+  if (!supabase) {
+    return { success: false, error: 'Supabase non initialisé' };
   }
+
+  const email = usernameToAuthEmail(user.username);
+  const signInAttempt = await supabase.auth.signInWithPassword({ email, password });
+  if (signInAttempt.error) {
+    return {
+      success: false,
+      error: 'Connexion Supabase impossible. Si le compte est legacy, demander un reset de mot de passe admin.',
+    };
+  }
+
+  // Supabase is now source of truth for password verification.
+  user.passwordHash = 'supabase$managed';
+  saveUsers(users);
 
   // Ensure JWT app_metadata.role mirrors approved role from users table.
   await provisionSupabaseRoleClaim(user.username);
@@ -516,7 +405,31 @@ export async function createUser(username: string, password: string, displayName
   const effectiveRole: UserRole = isFirstAccount ? 'superadmin' : role;
   const approved = isFirstAccount || currentUser?.role === 'superadmin';
 
-  if (isSupabaseConfigured() && !isFirstAccount) {
+  if (!isSupabaseConfigured()) {
+    return { success: false, error: 'Supabase Auth requis: configuration manquante' };
+  }
+
+  const supabase = getSupabase() || initSupabase();
+  if (!supabase) {
+    return { success: false, error: 'Supabase non initialisé' };
+  }
+
+  if (isFirstAccount) {
+    const signUpResult = await supabase.auth.signUp({
+      email: usernameToAuthEmail(cleanUsername),
+      password,
+      options: {
+        data: {
+          username: cleanUsername,
+          displayName,
+          role: effectiveRole,
+        },
+      },
+    });
+    if (signUpResult.error && !/already registered|already been registered/i.test(signUpResult.error.message)) {
+      return { success: false, error: `Création compte Supabase impossible: ${signUpResult.error.message}` };
+    }
+  } else {
     const authCreate = await invokeAuthAdminFunction({
       operation: 'create_user',
       username: cleanUsername,
@@ -531,14 +444,10 @@ export async function createUser(username: string, password: string, displayName
     }
   }
 
-  const hash = (isSupabaseConfigured() && !isFirstAccount)
-    ? 'supabase$managed'
-    : await hashPassword(password);
-
   const newUser: User = {
     id: crypto.randomUUID(),
     username: cleanUsername,
-    passwordHash: hash,
+    passwordHash: 'supabase$managed',
     displayName,
     role: effectiveRole,
     approved,
@@ -583,20 +492,20 @@ export async function resetUserPassword(userId: string, newPassword: string): Pr
   const users = getUsers();
   const idx = users.findIndex(u => u.id === userId);
   if (idx !== -1) {
-    if (isSupabaseConfigured()) {
-      const authReset = await invokeAuthAdminFunction({
-        operation: 'reset_password',
-        username: users[idx].username,
-        newPassword,
-        email: usernameToAuthEmail(users[idx].username),
-      });
-      if (!authReset.success) {
-        return { success: false, error: authReset.error || 'Réinitialisation Supabase impossible' };
-      }
-      users[idx].passwordHash = 'supabase$managed';
-    } else {
-      users[idx].passwordHash = await hashPassword(newPassword);
+    if (!isSupabaseConfigured()) {
+      return { success: false, error: 'Supabase Auth requis: configuration manquante' };
     }
+
+    const authReset = await invokeAuthAdminFunction({
+      operation: 'reset_password',
+      username: users[idx].username,
+      newPassword,
+      email: usernameToAuthEmail(users[idx].username),
+    });
+    if (!authReset.success) {
+      return { success: false, error: authReset.error || 'Réinitialisation Supabase impossible' };
+    }
+    users[idx].passwordHash = 'supabase$managed';
     saveUsers(users);
     return { success: true };
   }
@@ -635,24 +544,21 @@ export async function changePassword(userId: string, currentPassword: string, ne
   const users = getUsers();
   const idx = users.findIndex(u => u.id === userId);
   if (idx === -1) return { success: false, error: 'Utilisateur introuvable' };
+  void currentPassword;
 
-  if (isSupabaseConfigured()) {
-    const supabase = getSupabase() || initSupabase();
-    if (!supabase) return { success: false, error: 'Supabase non initialisé' };
-
-    const { error } = await supabase.auth.updateUser({ password: newPassword });
-    if (error) {
-      return { success: false, error: error.message || 'Impossible de changer le mot de passe Supabase' };
-    }
-
-    users[idx].passwordHash = 'supabase$managed';
-    saveUsers(users);
-    return { success: true };
+  if (!isSupabaseConfigured()) {
+    return { success: false, error: 'Supabase Auth requis: configuration manquante' };
   }
 
-  const ok = await verifyPassword(currentPassword, users[idx].passwordHash);
-  if (!ok) return { success: false, error: 'Mot de passe actuel incorrect' };
-  users[idx].passwordHash = await hashPassword(newPassword);
+  const supabase = getSupabase() || initSupabase();
+  if (!supabase) return { success: false, error: 'Supabase non initialisé' };
+
+  const { error } = await supabase.auth.updateUser({ password: newPassword });
+  if (error) {
+    return { success: false, error: error.message || 'Impossible de changer le mot de passe Supabase' };
+  }
+
+  users[idx].passwordHash = 'supabase$managed';
   saveUsers(users);
   return { success: true };
 }
