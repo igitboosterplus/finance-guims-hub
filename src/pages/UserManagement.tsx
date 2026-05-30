@@ -109,11 +109,15 @@ export default function UserManagement() {
   };
 
   const handleResetPassword = async () => {
-    if (!resetId || newPassword.length < 6) {
-      toast.error("Min. 6 caractères");
+    if (!resetId || newPassword.length < 8) {
+      toast.error("Min. 8 caractères");
       return;
     }
-    await resetUserPassword(resetId, newPassword);
+    const result = await resetUserPassword(resetId, newPassword);
+    if (!result.success) {
+      toast.error(result.error || "Échec de la réinitialisation du mot de passe");
+      return;
+    }
     setResetId(null);
     setNewPassword("");
     toast.success("Mot de passe réinitialisé");
@@ -418,7 +422,7 @@ export default function UserManagement() {
           </DialogHeader>
           <div className="space-y-2">
             <Label>Nouveau mot de passe</Label>
-            <Input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} placeholder="Min. 6 caractères" />
+            <Input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} placeholder="Min. 8 caractères" />
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setResetId(null)}>Annuler</Button>

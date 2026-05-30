@@ -1,5 +1,6 @@
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
 const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
@@ -55,23 +56,62 @@ function getOrigin(request: Request): string {
 
 function isOriginAllowed(request: Request): boolean {
   const allowed = parseCsvEnv("AI_ALLOWED_ORIGINS");
-  if (allowed.length === 0) return true;
   const origin = getOrigin(request);
-  return !!origin && allowed.includes(origin);
+  if (!origin) return true;
+  if (allowed.length > 0) return allowed.includes(origin);
+  // Secure-by-default fallback: allow only local development origins when no allowlist is configured.
+  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
 }
 
 function getCorsHeadersForRequest(request: Request): Record<string, string> {
   const origin = getOrigin(request);
   const allowed = parseCsvEnv("AI_ALLOWED_ORIGINS");
-  if (allowed.length > 0 && origin && allowed.includes(origin)) {
-    return { ...corsHeaders, "Access-Control-Allow-Origin": origin };
+  if (origin) {
+    if (allowed.length > 0 && allowed.includes(origin)) {
+      return { ...corsHeaders, "Access-Control-Allow-Origin": origin };
+    }
+    if (allowed.length === 0 && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)) {
+      return { ...corsHeaders, "Access-Control-Allow-Origin": origin };
+    }
   }
   return corsHeaders;
 }
 
-function isRoleAllowed(requestedByRole: unknown): boolean {
+async function getRoleFromJwt(request: Request): Promise<string | null> {
+  const authHeader = request.headers.get("authorization") || request.headers.get("Authorization");
+  if (!authHeader || !authHeader.toLowerCase().startsWith("bearer ")) return null;
+
+  const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
+  const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY") || "";
+  if (!supabaseUrl || !supabaseAnonKey) return null;
+
+  try {
+    const client = createClient(supabaseUrl, supabaseAnonKey, {
+      global: { headers: { Authorization: authHeader } },
+    });
+    const { data, error } = await client.auth.getUser();
+    if (error || !data?.user) return null;
+    const appRole = data.user.app_metadata?.role;
+    const userRole = data.user.user_metadata?.role;
+    const role = typeof appRole === "string" ? appRole : (typeof userRole === "string" ? userRole : null);
+    return role ? role.toLowerCase() : null;
+  } catch {
+    return null;
+  }
+}
+
+async function isRoleAllowed(request: Request, requestedByRole: unknown): Promise<boolean> {
   const allowedRoles = parseCsvEnv("AI_ALLOWED_APP_ROLES").map(role => role.toLowerCase());
   if (allowedRoles.length === 0) return true;
+
+  const roleFromJwt = await getRoleFromJwt(request);
+  if (roleFromJwt) {
+    return allowedRoles.includes(roleFromJwt);
+  }
+
+  // Optional backward-compatible fallback (disabled by default).
+  const allowInsecureRoleHeader = (Deno.env.get("AI_ALLOW_INSECURE_ROLE_HEADER") || "false").toLowerCase() === "true";
+  if (!allowInsecureRoleHeader) return false;
   if (typeof requestedByRole !== "string") return false;
   return allowedRoles.includes(requestedByRole.toLowerCase());
 }
@@ -338,6 +378,15 @@ Deno.serve(async (request) => {
     });
   }
 
+  const maxBodyBytes = Number.parseInt(Deno.env.get("AI_MAX_BODY_BYTES") || "200000", 10);
+  const contentLength = Number.parseInt(request.headers.get("content-length") || "0", 10);
+  if (Number.isFinite(contentLength) && contentLength > maxBodyBytes) {
+    return new Response(JSON.stringify({ error: "Payload too large" }), {
+      status: 413,
+      headers: { ...responseHeaders, "Content-Type": "application/json" },
+    });
+  }
+
   const availableProviders = getAvailableProviders();
   if (availableProviders.length === 0) {
     return jsonResponse({ error: "No AI provider configured on server" }, 503);
@@ -349,7 +398,7 @@ Deno.serve(async (request) => {
     const provider = getDefaultProvider(body?.provider);
     const requestedByRole = body?.requestedByRole;
 
-    if (!isRoleAllowed(requestedByRole)) {
+    if (!(await isRoleAllowed(request, requestedByRole))) {
       return new Response(JSON.stringify({ error: "Role not allowed" }), {
         status: 403,
         headers: { ...responseHeaders, "Content-Type": "application/json" },
@@ -364,6 +413,12 @@ Deno.serve(async (request) => {
       const payload = body?.payload as AIConversationPayload | undefined;
       if (!payload || typeof payload !== "object" || typeof payload.question !== "string" || !payload.question.trim()) {
         return new Response(JSON.stringify({ error: "Invalid conversation payload" }), {
+          status: 400,
+          headers: { ...responseHeaders, "Content-Type": "application/json" },
+        });
+      }
+      if (payload.question.length > 1200) {
+        return new Response(JSON.stringify({ error: "Question too long" }), {
           status: 400,
           headers: { ...responseHeaders, "Content-Type": "application/json" },
         });

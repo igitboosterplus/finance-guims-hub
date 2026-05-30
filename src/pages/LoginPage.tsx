@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { login, createUser } from "@/lib/auth";
+import { login, createUser, getAllUsers } from "@/lib/auth";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import { LogIn, UserPlus, Eye, EyeOff, CheckCircle2, XCircle, AlertCircle } from "lucide-react";
@@ -13,8 +13,9 @@ import logoGuimsGroup from "@/assets/logo-guims-group.jpg";
 function PasswordStrength({ password }: { password: string }) {
   if (!password) return null;
   const checks = [
-    { label: "6 caractères minimum", ok: password.length >= 6 },
+    { label: "8 caractères minimum", ok: password.length >= 8 },
     { label: "Une majuscule", ok: /[A-Z]/.test(password) },
+    { label: "Une minuscule", ok: /[a-z]/.test(password) },
     { label: "Un chiffre", ok: /\d/.test(password) },
   ];
   const passed = checks.filter(c => c.ok).length;
@@ -41,6 +42,7 @@ function PasswordStrength({ password }: { password: string }) {
 export default function LoginPage() {
   const { refresh } = useAuth();
   const [activeTab, setActiveTab] = useState("login");
+  const [isFirstSetup, setIsFirstSetup] = useState(() => getAllUsers().length === 0);
 
   // Login state
   const [loginUsername, setLoginUsername] = useState("");
@@ -84,8 +86,12 @@ export default function LoginPage() {
       toast.error("Nom d'utilisateur trop court (min 3 caractères)");
       return;
     }
-    if (regPassword.length < 6) {
-      toast.error("Mot de passe trop court (min 6 caractères)");
+    if (regPassword.length < 8) {
+      toast.error("Mot de passe trop court (min 8 caractères)");
+      return;
+    }
+    if (!/[A-Z]/.test(regPassword) || !/[a-z]/.test(regPassword) || !/\d/.test(regPassword)) {
+      toast.error("Le mot de passe doit contenir majuscule, minuscule et chiffre");
       return;
     }
     if (regPassword !== regConfirm) {
@@ -96,6 +102,9 @@ export default function LoginPage() {
     const result = await createUser(regUsername.trim(), regPassword, regDisplayName.trim(), 'admin');
     setRegLoading(false);
     if (result.success) {
+      if (isFirstSetup) {
+        setIsFirstSetup(false);
+      }
       setRegSuccess(true);
       setRegUsername("");
       setRegPassword("");
@@ -185,7 +194,9 @@ export default function LoginPage() {
                     <div>
                       <p className="font-semibold text-foreground">Compte créé avec succès !</p>
                       <p className="text-sm text-muted-foreground mt-1">
-                        Votre compte est en attente d'approbation par le Super Admin. Vous serez notifié une fois qu'il sera activé.
+                        {isFirstSetup
+                          ? "Premier compte créé: il est activé comme Super Admin initial."
+                          : "Votre compte est en attente d'approbation par le Super Admin. Vous serez notifié une fois qu'il sera activé."}
                       </p>
                     </div>
                     <Button variant="outline" className="gap-2" onClick={() => { setRegSuccess(false); setActiveTab("login"); }}>
@@ -196,7 +207,11 @@ export default function LoginPage() {
                   <>
                     <CardDescription className="mb-4 flex items-start gap-2">
                       <AlertCircle className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
-                      <span>Créez un compte administrateur. Il sera activé après validation par le Super Admin.</span>
+                      <span>
+                        {isFirstSetup
+                          ? "Aucun compte détecté: le premier compte créé devient Super Admin initial."
+                          : "Créez un compte administrateur. Il sera activé après validation par le Super Admin."}
+                      </span>
                     </CardDescription>
                     <form onSubmit={handleRegister} className="space-y-4">
                       <div className="space-y-2">

@@ -13,8 +13,9 @@ import { User, ShieldCheck, Shield, KeyRound, Eye, EyeOff, CheckCircle2, XCircle
 function PasswordStrength({ password }: { password: string }) {
   if (!password) return null;
   const checks = [
-    { label: "6 caractères minimum", ok: password.length >= 6 },
+    { label: "8 caractères minimum", ok: password.length >= 8 },
     { label: "Une majuscule", ok: /[A-Z]/.test(password) },
+    { label: "Une minuscule", ok: /[a-z]/.test(password) },
     { label: "Un chiffre", ok: /\d/.test(password) },
   ];
   const passed = checks.filter(c => c.ok).length;
@@ -78,8 +79,12 @@ export default function ProfilePage() {
       toast.error("Les nouveaux mots de passe ne correspondent pas");
       return;
     }
-    if (newPwd.length < 6) {
-      toast.error("Nouveau mot de passe trop court (min 6 caractères)");
+    if (newPwd.length < 8) {
+      toast.error("Nouveau mot de passe trop court (min 8 caractères)");
+      return;
+    }
+    if (!/[A-Z]/.test(newPwd) || !/[a-z]/.test(newPwd) || !/\d/.test(newPwd)) {
+      toast.error("Le mot de passe doit contenir majuscule, minuscule et chiffre");
       return;
     }
     setPwdLoading(true);

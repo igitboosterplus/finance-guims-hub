@@ -105,19 +105,85 @@ export interface UserSession {
 const USERS_KEY = 'finance-users';
 const SESSION_KEY = 'finance-session';
 const AUDIT_KEY = 'finance-audit-log';
-const SUPERADMIN_BOOTSTRAPPED_KEY = 'finance-superadmin-bootstrapped';
+
+const PASSWORD_KDF = 'pbkdf2';
+const PASSWORD_KDF_ITERATIONS = 120000;
+const PASSWORD_SALT_BYTES = 16;
 
 function normalizeUsername(username: string): string {
   return username.trim().toLowerCase();
 }
 
-// Simple hash — not cryptographic, but sufficient for a localStorage-based app.
-// In a real app this would use bcrypt on a server.
-async function hashPassword(password: string): Promise<string> {
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function hexToBytes(hex: string): Uint8Array {
+  if (hex.length % 2 !== 0) throw new Error('Invalid hex string');
+  const arr = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < arr.length; i++) {
+    arr[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  }
+  return arr;
+}
+
+// Legacy hash kept for backward compatibility and progressive migration.
+async function legacyHashPassword(password: string): Promise<string> {
   const encoder = new TextEncoder();
   const data = encoder.encode(password + 'guims-salt-2026');
   const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-  return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+  return bytesToHex(new Uint8Array(hashBuffer));
+}
+
+async function derivePbkdf2(password: string, saltHex: string, iterations: number): Promise<string> {
+  const encoder = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(password),
+    { name: 'PBKDF2' },
+    false,
+    ['deriveBits']
+  );
+  const derivedBits = await crypto.subtle.deriveBits(
+    {
+      name: 'PBKDF2',
+      hash: 'SHA-256',
+      salt: hexToBytes(saltHex),
+      iterations,
+    },
+    keyMaterial,
+    256
+  );
+  return bytesToHex(new Uint8Array(derivedBits));
+}
+
+async function hashPassword(password: string): Promise<string> {
+  const salt = new Uint8Array(PASSWORD_SALT_BYTES);
+  crypto.getRandomValues(salt);
+  const saltHex = bytesToHex(salt);
+  const hashHex = await derivePbkdf2(password, saltHex, PASSWORD_KDF_ITERATIONS);
+  return `${PASSWORD_KDF}$${PASSWORD_KDF_ITERATIONS}$${saltHex}$${hashHex}`;
+}
+
+async function verifyPassword(password: string, storedHash: string): Promise<boolean> {
+  if (storedHash.startsWith(`${PASSWORD_KDF}$`)) {
+    const [kdf, iterationsRaw, saltHex, hashHex] = storedHash.split('$');
+    if (kdf !== PASSWORD_KDF || !iterationsRaw || !saltHex || !hashHex) return false;
+    const iterations = Number.parseInt(iterationsRaw, 10);
+    if (!Number.isFinite(iterations) || iterations <= 0) return false;
+    const candidate = await derivePbkdf2(password, saltHex, iterations);
+    return candidate === hashHex;
+  }
+  // Backward compatibility with legacy SHA-256 static-salt hashes.
+  return (await legacyHashPassword(password)) === storedHash;
+}
+
+function validatePasswordPolicy(password: string): string | null {
+  if (password.length < 8) return 'Mot de passe trop court (min 8 caractères)';
+  if (!/[A-Z]/.test(password)) return 'Le mot de passe doit contenir au moins une majuscule';
+  if (!/[a-z]/.test(password)) return 'Le mot de passe doit contenir au moins une minuscule';
+  if (!/\d/.test(password)) return 'Le mot de passe doit contenir au moins un chiffre';
+  return null;
 }
 
 function getUsers(): User[] {
@@ -159,7 +225,8 @@ function saveUsers(users: User[]) {
   syncFullCollection(TABLES.users, USERS_KEY);
 }
 
-// Initialize default super admin if no users exist, and deduplicate if needed
+// Startup normalization only.
+// Security note: no hardcoded default credentials are created anymore.
 export async function initDefaultSuperAdmin() {
   let users = getUsers();
 
@@ -177,31 +244,8 @@ export async function initDefaultSuperAdmin() {
     console.log('[Auth] Removed duplicate user entries.');
   }
 
-  // Create default superadmin only ONCE on first bootstrap.
-  // After that, deletions are definitive and no account is auto-recreated.
-  const alreadyBootstrapped = localStorage.getItem(SUPERADMIN_BOOTSTRAPPED_KEY) === 'true';
-  if (!alreadyBootstrapped && users.length === 0) {
-    const hash = await hashPassword('Yvan2000@');
-
-    // Re-read users after async hashing to avoid duplicate creation in concurrent startup calls.
-    const latestUsers = getUsers();
-    if (latestUsers.some(u => u.role === 'superadmin')) {
-      return;
-    }
-
-    const superAdmin: User = {
-      id: crypto.randomUUID(),
-      username: 'Guimtsop',
-      passwordHash: hash,
-      displayName: 'Guimtsop',
-      role: 'superadmin',
-      approved: true,
-      createdAt: new Date().toISOString(),
-    };
-    const final = latestUsers.filter(u => u.role !== 'superadmin');
-    final.push(superAdmin);
-    saveUsers(final);
-    localStorage.setItem(SUPERADMIN_BOOTSTRAPPED_KEY, 'true');
+  if (users.length === 0) {
+    console.warn('[Auth] Aucun compte trouvé. Le premier compte créé deviendra Super Admin.');
   }
 }
 
@@ -244,8 +288,14 @@ export async function login(username: string, password: string): Promise<{ succe
   const user = users.find(u => normalizeUsername(u.username) === normalized);
   if (!user) return { success: false, error: 'Nom d\'utilisateur inconnu' };
 
-  const hash = await hashPassword(password);
-  if (hash !== user.passwordHash) return { success: false, error: 'Mot de passe incorrect' };
+  const ok = await verifyPassword(password, user.passwordHash);
+  if (!ok) return { success: false, error: 'Mot de passe incorrect' };
+
+  // Transparent migration: upgrade legacy hashes after a successful login.
+  if (!user.passwordHash.startsWith(`${PASSWORD_KDF}$`)) {
+    user.passwordHash = await hashPassword(password);
+    saveUsers(users);
+  }
 
   if (!user.approved) return { success: false, error: 'Votre compte est en attente d\'approbation par le Super Admin' };
 
@@ -293,17 +343,25 @@ export async function createUser(username: string, password: string, displayName
     return { success: false, error: 'Ce nom d\'utilisateur existe déjà' };
   }
   if (cleanUsername.length < 3) return { success: false, error: 'Nom d\'utilisateur trop court (min 3 caractères)' };
-  if (password.length < 6) return { success: false, error: 'Mot de passe trop court (min 6 caractères)' };
+  const passwordPolicyError = validatePasswordPolicy(password);
+  if (passwordPolicyError) return { success: false, error: passwordPolicyError };
+
+  const isFirstAccount = users.length === 0;
+  const currentUser = getCurrentUser();
+
+  if (!isFirstAccount && role === 'superadmin' && currentUser?.role !== 'superadmin') {
+    return { success: false, error: 'Seul un Super Admin peut créer un autre Super Admin' };
+  }
 
   const hash = await hashPassword(password);
-  const currentUser = getCurrentUser();
+  const effectiveRole: UserRole = isFirstAccount ? 'superadmin' : role;
   const newUser: User = {
     id: crypto.randomUUID(),
     username: cleanUsername,
     passwordHash: hash,
     displayName,
-    role,
-    approved: currentUser?.role === 'superadmin',
+    role: effectiveRole,
+    approved: isFirstAccount || currentUser?.role === 'superadmin',
     createdAt: new Date().toISOString(),
   };
   users.push(newUser);
@@ -339,13 +397,17 @@ export function rejectUser(userId: string): { success: boolean; error?: string }
   return { success: true };
 }
 
-export async function resetUserPassword(userId: string, newPassword: string) {
+export async function resetUserPassword(userId: string, newPassword: string): Promise<{ success: boolean; error?: string }> {
+  const passwordPolicyError = validatePasswordPolicy(newPassword);
+  if (passwordPolicyError) return { success: false, error: passwordPolicyError };
   const users = getUsers();
   const idx = users.findIndex(u => u.id === userId);
   if (idx !== -1) {
     users[idx].passwordHash = await hashPassword(newPassword);
     saveUsers(users);
+    return { success: true };
   }
+  return { success: false, error: 'Utilisateur introuvable' };
 }
 
 export function deleteUser(userId: string): { success: boolean; error?: string } {
@@ -375,12 +437,13 @@ export function getUserById(id: string): User | undefined {
 }
 
 export async function changePassword(userId: string, currentPassword: string, newPassword: string): Promise<{ success: boolean; error?: string }> {
-  if (newPassword.length < 6) return { success: false, error: 'Nouveau mot de passe trop court (min 6 caractères)' };
+  const passwordPolicyError = validatePasswordPolicy(newPassword);
+  if (passwordPolicyError) return { success: false, error: passwordPolicyError };
   const users = getUsers();
   const idx = users.findIndex(u => u.id === userId);
   if (idx === -1) return { success: false, error: 'Utilisateur introuvable' };
-  const currentHash = await hashPassword(currentPassword);
-  if (currentHash !== users[idx].passwordHash) return { success: false, error: 'Mot de passe actuel incorrect' };
+  const ok = await verifyPassword(currentPassword, users[idx].passwordHash);
+  if (!ok) return { success: false, error: 'Mot de passe actuel incorrect' };
   users[idx].passwordHash = await hashPassword(newPassword);
   saveUsers(users);
   return { success: true };
