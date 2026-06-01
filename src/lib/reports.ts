@@ -10,7 +10,7 @@ import {
   getTransactionsByDepartment, getDepartment, formatCurrency,
   getPaymentMethodLabel, getStatsByPaymentMethod, type DepartmentId, type PaymentMethod, type Transaction,
 } from "./data";
-import { getTransactionTimestamp } from "./transactionDates";
+import { getTransactionTimestamp, isOnOrAfterCalendarDate } from "./transactionDates";
 import {
   getStockItems,
   getStockMovements,
@@ -976,16 +976,22 @@ export async function downloadStockReport(opts?: ReportOptions, departmentId: st
     y = (doc as any).lastAutoTable.finalY + 10;
   }
 
+  const saleLinkCutoff = new Date();
+  const reconStockTxs = stockTxs.filter(tx => isOnOrAfterCalendarDate(tx.date, saleLinkCutoff));
+  const reconSaleMovements = movements.filter(
+    m => m.type === 'exit' && m.reason.toLowerCase().includes('vente') && isOnOrAfterCalendarDate(m.date, saleLinkCutoff),
+  );
+
   const movementByTxId = new Map<string, (typeof movements)[number]>();
   const movementByTicket = new Map<string, (typeof movements)[number]>();
-  for (const mv of movements) {
+  for (const mv of reconSaleMovements) {
     if (mv.transactionId) movementByTxId.set(mv.transactionId, mv);
     if (mv.saleTicketNumber) movementByTicket.set(mv.saleTicketNumber, mv);
   }
 
   const reconIssues: Array<{ level: 'Critique' | 'Alerte'; source: string; ref: string; message: string }> = [];
 
-  for (const tx of stockTxs) {
+  for (const tx of reconStockTxs) {
     const linkedById = movementByTxId.get(tx.id);
     const linkedByTicket = tx.saleTicketNumber ? movementByTicket.get(tx.saleTicketNumber) : undefined;
     const linked = linkedById || linkedByTicket;
@@ -1008,7 +1014,7 @@ export async function downloadStockReport(opts?: ReportOptions, departmentId: st
     }
   }
 
-  for (const mv of movements.filter(m => m.type === 'exit' && m.reason.toLowerCase().includes('vente'))) {
+  for (const mv of reconSaleMovements) {
     if (!mv.transactionId && !mv.saleTicketNumber) {
       reconIssues.push({
         level: 'Alerte',
@@ -1018,7 +1024,7 @@ export async function downloadStockReport(opts?: ReportOptions, departmentId: st
       });
       continue;
     }
-    if (mv.transactionId && !stockTxs.some(tx => tx.id === mv.transactionId)) {
+    if (mv.transactionId && !reconStockTxs.some(tx => tx.id === mv.transactionId)) {
       reconIssues.push({
         level: 'Alerte',
         source: 'Stock',
@@ -1028,11 +1034,11 @@ export async function downloadStockReport(opts?: ReportOptions, departmentId: st
     }
   }
 
-  y = addSectionTitle(doc, 'Rapprochement stock / comptabilité', y);
+  y = addSectionTitle(doc, 'Rapprochement stock / comptabilité (à partir d\'aujourd\'hui)', y);
   autoTable(doc, {
     startY: y,
     head: [["Ventes compta", "Mouvements vente", "Ecarts détectés"]],
-    body: [[String(stockTxs.length), String(movements.filter(m => m.type === 'exit' && m.reason.toLowerCase().includes('vente')).length), String(reconIssues.length)]],
+    body: [[String(reconStockTxs.length), String(reconSaleMovements.length), String(reconIssues.length)]],
     theme: 'grid',
     headStyles: { fillColor: [100, 60, 20], fontSize: 9 },
     bodyStyles: { fontSize: 10, fontStyle: 'bold' },

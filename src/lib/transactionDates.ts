@@ -46,6 +46,15 @@ export function isSameCalendarDate(a: string, b: string): boolean {
   return ka !== null && kb !== null && ka === kb;
 }
 
+export function isOnOrAfterCalendarDate(value: string, minimum: string | Date): boolean {
+  const currentKey = toCalendarDateKey(value);
+  const minimumKey = typeof minimum === 'string'
+    ? toCalendarDateKey(minimum)
+    : formatLocalDateInputValue(minimum);
+
+  return currentKey !== null && minimumKey !== null && currentKey >= minimumKey;
+}
+
 export function normalizeTransactionDate(value: string, fallback = new Date()): string {
   const raw = value?.trim();
   if (!raw) return fallback.toISOString();

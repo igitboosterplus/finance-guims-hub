@@ -38,6 +38,7 @@ import {
   type StockItem, type StockMovement, type MovementType, type Training, type TrainingType, type TraineeKit,
   type StockKit, type KitComponent, type TrainingKitUsage,
 } from "@/lib/stock";
+import { isOnOrAfterCalendarDate } from "@/lib/transactionDates";
 
 const UNITS = ['pièce', 'kg', 'sac', 'litre', 'carton', 'boîte', 'dose', 'lot'];
 
@@ -204,12 +205,18 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
   );
 
   const stockControl = useMemo(() => {
+    const saleLinkCutoff = new Date();
     const stockTxs = departmentTransactions
-      .filter(tx => tx.type === 'income' && (tx.stockItemId || tx.saleTicketNumber || tx.category.toLowerCase().includes('vente')));
+      .filter(tx => tx.type === 'income' && (tx.stockItemId || tx.saleTicketNumber || tx.category.toLowerCase().includes('vente')))
+      .filter(tx => isOnOrAfterCalendarDate(tx.date, saleLinkCutoff));
 
     const movementByTxId = new Map<string, StockMovement>();
     const movementByTicket = new Map<string, StockMovement>();
-    movements.forEach((mv) => {
+    const saleMovements = movements.filter(
+      mv => mv.type === 'exit' && mv.reason.toLowerCase().includes('vente') && isOnOrAfterCalendarDate(mv.date, saleLinkCutoff),
+    );
+
+    saleMovements.forEach((mv) => {
       if (mv.transactionId) movementByTxId.set(mv.transactionId, mv);
       if (mv.saleTicketNumber) movementByTicket.set(mv.saleTicketNumber, mv);
     });
@@ -220,7 +227,6 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
       return !byId && !byTicket;
     });
 
-    const saleMovements = movements.filter(mv => mv.type === 'exit' && mv.reason.toLowerCase().includes('vente'));
     const orphanSaleMovements = saleMovements.filter(mv => !mv.transactionId && !mv.saleTicketNumber);
     const brokenLinkedMovements = saleMovements.filter(mv => mv.transactionId && !stockTxs.some(tx => tx.id === mv.transactionId));
 
@@ -873,6 +879,7 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
       <Card className="border-0 shadow-sm">
         <CardHeader className="pb-2">
           <CardTitle className="text-base">Contrôle de cohérence stock</CardTitle>
+          <p className="text-xs text-muted-foreground">Les anciennes ventes non reliées sont ignorées; le contrôle repart des ventes du jour.</p>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
