@@ -1,7 +1,7 @@
-import { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useRef, useCallback, type ReactNode } from 'react';
 import { getCurrentUser, initDefaultSuperAdmin, logout as doLogout, syncSessionFromSupabase, type User } from '@/lib/auth';
 import { pullAllFromSupabase } from '@/lib/sync';
-import { isSupabaseConfigured } from '@/lib/firebase';
+import { getSupabase, isSupabaseConfigured, TABLES } from '@/lib/firebase';
 import { migrateInscriptionInstallments, cleanupOrphanedInstallments } from '@/lib/stock';
 
 interface AuthContextValue {
@@ -26,12 +26,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refresh = () => {
     setUser(getCurrentUser());
   };
 
-  const doSync = async () => {
+  const doSync = useCallback(async () => {
     if (!isSupabaseConfigured()) return;
     try {
       const result = await pullAllFromSupabase();
@@ -42,7 +43,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       console.error("[Sync] Erreur auto-sync:", err);
     }
-  };
+  }, []);
+
+  const scheduleSync = useCallback(() => {
+    if (!isSupabaseConfigured()) return;
+    if (syncTimerRef.current) {
+      clearTimeout(syncTimerRef.current);
+    }
+    syncTimerRef.current = setTimeout(() => {
+      syncTimerRef.current = null;
+      void doSync();
+    }, 250);
+  }, [doSync]);
 
   const forceSync = async () => {
     setSyncing(true);
@@ -83,16 +95,43 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // 5. Periodic sync every 30 seconds + sync when tab becomes visible
     if (isSupabaseConfigured()) {
       const interval = setInterval(doSync, 30_000);
+      const onStorage = () => scheduleSync();
       const onVisibilityChange = () => {
-        if (document.visibilityState === 'visible') doSync();
+        if (document.visibilityState === 'visible') scheduleSync();
       };
+      const supabase = getSupabase();
+      const channel = supabase
+        ? supabase
+            .channel('guims-shared-sync')
+            .on('postgres_changes', { event: '*', schema: 'public', table: TABLES.paymentPlans }, scheduleSync)
+            .on('postgres_changes', { event: '*', schema: 'public', table: TABLES.formationsCatalog }, scheduleSync)
+            .on('postgres_changes', { event: '*', schema: 'public', table: TABLES.enrollments }, scheduleSync)
+            .on('postgres_changes', { event: '*', schema: 'public', table: TABLES.transactions }, scheduleSync)
+            .on('postgres_changes', { event: '*', schema: 'public', table: TABLES.stockItems }, scheduleSync)
+            .on('postgres_changes', { event: '*', schema: 'public', table: TABLES.stockMovements }, scheduleSync)
+            .on('postgres_changes', { event: '*', schema: 'public', table: TABLES.stockKits }, scheduleSync)
+            .on('postgres_changes', { event: '*', schema: 'public', table: TABLES.users }, scheduleSync)
+            .on('postgres_changes', { event: '*', schema: 'public', table: TABLES.employees }, scheduleSync)
+            .on('postgres_changes', { event: '*', schema: 'public', table: TABLES.auditLog }, scheduleSync)
+            .on('postgres_changes', { event: '*', schema: 'public', table: TABLES.superAudit }, scheduleSync)
+            .subscribe()
+        : null;
       document.addEventListener('visibilitychange', onVisibilityChange);
+      window.addEventListener('storage', onStorage);
       return () => {
         clearInterval(interval);
         document.removeEventListener('visibilitychange', onVisibilityChange);
+        window.removeEventListener('storage', onStorage);
+        if (channel) {
+          void channel.unsubscribe();
+        }
+        if (syncTimerRef.current) {
+          clearTimeout(syncTimerRef.current);
+          syncTimerRef.current = null;
+        }
       };
     }
-  }, []);
+  }, [doSync, scheduleSync]);
 
   const logout = () => {
     doLogout();
