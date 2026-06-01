@@ -29,13 +29,11 @@ const EMPTY_FORM = {
 };
 
 export function EmployeeDirectory({ departmentId }: EmployeeDirectoryProps) {
-  const [employees, setEmployees] = useState(() => getEmployeesByDepartment(departmentId));
+  const employees = getEmployeesByDepartment(departmentId);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
   const [form, setForm] = useState(EMPTY_FORM);
-
-  const refresh = () => setEmployees(getEmployeesByDepartment(departmentId));
 
   const activeCount = useMemo(() => employees.filter(item => item.status === 'actif').length, [employees]);
   const monthlyPayroll = useMemo(() => employees.filter(item => item.status === 'actif').reduce((sum, item) => sum + (item.monthlySalary || 0), 0), [employees]);
@@ -108,14 +106,12 @@ export function EmployeeDirectory({ departmentId }: EmployeeDirectoryProps) {
     setDialogOpen(false);
     setEditingEmployee(null);
     setForm(EMPTY_FORM);
-    refresh();
   };
 
   const handleDelete = () => {
     if (!deleteId) return;
     deleteEmployee(deleteId);
     setDeleteId(null);
-    refresh();
     toast.success("Employé supprimé");
   };
 

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -22,27 +22,25 @@ function parseMonth(value: string): Date {
 export function EmployeeSalaryForecast() {
   const [selectedMonth, setSelectedMonth] = useState(() => monthKey(new Date()));
 
-  const rows = useMemo(() => {
-    const refDate = parseMonth(selectedMonth);
-    const employees = getEmployees().sort((a, b) => a.fullName.localeCompare(b.fullName, "fr", { sensitivity: "base" }));
+  const refDate = parseMonth(selectedMonth);
+  const employees = getEmployees().sort((a, b) => a.fullName.localeCompare(b.fullName, "fr", { sensitivity: "base" }));
 
-    return employees.map((employee) => {
-      const paid = getEmployeeWithdrawalsForMonth(employee, refDate);
-      const salary = employee.monthlySalary;
-      const hasSalary = !!salary && salary > 0;
-      const remaining = hasSalary ? Math.max((salary || 0) - paid, 0) : null;
-      const overrun = hasSalary ? Math.max(paid - (salary || 0), 0) : 0;
+  const rows = employees.map((employee) => {
+    const paid = getEmployeeWithdrawalsForMonth(employee, refDate);
+    const salary = employee.monthlySalary;
+    const hasSalary = !!salary && salary > 0;
+    const remaining = hasSalary ? Math.max((salary || 0) - paid, 0) : null;
+    const overrun = hasSalary ? Math.max(paid - (salary || 0), 0) : 0;
 
-      return {
-        employee,
-        paid,
-        salary,
-        hasSalary,
-        remaining,
-        overrun,
-      };
-    });
-  }, [selectedMonth]);
+    return {
+      employee,
+      paid,
+      salary,
+      hasSalary,
+      remaining,
+      overrun,
+    };
+  });
 
   const totalPaid = rows.reduce((sum, row) => sum + row.paid, 0);
   const totalSalaries = rows.reduce((sum, row) => sum + (row.salary || 0), 0);
