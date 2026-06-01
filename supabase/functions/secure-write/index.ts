@@ -34,11 +34,18 @@ function getOrigin(request: Request): string {
 }
 
 function isOriginAllowed(request: Request): boolean {
+function isLocalOrigin(origin: string): boolean {
+  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
+}
+
+function isOriginAllowed(request: Request): boolean {
   const allowed = parseCsvEnv("SECURE_WRITE_ALLOWED_ORIGINS");
   const origin = getOrigin(request);
   if (!origin) return true;
   if (allowed.length > 0) return allowed.includes(origin);
-  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
+  // Default: allow localhost (dev) AND any HTTPS origin (production web apps).
+  // Security is enforced by the bearer token + app_metadata.role check.
+  return isLocalOrigin(origin) || origin.startsWith("https://");
 }
 
 function getCorsHeadersForRequest(request: Request): Record<string, string> {
@@ -48,7 +55,7 @@ function getCorsHeadersForRequest(request: Request): Record<string, string> {
     if (allowed.length > 0 && allowed.includes(origin)) {
       return { ...corsHeaders, "Access-Control-Allow-Origin": origin };
     }
-    if (allowed.length === 0 && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)) {
+    if (allowed.length === 0 && (isLocalOrigin(origin) || origin.startsWith("https://"))) {
       return { ...corsHeaders, "Access-Control-Allow-Origin": origin };
     }
   }

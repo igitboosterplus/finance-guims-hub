@@ -32,7 +32,8 @@ function isOriginAllowed(request: Request): boolean {
   const origin = getOrigin(request);
   if (!origin) return true;
   if (allowed.length > 0) return allowed.includes(origin);
-  return isLocalOrigin(origin);
+  // Default: allow localhost (dev) AND any HTTPS origin (production web apps).
+  return isLocalOrigin(origin) || origin.startsWith("https://");
 }
 
 function getCorsHeadersForRequest(request: Request): Record<string, string> {
@@ -42,7 +43,7 @@ function getCorsHeadersForRequest(request: Request): Record<string, string> {
     if (allowed.length > 0 && allowed.includes(origin)) {
       return { ...corsHeaders, "Access-Control-Allow-Origin": origin };
     }
-    if (allowed.length === 0 && isLocalOrigin(origin)) {
+    if (allowed.length === 0 && (isLocalOrigin(origin) || origin.startsWith("https://"))) {
       return { ...corsHeaders, "Access-Control-Allow-Origin": origin };
     }
   }

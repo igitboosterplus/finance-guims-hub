@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useRef, useCallback, type ReactNode } from 'react';
 import { getCurrentUser, initDefaultSuperAdmin, logout as doLogout, syncSessionFromSupabase, type User } from '@/lib/auth';
 import { flushPendingSyncOps, pullAllFromSupabase } from '@/lib/sync';
+import { flushPendingSyncOps, pullAllFromSupabase, pushAllToSupabase } from '@/lib/sync';
 import { getSupabase, isSupabaseConfigured, TABLES } from '@/lib/firebase';
 import { migrateInscriptionInstallments, cleanupOrphanedInstallments } from '@/lib/stock';
 
@@ -11,6 +12,7 @@ interface AuthContextValue {
   refresh: () => void;
   logout: () => void;
   forceSync: () => Promise<void>;
+  forcePushAll: () => Promise<{ success: boolean; error?: string }>;
 }
 
 const AuthContext = createContext<AuthContextValue>({
@@ -20,6 +22,7 @@ const AuthContext = createContext<AuthContextValue>({
   refresh: () => {},
   logout: () => {},
   forceSync: async () => {},
+  forcePushAll: async () => ({ success: false }),
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -77,6 +80,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await doSync();
       refresh();
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const forcePushAll = async (): Promise<{ success: boolean; error?: string }> => {
+    setSyncing(true);
+    try {
+      const result = await pushAllToSupabase();
+      refresh();
+      return result;
     } finally {
       setSyncing(false);
     }

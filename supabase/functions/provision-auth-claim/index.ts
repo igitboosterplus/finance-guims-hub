@@ -29,7 +29,9 @@ function isOriginAllowed(request: Request): boolean {
   const origin = getOrigin(request);
   if (!origin) return true;
   if (allowed.length > 0) return allowed.includes(origin);
-  return isLocalOrigin(origin);
+  // Default: allow localhost (dev) AND any HTTPS origin (production web apps).
+  // Security is enforced by the bearer token + users table lookup below.
+  return isLocalOrigin(origin) || origin.startsWith("https://");
 }
 
 function getCorsHeadersForRequest(request: Request): Record<string, string> {
@@ -39,7 +41,7 @@ function getCorsHeadersForRequest(request: Request): Record<string, string> {
     if (allowed.length > 0 && allowed.includes(origin)) {
       return { ...corsHeaders, "Access-Control-Allow-Origin": origin };
     }
-    if (allowed.length === 0 && isLocalOrigin(origin)) {
+    if (allowed.length === 0 && (isLocalOrigin(origin) || origin.startsWith("https://"))) {
       return { ...corsHeaders, "Access-Control-Allow-Origin": origin };
     }
   }
@@ -123,8 +125,10 @@ Deno.serve(async (request) => {
 
   const { data: matchedUser, error: userError } = await serviceClient
     .from("users")
-    .select("username, display_name, role, approved")
-    .ilike("username", callerEmailUsername)
+    // The users table stores records as { id, data: {...} } JSONB.
+    // Use PostgREST JSONB path filter instead of a direct column.
+    .select("id, data")
+    .filter("data->>username", "ilike", callerEmailUsername)
     .limit(1)
     .maybeSingle();
 
@@ -136,11 +140,13 @@ Deno.serve(async (request) => {
     return jsonResponse({ error: "No mapped application user found" }, 403, responseHeaders);
   }
 
-  if (!matchedUser.approved) {
+  const userData = (matchedUser.data as Record<string, unknown>) || {};
+
+  if (!userData.approved) {
     return jsonResponse({ error: "Application user is not approved" }, 403, responseHeaders);
   }
 
-  const role = typeof matchedUser.role === "string" ? matchedUser.role.toLowerCase() : "";
+  const role = typeof userData.role === "string" ? userData.role.toLowerCase() : "";
   if (!getAllowedRoles().includes(role)) {
     return jsonResponse({ error: "Role not allowed for privileged claims" }, 403, responseHeaders);
   }
@@ -153,8 +159,8 @@ Deno.serve(async (request) => {
     app_metadata: {
       ...existingMetadata,
       role,
-      username: String(matchedUser.username || callerEmailUsername),
-      displayName: String(matchedUser.display_name || ""),
+      username: String(userData.username || callerEmailUsername),
+      displayName: String(userData.displayName || userData.display_name || ""),
     },
   });
 

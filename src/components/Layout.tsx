@@ -5,16 +5,23 @@ import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { LogOut, ShieldCheck, Shield, UserCircle, RefreshCw } from "lucide-react";
+import { LogOut, ShieldCheck, Shield, UserCircle, RefreshCw, UploadCloud } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 
 export default function Layout({ children }: { children: React.ReactNode }) {
-  const { user, syncing, logout, forceSync } = useAuth();
+  const { user, syncing, logout, forceSync, forcePushAll } = useAuth();
   const navigate = useNavigate();
 
   const handleSync = async () => {
     await forceSync();
     toast.success("Synchronisation terminée");
+  };
+
+  const handleForcePush = async () => {
+    const result = await forcePushAll();
+    if (result.success) toast.success("Toutes les données locales ont été envoyées vers Supabase");
+    else toast.error(`Erreur push: ${result.error || 'inconnu'}`);
   };
 
   return (
@@ -45,6 +52,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                 <Button variant="ghost" size="icon" className="h-7 w-7 sm:h-8 sm:w-8 text-muted-foreground" onClick={handleSync} disabled={syncing} title="Synchroniser les données">
                   <RefreshCw className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
                 </Button>
+                {user?.role === 'superadmin' && (
+                  <Button variant="ghost" size="icon" className="h-7 w-7 sm:h-8 sm:w-8 text-muted-foreground" onClick={handleForcePush} disabled={syncing} title="Forcer l'envoi de toutes les données locales vers Supabase">
+                    <UploadCloud className="h-4 w-4" />
+                  </Button>
+                )}
                 <Button variant="ghost" size="icon" className="h-7 w-7 sm:h-8 sm:w-8 text-muted-foreground" onClick={logout} title="Déconnexion">
                   <LogOut className="h-4 w-4" />
                 </Button>
