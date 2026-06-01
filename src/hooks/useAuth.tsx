@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useRef, useCallback, type ReactNode } from 'react';
 import { getCurrentUser, initDefaultSuperAdmin, logout as doLogout, syncSessionFromSupabase, type User } from '@/lib/auth';
-import { pullAllFromSupabase } from '@/lib/sync';
+import { flushPendingSyncOps, pullAllFromSupabase } from '@/lib/sync';
 import { getSupabase, isSupabaseConfigured, TABLES } from '@/lib/firebase';
 import { migrateInscriptionInstallments, cleanupOrphanedInstallments } from '@/lib/stock';
 
@@ -27,14 +27,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const syncInFlightRef = useRef<Promise<void> | null>(null);
 
   const refresh = () => {
     setUser(getCurrentUser());
   };
 
   const doSync = useCallback(async () => {
+    if (syncInFlightRef.current) {
+      await syncInFlightRef.current;
+      return;
+    }
+
+    const run = (async () => {
     if (!isSupabaseConfigured()) return;
     try {
+      await flushPendingSyncOps();
       const result = await pullAllFromSupabase();
       if (result.success) console.log("[Sync] Auto-sync OK");
       else console.warn("[Sync] Auto-sync échouée:", result.error);
@@ -42,6 +50,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       refresh();
     } catch (err) {
       console.error("[Sync] Erreur auto-sync:", err);
+    }
+    })();
+
+    syncInFlightRef.current = run;
+    try {
+      await run;
+    } finally {
+      syncInFlightRef.current = null;
     }
   }, []);
 
@@ -99,6 +115,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const onVisibilityChange = () => {
         if (document.visibilityState === 'visible') scheduleSync();
       };
+      const onOnline = () => scheduleSync();
       const supabase = getSupabase();
       const channel = supabase
         ? supabase
@@ -117,10 +134,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             .subscribe()
         : null;
       document.addEventListener('visibilitychange', onVisibilityChange);
+      window.addEventListener('online', onOnline);
       window.addEventListener('storage', onStorage);
       return () => {
         clearInterval(interval);
         document.removeEventListener('visibilitychange', onVisibilityChange);
+        window.removeEventListener('online', onOnline);
         window.removeEventListener('storage', onStorage);
         if (channel) {
           void channel.unsubscribe();

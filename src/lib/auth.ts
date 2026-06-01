@@ -123,6 +123,63 @@ function authEmailToUsername(email: string): string {
   return normalizeUsername(raw || '');
 }
 
+function parseRole(value: unknown): UserRole | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'superadmin' || normalized === 'admin') return normalized;
+  return null;
+}
+
+function upsertLocalUserFromSupabaseAuth(supabaseUser: {
+  email?: string | null;
+  app_metadata?: Record<string, unknown>;
+  user_metadata?: Record<string, unknown>;
+}): User | null {
+  const metadataUsername = typeof supabaseUser.app_metadata?.username === 'string'
+    ? normalizeUsername(supabaseUser.app_metadata.username)
+    : '';
+  const emailUsername = authEmailToUsername(supabaseUser.email || '');
+  const username = metadataUsername || emailUsername;
+  if (!username) return null;
+
+  const role = parseRole(supabaseUser.app_metadata?.role);
+  if (!role) return null;
+
+  const displayName =
+    (typeof supabaseUser.app_metadata?.displayName === 'string' && supabaseUser.app_metadata.displayName.trim()) ||
+    (typeof supabaseUser.user_metadata?.displayName === 'string' && supabaseUser.user_metadata.displayName.trim()) ||
+    username;
+
+  const users = getUsers();
+  const idx = users.findIndex(u => normalizeUsername(u.username) === username);
+
+  if (idx >= 0) {
+    users[idx] = {
+      ...users[idx],
+      username,
+      displayName,
+      role,
+      approved: true,
+      passwordHash: 'supabase$managed',
+    };
+    saveUsers(users);
+    return users[idx];
+  }
+
+  const hydrated: User = {
+    id: crypto.randomUUID(),
+    username,
+    passwordHash: 'supabase$managed',
+    displayName,
+    role,
+    approved: true,
+    createdAt: new Date().toISOString(),
+  };
+  users.push(hydrated);
+  saveUsers(users);
+  return hydrated;
+}
+
 async function provisionSupabaseRoleClaim(username: string): Promise<boolean> {
   if (!isSupabaseConfigured()) return false;
   const supabase = getSupabase() || initSupabase();
@@ -288,7 +345,7 @@ export function purgeAllData(): void {
     'finance-seed-done',
     'finance-superadmin-bootstrapped',
     'guims-sync-tombstones',
-    'guims-sync-pending-upserts',
+    'guims-sync-pending-ops',
     'guims-sync-cloud-seen-tables',
   ];
   for (const key of ALL_KEYS) {
@@ -300,10 +357,7 @@ export function purgeAllData(): void {
 export async function login(username: string, password: string): Promise<{ success: boolean; user?: User; error?: string }> {
   const users = getUsers();
   const normalized = normalizeUsername(username);
-  const user = users.find(u => normalizeUsername(u.username) === normalized);
-  if (!user) return { success: false, error: 'Nom d\'utilisateur inconnu' };
-
-  if (!user.approved) return { success: false, error: 'Votre compte est en attente d\'approbation par le Super Admin' };
+  let user = users.find(u => normalizeUsername(u.username) === normalized);
 
   if (!isSupabaseConfigured()) {
     return { success: false, error: 'Supabase Auth requis: configuration manquante' };
@@ -314,18 +368,32 @@ export async function login(username: string, password: string): Promise<{ succe
     return { success: false, error: 'Supabase non initialisé' };
   }
 
-  const email = usernameToAuthEmail(user.username);
+  const email = usernameToAuthEmail(user?.username || normalized);
   const signInAttempt = await supabase.auth.signInWithPassword({ email, password });
   if (signInAttempt.error) {
     return {
       success: false,
-      error: 'Connexion Supabase impossible. Si le compte est legacy, demander un reset de mot de passe admin.',
+      error: 'Connexion Supabase impossible. Verifiez le mot de passe ou demandez un reset admin.',
     };
+  }
+
+  if (!user) {
+    user = upsertLocalUserFromSupabaseAuth(signInAttempt.data.user ?? {});
+    if (!user) {
+      return {
+        success: false,
+        error: 'Compte Auth reconnu, mais role absent. Definir app_metadata.role=admin ou superadmin.',
+      };
+    }
+  }
+
+  if (!user.approved) {
+    return { success: false, error: 'Votre compte est en attente d\'approbation par le Super Admin' };
   }
 
   // Supabase is now source of truth for password verification.
   user.passwordHash = 'supabase$managed';
-  saveUsers(users);
+  saveUsers(getUsers().map(existing => existing.id === user!.id ? user! : existing));
 
   // Ensure JWT app_metadata.role mirrors approved role from users table.
   await provisionRoleClaimAndRefreshSession(user.username);
@@ -366,7 +434,10 @@ export async function syncSessionFromSupabase(): Promise<void> {
   }
 
   const users = getUsers();
-  const appUser = users.find(u => normalizeUsername(u.username) === username);
+  let appUser = users.find(u => normalizeUsername(u.username) === username);
+  if (!appUser) {
+    appUser = upsertLocalUserFromSupabaseAuth(data.user ?? {});
+  }
   if (!appUser || !appUser.approved) {
     localStorage.removeItem(SESSION_KEY);
     return;

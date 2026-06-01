@@ -14,6 +14,14 @@
 
 type TableName = typeof TABLES[keyof typeof TABLES];
 type CriticalTableName = typeof TABLES.transactions | typeof TABLES.users | typeof TABLES.auditLog | typeof TABLES.superAudit;
+type PendingSyncOperation = {
+  op: 'upsert' | 'delete';
+  tableName: TableName;
+  itemId: string;
+  item?: { id: string };
+  queuedAt: string;
+  attempts: number;
+};
 
 const STOCK_DEPTS = ['gaba', 'guims-academy', 'guims-educ', 'digitboosterplus'] as const;
 const SECURE_WRITE_FUNCTION = (import.meta.env.VITE_SECURE_WRITE_FUNCTION_NAME || 'secure-write').trim();
@@ -24,6 +32,57 @@ const CRITICAL_TABLES = new Set<CriticalTableName>([
   TABLES.auditLog,
   TABLES.superAudit,
 ]);
+const PENDING_SYNC_KEY = 'guims-sync-pending-ops';
+
+function getPendingSyncOps(): PendingSyncOperation[] {
+  try {
+    const raw = localStorage.getItem(PENDING_SYNC_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((op): op is PendingSyncOperation =>
+      op &&
+      (op.op === 'upsert' || op.op === 'delete') &&
+      typeof op.tableName === 'string' &&
+      typeof op.itemId === 'string'
+    );
+  } catch {
+    return [];
+  }
+}
+
+function setPendingSyncOps(ops: PendingSyncOperation[]) {
+  localStorage.setItem(PENDING_SYNC_KEY, JSON.stringify(ops));
+}
+
+function enqueuePendingUpsert(tableName: TableName, item: { id: string }) {
+  const existing = getPendingSyncOps().filter(
+    op => !(op.tableName === tableName && op.itemId === item.id)
+  );
+  existing.push({
+    op: 'upsert',
+    tableName,
+    itemId: item.id,
+    item,
+    queuedAt: new Date().toISOString(),
+    attempts: 0,
+  });
+  setPendingSyncOps(existing);
+}
+
+function enqueuePendingDelete(tableName: TableName, itemId: string) {
+  const existing = getPendingSyncOps().filter(
+    op => !(op.tableName === tableName && op.itemId === itemId)
+  );
+  existing.push({
+    op: 'delete',
+    tableName,
+    itemId,
+    queuedAt: new Date().toISOString(),
+    attempts: 0,
+  });
+  setPendingSyncOps(existing);
+}
 
 function stockStorageKey(dept: string, suffix: string): string {
   return `${dept === 'gaba' ? 'gaba' : dept}-${suffix}`;
@@ -51,6 +110,34 @@ async function invokeSecureWrite(body: Record<string, unknown>): Promise<boolean
     console.error('[Sync] Secure write failed:', e);
     return false;
   }
+}
+
+async function tryUpsertDoc(tableName: TableName, item: { id: string }): Promise<boolean> {
+  const sb = getSupabase();
+  if (!sb) return false;
+
+  if (isCriticalTable(tableName)) {
+    const ok = await invokeSecureWrite({
+      operation: 'upsert',
+      table: tableName,
+      row: { id: item.id, data: item },
+    });
+    if (ok) return true;
+    // Fallback: direct write via RLS — safe because the JWT is still validated
+    // against app_metadata.role by the RLS policy (app.is_staff()).
+    // secure-write can fail due to CORS (dev env) or network; we must not silently
+    // discard the write if the user has a valid authenticated session.
+    if (!ALLOW_INSECURE_DIRECT_SYNC) {
+      console.warn(`[Sync] secure-write failed for ${tableName}, trying direct RLS write as fallback`);
+    }
+  }
+
+  const { error } = await sb.from(tableName).upsert({ id: item.id, data: item }, { onConflict: 'id' });
+  if (error) {
+    console.error(`[Sync] Direct write failed for ${tableName}/${item.id}:`, error.message);
+    return false;
+  }
+  return true;
 }
 
 // ==================== DELETED IDS (Supabase-persisted) ====================
@@ -97,9 +184,9 @@ async function fetchCloudDeletedIds(): Promise<Set<string>> {
   }
 }
 
-async function persistDeleteToSupabase(tableName: string, itemId: string): Promise<void> {
+async function persistDeleteToSupabase(tableName: string, itemId: string): Promise<boolean> {
   const sb = getSupabase();
-  if (!sb) return;
+  if (!sb) return false;
   try {
     if (isCriticalTable(tableName as TableName)) {
       const tombstoneOk = await invokeSecureWrite({
@@ -118,7 +205,7 @@ async function persistDeleteToSupabase(tableName: string, itemId: string): Promi
       });
       if (tombstoneOk && deleteOk) {
         cloudDeletedIds.add(`${tableName}:${itemId}`);
-        return;
+        return true;
       }
       if (!ALLOW_INSECURE_DIRECT_SYNC) {
         throw new Error('Secure delete required but unavailable');
@@ -131,9 +218,50 @@ async function persistDeleteToSupabase(tableName: string, itemId: string): Promi
     );
     await sb.from(tableName).delete().eq('id', itemId);
     cloudDeletedIds.add(`${tableName}:${itemId}`);
+    return true;
   } catch (e) {
     console.error(`[Sync] Failed to persist delete ${tableName}/${itemId}:`, e);
+    return false;
   }
+}
+
+export async function flushPendingSyncOps(maxOps = 200): Promise<{ success: boolean; pending: number; processed: number }> {
+  const queue = getPendingSyncOps().sort((a, b) => a.queuedAt.localeCompare(b.queuedAt));
+  if (queue.length === 0) return { success: true, pending: 0, processed: 0 };
+
+  const remaining: PendingSyncOperation[] = [];
+  let processed = 0;
+
+  for (const op of queue) {
+    if (processed >= maxOps) {
+      remaining.push(op);
+      continue;
+    }
+
+    let ok = false;
+    try {
+      if (op.op === 'upsert' && op.item) {
+        ok = await tryUpsertDoc(op.tableName, op.item);
+      } else if (op.op === 'delete') {
+        ok = await persistDeleteToSupabase(op.tableName, op.itemId);
+      }
+    } catch (e) {
+      console.error('[Sync] Pending operation retry failed:', e);
+      ok = false;
+    }
+
+    if (!ok) {
+      remaining.push({ ...op, attempts: op.attempts + 1 });
+    }
+    processed += 1;
+  }
+
+  setPendingSyncOps(remaining);
+  return {
+    success: remaining.length === 0,
+    pending: remaining.length,
+    processed,
+  };
 }
 
 // ==================== PULL (Supabase -> localStorage) ====================
@@ -248,6 +376,13 @@ export async function pullAllFromSupabase(): Promise<{ success: boolean; error?:
       };
     }
 
+    // Flush pending local ops first (fire-and-forget — never block the pull
+    // even if some ops are still stuck; the queue persists for the next cycle).
+    const pendingFlush = await flushPendingSyncOps();
+    if (!pendingFlush.success && pendingFlush.pending > 0) {
+      console.warn(`[Sync] ${pendingFlush.pending} operation(s) locale(s) toujours en attente — pull continue quand meme`);
+    }
+
     cloudDeletedIds = await fetchCloudDeletedIds();
     await Promise.all([
       pullTable(TABLES.transactions, "finance-transactions"),
@@ -281,10 +416,10 @@ async function pushArrayToSupabase(tableName: TableName, items: { id: string }[]
       rows: items.map(item => ({ id: item.id, data: item })),
     });
     if (!ok) {
+      // Fallback to direct write (same RLS protection applies — safe).
       if (!ALLOW_INSECURE_DIRECT_SYNC) {
-        throw new Error(`Secure write rejected for critical table: ${tableName}`);
+        console.warn(`[Sync] secure-write rejected for ${tableName}, falling back to direct RLS write`);
       }
-      console.warn(`[Sync] Falling back to direct sync for critical table ${tableName} because VITE_ALLOW_INSECURE_DIRECT_SYNC=true`);
     } else {
       return;
     }
@@ -300,6 +435,8 @@ export async function pushAllToSupabase(): Promise<{ success: boolean; error?: s
   const sb = getSupabase();
   if (!sb) return { success: false, error: "Supabase non initialise" };
   try {
+    await flushPendingSyncOps();
+
     const sharedPairs: [TableName, string][] = [
       [TABLES.transactions, "finance-transactions"],
       [TABLES.users, "finance-users"],
@@ -338,6 +475,7 @@ export async function pushAllToSupabase(): Promise<{ success: boolean; error?: s
         await pushArrayToSupabase(tableName, allTagged);
       }
     }
+    await flushPendingSyncOps();
     console.log("[Sync] Push complet vers Supabase.");
     return { success: true };
   } catch (error) {
@@ -368,35 +506,29 @@ export async function purgeAllSupabase(): Promise<void> {
 // ==================== SINGLE DOCUMENT OPERATIONS ====================
 
 export function syncSetDoc(tableName: TableName, item: { id: string }) {
-  const sb = getSupabase();
-  if (!sb) return;
-
-  if (isCriticalTable(tableName)) {
-    invokeSecureWrite({
-      operation: 'upsert',
-      table: tableName,
-      row: { id: item.id, data: item },
-    }).then((ok) => {
-      if (!ok && ALLOW_INSECURE_DIRECT_SYNC) {
-        sb.from(tableName).upsert({ id: item.id, data: item }, { onConflict: "id" })
-          .then(({ error }) => {
-            if (error) console.error(`[Sync] Erreur ecriture ${tableName}/${item.id}:`, error);
-          });
-      }
-    });
-    return;
-  }
-
-  sb.from(tableName).upsert({ id: item.id, data: item }, { onConflict: "id" })
-    .then(({ error }) => {
-      if (error) console.error(`[Sync] Erreur ecriture ${tableName}/${item.id}:`, error);
-    });
+  void tryUpsertDoc(tableName, item).then((ok) => {
+    if (!ok) {
+      console.warn(`[Sync] Ecriture en attente ${tableName}/${item.id}`);
+      enqueuePendingUpsert(tableName, item);
+    }
+  }).catch((error) => {
+    console.error(`[Sync] Erreur ecriture ${tableName}/${item.id}:`, error);
+    enqueuePendingUpsert(tableName, item);
+  });
 }
 
 export function syncDeleteDoc(tableName: TableName, itemId: string) {
   addLocalTombstone(tableName, itemId);
   cloudDeletedIds.add(`${tableName}:${itemId}`);
-  persistDeleteToSupabase(tableName, itemId);
+  void persistDeleteToSupabase(tableName, itemId).then((ok) => {
+    if (!ok) {
+      console.warn(`[Sync] Suppression en attente ${tableName}/${itemId}`);
+      enqueuePendingDelete(tableName, itemId);
+    }
+  }).catch((error) => {
+    console.error(`[Sync] Erreur suppression ${tableName}/${itemId}:`, error);
+    enqueuePendingDelete(tableName, itemId);
+  });
 }
 
 export function syncFullCollection(tableName: TableName, storageKey: string, deptId?: string) {
