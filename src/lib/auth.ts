@@ -123,10 +123,10 @@ function authEmailToUsername(email: string): string {
   return normalizeUsername(raw || '');
 }
 
-async function provisionSupabaseRoleClaim(username: string): Promise<void> {
-  if (!isSupabaseConfigured()) return;
+async function provisionSupabaseRoleClaim(username: string): Promise<boolean> {
+  if (!isSupabaseConfigured()) return false;
   const supabase = getSupabase() || initSupabase();
-  if (!supabase) return;
+  if (!supabase) return false;
 
   try {
     const { error } = await supabase.functions.invoke(AUTH_ROLE_CLAIM_FUNCTION, {
@@ -136,9 +136,30 @@ async function provisionSupabaseRoleClaim(username: string): Promise<void> {
     });
     if (error) {
       console.warn('[Auth] Role claim provisioning failed:', error.message || error);
+      return false;
     }
+    return true;
   } catch (error) {
     console.warn('[Auth] Role claim provisioning failed:', error);
+    return false;
+  }
+}
+
+async function provisionRoleClaimAndRefreshSession(username: string): Promise<void> {
+  if (!isSupabaseConfigured()) return;
+  const supabase = getSupabase() || initSupabase();
+  if (!supabase) return;
+
+  const claimProvisioned = await provisionSupabaseRoleClaim(username);
+  if (!claimProvisioned) return;
+
+  try {
+    const { error } = await supabase.auth.refreshSession();
+    if (error) {
+      console.warn('[Auth] Session refresh after role claim failed:', error.message || error);
+    }
+  } catch (error) {
+    console.warn('[Auth] Session refresh after role claim failed:', error);
   }
 }
 
@@ -307,7 +328,7 @@ export async function login(username: string, password: string): Promise<{ succe
   saveUsers(users);
 
   // Ensure JWT app_metadata.role mirrors approved role from users table.
-  await provisionSupabaseRoleClaim(user.username);
+  await provisionRoleClaimAndRefreshSession(user.username);
 
   localStorage.setItem(SESSION_KEY, JSON.stringify({ userId: user.id, loginAt: new Date().toISOString() }));
   return { success: true, user };
@@ -351,7 +372,7 @@ export async function syncSessionFromSupabase(): Promise<void> {
     return;
   }
 
-  await provisionSupabaseRoleClaim(appUser.username);
+  await provisionRoleClaimAndRefreshSession(appUser.username);
 
   localStorage.setItem(SESSION_KEY, JSON.stringify({ userId: appUser.id, loginAt: new Date().toISOString() }));
 }

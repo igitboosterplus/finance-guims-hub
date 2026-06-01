@@ -32,16 +32,16 @@ import { ReportDialog } from "@/components/ReportDialog";
 import {
   getStockCategoriesForDept, getStockItems, addStockItem, updateStockItem, deleteStockItem,
   addStockMovement, getStockMovements, getStockStats, getCategoryLabel,
-  exportStockCSV, getTrainings, addTraining, deleteTraining,
+  exportStockCSV, getTrainings, addTraining, updateTraining, deleteTraining,
   getStockKits, addStockKit, updateStockKit, deleteStockKit, checkKitAvailability, sellKit, useKitForTraining,
+  getFormationsByDepartment, getEnrollmentsByFormation,
   generateSaleTicketNumber, updateStockMovementLink,
   type StockItem, type StockMovement, type MovementType, type Training, type TrainingType, type TraineeKit,
-  type StockKit, type KitComponent, type TrainingKitUsage,
+  type StockKit, type KitComponent, type TrainingKitUsage, type FormationCatalog,
 } from "@/lib/stock";
 import { isOnOrAfterCalendarDate } from "@/lib/transactionDates";
 
 const UNITS = ['pièce', 'kg', 'sac', 'litre', 'carton', 'boîte', 'dose', 'lot'];
-
 const ENTRY_REASONS = ['Achat', 'Don reçu', 'Production', 'Retour', 'Autre'];
 const EXIT_REASONS = ['Vente', 'Utilisation', 'Perte/Mortalité', 'Don', 'Autre'];
 const TRAINING_REASONS = ['Usage formation', 'Substrat formation', 'Démonstration', 'Autre'];
@@ -54,6 +54,52 @@ type StockCorrectionTarget =
   | { kind: 'missing-movement'; transactionId: string }
   | { kind: 'orphan-movement'; movementId: string }
   | { kind: 'broken-movement'; movementId: string };
+
+type GabaCategoryId = 'foss' | 'escargot' | 'champignon' | 'poisson' | 'autre';
+
+interface GabaCategoryDef {
+  id: GabaCategoryId;
+  label: string;
+  keywords: string[];
+}
+
+interface GabaLearnerEnrollment {
+  enrollmentId: string;
+  formationId: string;
+  formationName: string;
+  packId?: string;
+  packName?: string;
+  enrolledAt: string;
+  matchesSelectedCategory: boolean;
+}
+
+interface GabaLearnerOption {
+  key: string;
+  fullName: string;
+  phone?: string;
+  enrollments: GabaLearnerEnrollment[];
+}
+
+const GABA_CATEGORIES: GabaCategoryDef[] = [
+  { id: 'foss', label: 'Foss', keywords: ['foss', 'fosse'] },
+  { id: 'escargot', label: 'Escargot', keywords: ['escargot'] },
+  { id: 'champignon', label: 'Champignon', keywords: ['champignon'] },
+  { id: 'poisson', label: 'Poisson', keywords: ['poisson', 'pisciculture'] },
+  { id: 'autre', label: 'Autre', keywords: [] },
+];
+
+const normalizeText = (value: string) =>
+  value
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+
+const matchesGabaCategory = (formation: FormationCatalog, category: GabaCategoryDef): boolean => {
+  if (category.id === 'autre') return true;
+  const haystack = normalizeText(`${formation.name} ${formation.description || ''}`);
+  return category.keywords.some(keyword => haystack.includes(normalizeText(keyword)));
+};
 
 const parseDecimal = (value: string) => Number.parseFloat(value.replace(',', '.'));
 const formatQuantity = (value: number) => new Intl.NumberFormat('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(value);
@@ -109,14 +155,17 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
 
   // --- Training dialog ---
   const [trainingDialog, setTrainingDialog] = useState(false);
+  const [gabaLearnerToAdd, setGabaLearnerToAdd] = useState('');
   const [trainingForm, setTrainingForm] = useState({
     trainingType: 'gaba' as TrainingType,
     parkName: '', date: new Date().toISOString().slice(0, 10), enrollmentDate: new Date().toISOString().slice(0, 10), description: '',
-    trainees: '' as string, // comma-separated
+    gabaCategory: 'foss' as GabaCategoryId,
+    selectedLearnerKeys: [] as string[],
+    trainees: '' as string, // legacy support for existing flows
     tranche: '' as string, // Guims Academy
     materials: [] as { itemId: string; quantity: string }[],
     gifts: [] as { traineeName: string; itemId: string; quantity: string }[],
-    traineeKits: [] as { traineeName: string; starterKitHannetons: string; hasBook: boolean; }[],
+    traineeKits: [] as { traineeName: string; starterKitHannetons: string; hasBook: boolean; selectedPackId?: string; selectedPackName?: string; enrollmentId?: string; enrolledFormationId?: string; enrolledFormationName?: string; enrollmentDate?: string; }[],
     kitUsages: [] as { kitId: string; quantity: string }[],
   });
 
@@ -202,6 +251,101 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
   const transactionsById = useMemo(
     () => new Map(departmentTransactions.map(tx => [tx.id, tx])),
     [departmentTransactions],
+  );
+
+  const gabaCategoryDefinition = useMemo(
+    () => GABA_CATEGORIES.find(category => category.id === trainingForm.gabaCategory) ?? GABA_CATEGORIES[0],
+    [trainingForm.gabaCategory],
+  );
+
+  const gabaFormations = useMemo(
+    () => getFormationsByDepartment('gaba'),
+    [trainings],
+  );
+
+  const formationPackNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const formation of gabaFormations) {
+      for (const pack of formation.packs) {
+        map.set(`${formation.id}::${pack.id}`, pack.name);
+      }
+    }
+    return map;
+  }, [gabaFormations]);
+
+  const categoryFormations = useMemo(
+    () => gabaFormations.filter(formation => matchesGabaCategory(formation, gabaCategoryDefinition)),
+    [gabaFormations, gabaCategoryDefinition],
+  );
+
+  const categoryPackOptions = useMemo(() => {
+    const options: Array<{ value: string; label: string }> = [];
+    for (const formation of categoryFormations) {
+      for (const pack of formation.packs) {
+        options.push({
+          value: `${formation.id}::${pack.id}`,
+          label: `${formation.name} - ${pack.name}`,
+        });
+      }
+    }
+    return options;
+  }, [categoryFormations]);
+
+  const learnerOptions = useMemo(() => {
+    const byLearner = new Map<string, GabaLearnerOption>();
+
+    for (const formation of gabaFormations) {
+      const enrollmentsForFormation = getEnrollmentsByFormation(formation.id);
+      for (const enrollment of enrollmentsForFormation) {
+        const key = normalizeText(enrollment.fullName);
+        if (!key) continue;
+        const existing = byLearner.get(key);
+        const matchesSelectedCategory = categoryFormations.some(item => item.id === formation.id);
+        const packName = enrollment.packId ? formationPackNameById.get(`${formation.id}::${enrollment.packId}`) : undefined;
+
+        const enrollmentInfo: GabaLearnerEnrollment = {
+          enrollmentId: enrollment.id,
+          formationId: formation.id,
+          formationName: formation.name,
+          packId: enrollment.packId,
+          packName,
+          enrolledAt: enrollment.enrolledAt,
+          matchesSelectedCategory,
+        };
+
+        if (!existing) {
+          byLearner.set(key, {
+            key,
+            fullName: enrollment.fullName,
+            phone: enrollment.phone,
+            enrollments: [enrollmentInfo],
+          });
+          continue;
+        }
+
+        existing.enrollments.push(enrollmentInfo);
+        if (!existing.phone && enrollment.phone) {
+          existing.phone = enrollment.phone;
+        }
+      }
+    }
+
+    return [...byLearner.values()]
+      .map((learner) => ({
+        ...learner,
+        enrollments: learner.enrollments.sort((a, b) => new Date(b.enrolledAt).getTime() - new Date(a.enrolledAt).getTime()),
+      }))
+      .sort((a, b) => a.fullName.localeCompare(b.fullName, 'fr', { sensitivity: 'base' }));
+  }, [categoryFormations, formationPackNameById, gabaFormations]);
+
+  const learnerByKey = useMemo(
+    () => new Map(learnerOptions.map(learner => [learner.key, learner])),
+    [learnerOptions],
+  );
+
+  const selectedLearners = useMemo(
+    () => trainingForm.selectedLearnerKeys.map(key => learnerByKey.get(key)).filter(Boolean) as GabaLearnerOption[],
+    [learnerByKey, trainingForm.selectedLearnerKeys],
   );
 
   const stockControl = useMemo(() => {
@@ -609,29 +753,122 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
     refresh();
   };
 
+  const setTraineePackSelection = (traineeName: string, optionValue: string) => {
+    setTrainingForm((prev) => ({
+      ...prev,
+      traineeKits: prev.traineeKits.map((kit) => {
+        if (kit.traineeName !== traineeName) return kit;
+        if (!optionValue || optionValue === '__none__') {
+          return {
+            ...kit,
+            selectedPackId: undefined,
+            selectedPackName: undefined,
+          };
+        }
+
+        return {
+          ...kit,
+          selectedPackId: optionValue,
+          selectedPackName: formationPackNameById.get(optionValue) ?? optionValue,
+        };
+      }),
+    }));
+  };
+
+  const addLearnerToTraining = (learnerKey: string) => {
+    const learner = learnerByKey.get(learnerKey);
+    if (!learner) {
+      toast.error('Apprenant introuvable');
+      return;
+    }
+
+    const selectedEnrollment = learner.enrollments.find(entry => entry.matchesSelectedCategory) ?? learner.enrollments[0];
+    const selectedPackValue = selectedEnrollment?.packId ? `${selectedEnrollment.formationId}::${selectedEnrollment.packId}` : undefined;
+
+    setTrainingForm((prev) => {
+      if (prev.selectedLearnerKeys.includes(learnerKey)) return prev;
+
+      return {
+        ...prev,
+        selectedLearnerKeys: [...prev.selectedLearnerKeys, learnerKey],
+        traineeKits: [
+          ...prev.traineeKits,
+          {
+            traineeName: learner.fullName,
+            starterKitHannetons: '0',
+            hasBook: false,
+            ...(selectedEnrollment?.enrollmentId ? { enrollmentId: selectedEnrollment.enrollmentId } : {}),
+            ...(selectedEnrollment?.formationId ? { enrolledFormationId: selectedEnrollment.formationId } : {}),
+            ...(selectedEnrollment?.formationName ? { enrolledFormationName: selectedEnrollment.formationName } : {}),
+            ...(selectedEnrollment?.enrolledAt ? { enrollmentDate: selectedEnrollment.enrolledAt } : {}),
+            ...(selectedPackValue ? { selectedPackId: selectedPackValue } : {}),
+            ...(selectedEnrollment?.packName ? { selectedPackName: selectedEnrollment.packName } : {}),
+          },
+        ],
+      };
+    });
+
+    setGabaLearnerToAdd('');
+  };
+
+  const removeLearnerFromTraining = (learnerKey: string) => {
+    const learner = learnerByKey.get(learnerKey);
+    if (!learner) return;
+
+    setTrainingForm((prev) => ({
+      ...prev,
+      selectedLearnerKeys: prev.selectedLearnerKeys.filter((key) => key !== learnerKey),
+      traineeKits: prev.traineeKits.filter((kit) => kit.traineeName !== learner.fullName),
+      gifts: prev.gifts.filter((gift) => gift.traineeName.trim() !== learner.fullName),
+    }));
+  };
+
+  const buildGabaSessionLabel = () => {
+    const categoryLabel = gabaCategoryDefinition.label;
+    return `Formation ${categoryLabel} - ${selectedLearners.length} apprenant(s)`;
+  };
+
   // --- Training session handler ---
   const openTrainingDialog = () => {
+    setGabaLearnerToAdd('');
     setTrainingForm({
       trainingType: 'gaba',
       parkName: '', date: new Date().toISOString().slice(0, 10), description: '',
+      enrollmentDate: new Date().toISOString().slice(0, 10),
+      gabaCategory: 'foss',
+      selectedLearnerKeys: [],
       trainees: '', tranche: '',
       materials: [{ itemId: items[0]?.id ?? '', quantity: '' }],
       gifts: [],
       traineeKits: [],
       kitUsages: [],
-      enrollmentDate: new Date().toISOString().slice(0, 10),
     });
     setTrainingDialog(true);
   };
 
   const handleSaveTraining = () => {
-    if (!trainingForm.parkName.trim()) { toast.error('Nom du parc / lieu requis'); return; }
-    const traineeList = trainingForm.trainees.split(',').map(t => t.trim()).filter(Boolean);
+    const traineeList = trainingForm.trainingType === 'gaba'
+      ? selectedLearners.map(learner => learner.fullName)
+      : trainingForm.trainees.split(',').map(t => t.trim()).filter(Boolean);
+
+    if (trainingForm.trainingType !== 'gaba' && !trainingForm.parkName.trim()) {
+      toast.error('Nom du lieu requis');
+      return;
+    }
+
+    if (trainingForm.trainingType === 'gaba' && !trainingForm.gabaCategory) {
+      toast.error('Sélectionnez la catégorie de formation GABA');
+      return;
+    }
+
     if (traineeList.length === 0) { toast.error('Au moins un formé requis'); return; }
     if (trainingForm.trainingType === 'guims-academy' && !trainingForm.tranche) { toast.error('Veuillez sélectionner une tranche'); return; }
 
     const userName = user?.displayName ?? 'Inconnu';
     const errors: string[] = [];
+    const sessionLabel = trainingForm.trainingType === 'gaba'
+      ? buildGabaSessionLabel()
+      : trainingForm.parkName.trim();
 
     // Record material usage movements (GABA only)
     if (trainingForm.trainingType === 'gaba') {
@@ -639,7 +876,7 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
         const qty = parseDecimal(mat.quantity);
         if (!mat.itemId || isNaN(qty) || qty <= 0) continue;
         const item = items.find(i => i.id === mat.itemId);
-        const result = addStockMovement(mat.itemId, 'training', qty, 0, 'Usage formation', trainingForm.date, userName, trainingForm.parkName.trim(), undefined, departmentId);
+        const result = addStockMovement(mat.itemId, 'training', qty, 0, 'Usage formation', trainingForm.date, userName, sessionLabel, undefined, departmentId);
         if (!result.success) errors.push(`${item?.name}: ${result.error}`);
       }
 
@@ -648,7 +885,7 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
         const qty = parseDecimal(gift.quantity);
         if (!gift.itemId || isNaN(qty) || qty <= 0 || !gift.traineeName.trim()) continue;
         const item = items.find(i => i.id === gift.itemId);
-        const result = addStockMovement(gift.itemId, 'gift', qty, 0, `Don à ${gift.traineeName.trim()}`, trainingForm.date, userName, trainingForm.parkName.trim(), gift.traineeName.trim(), departmentId);
+        const result = addStockMovement(gift.itemId, 'gift', qty, 0, `Don à ${gift.traineeName.trim()}`, trainingForm.date, userName, sessionLabel, gift.traineeName.trim(), departmentId);
         if (!result.success) errors.push(`${item?.name} → ${gift.traineeName}: ${result.error}`);
       }
 
@@ -657,10 +894,14 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
         const qty = parseInt(ku.quantity, 10);
         if (!ku.kitId || isNaN(qty) || qty <= 0) continue;
         const kit = kits.find(k => k.id === ku.kitId);
-        const result = useKitForTraining(ku.kitId, qty, trainingForm.date, userName, trainingForm.parkName.trim(), departmentId);
+        const result = useKitForTraining(ku.kitId, qty, trainingForm.date, userName, sessionLabel, departmentId);
         if (!result.success) errors.push(`Kit ${kit?.name}: ${result.error}`);
       }
     }
+
+    const selectedLearnersNotInscrit = selectedLearners
+      .filter(learner => !learner.enrollments.some(entry => entry.matchesSelectedCategory))
+      .map(learner => learner.fullName);
 
     // Build trainee kits
     const traineeKits: TraineeKit[] = trainingForm.traineeKits
@@ -669,6 +910,12 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
         traineeName: k.traineeName.trim(),
         starterKitHannetons: parseInt(k.starterKitHannetons, 10) || 0,
         hasBook: k.hasBook,
+        ...(k.selectedPackId ? { selectedPackId: k.selectedPackId } : {}),
+        ...(k.selectedPackName ? { selectedPackName: k.selectedPackName } : {}),
+        ...(k.enrollmentId ? { enrollmentId: k.enrollmentId } : {}),
+        ...(k.enrolledFormationId ? { enrolledFormationId: k.enrolledFormationId } : {}),
+        ...(k.enrolledFormationName ? { enrolledFormationName: k.enrolledFormationName } : {}),
+        ...(k.enrollmentDate ? { enrollmentDate: k.enrollmentDate } : {}),
         otherItems: trainingForm.gifts.filter(g => g.traineeName.trim() === k.traineeName.trim()).map(g => ({
           traineeName: g.traineeName.trim(),
           itemId: g.itemId,
@@ -676,12 +923,23 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
         })),
       }));
 
+    const enrolledDates = traineeKits
+      .map(kit => kit.enrollmentDate)
+      .filter(Boolean) as string[];
+
+    const inferredEnrollmentDate = enrolledDates.length > 0
+      ? enrolledDates.sort((a, b) => new Date(a).getTime() - new Date(b).getTime())[0]
+      : new Date().toISOString();
+
     // Save training record
     addTraining({
       trainingType: trainingForm.trainingType,
-      parkName: trainingForm.parkName.trim(),
+      ...(trainingForm.trainingType === 'gaba' ? { gabaCategory: trainingForm.gabaCategory } : {}),
+      parkName: sessionLabel,
       date: trainingForm.date,
-      enrollmentDate: trainingForm.enrollmentDate ? new Date(trainingForm.enrollmentDate).toISOString() : new Date().toISOString(),
+      enrollmentDate: trainingForm.trainingType === 'gaba'
+        ? inferredEnrollmentDate
+        : (trainingForm.enrollmentDate ? new Date(trainingForm.enrollmentDate).toISOString() : new Date().toISOString()),
       description: trainingForm.description.trim(),
       trainees: traineeList,
       traineeKits,
@@ -694,6 +952,8 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
 
     if (errors.length > 0) {
       toast.error(`Formation enregistrée avec ${errors.length} erreur(s): ${errors[0]}`);
+    } else if (selectedLearnersNotInscrit.length > 0 && trainingForm.trainingType === 'gaba') {
+      toast.warning(`Formation enregistrée. Non inscrits dans cette catégorie: ${selectedLearnersNotInscrit.join(', ')}`);
     } else {
       toast.success('Formation enregistrée avec succès');
     }
@@ -706,6 +966,42 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
     deleteTraining(deleteTrainingId, departmentId);
     toast.success('Formation supprimée');
     setDeleteTrainingId(null);
+    refresh();
+  };
+
+  const handleSetKitDelivered = (trainingId: string, traineeName: string, delivered: boolean) => {
+    const training = trainings.find(entry => entry.id === trainingId);
+    if (!training) {
+      toast.error('Formation introuvable');
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const nextKits = (training.traineeKits || []).map((kit) => {
+      if (kit.traineeName !== traineeName) return kit;
+      if (delivered) {
+        return {
+          ...kit,
+          delivered: true,
+          deliveredAt: now,
+          deliveredBy: user?.displayName ?? 'Inconnu',
+        };
+      }
+      return {
+        ...kit,
+        delivered: false,
+        deliveredAt: undefined,
+        deliveredBy: undefined,
+      };
+    });
+
+    const updated = updateTraining(training.id, { traineeKits: nextKits }, departmentId);
+    if (!updated) {
+      toast.error('Impossible de mettre à jour la livraison');
+      return;
+    }
+
+    toast.success(delivered ? 'Kit marqué comme livré' : 'Kit marqué comme non livré');
     refresh();
   };
 
@@ -1216,6 +1512,11 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
             </Card>
           ) : (
             <div className="space-y-4">
+              <Card className="border border-blue-200 bg-blue-50/70 shadow-none dark:border-blue-900/40 dark:bg-blue-950/20">
+                <CardContent className="py-3 text-sm text-blue-800 dark:text-blue-300">
+                  Retrouvez ici chaque session enregistrée avec les formés, leurs dates d'inscription, leur pack choisi et le statut de livraison des kits.
+                </CardContent>
+              </Card>
               {[...trainings].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map(tr => (
                 <Card key={tr.id}>
                   <CardHeader className="pb-3">
@@ -1226,7 +1527,9 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
                         </div>
                         <div>
                           <CardTitle className="text-base flex items-center gap-2">
-                            {tr.parkName}
+                            {tr.trainingType === 'gaba'
+                              ? `Formation ${GABA_CATEGORIES.find(c => c.id === tr.gabaCategory)?.label || 'GABA'}`
+                              : tr.parkName}
                             <Badge variant="outline" className={tr.trainingType === 'guims-academy' ? 'border-blue-300 text-blue-700 dark:text-blue-400' : 'border-amber-300 text-amber-700 dark:text-amber-400'}>
                               {tr.trainingType === 'guims-academy' ? 'Guims Academy' : 'GABA'}
                             </Badge>
@@ -1234,7 +1537,7 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
                           </CardTitle>
                           <p className="text-sm text-muted-foreground">
                             {new Date(tr.date).toLocaleDateString('fr-FR')} · {tr.trainees.length} formé(s) · Par {tr.createdBy}
-                            {tr.enrollmentDate && <> · Inscrit le {new Date(tr.enrollmentDate).toLocaleDateString('fr-FR')}</>}
+                            {tr.trainingType !== 'gaba' && tr.enrollmentDate && <> · Inscrit le {new Date(tr.enrollmentDate).toLocaleDateString('fr-FR')}</>}
                           </p>
                         </div>
                       </div>
@@ -1245,25 +1548,65 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
                   </CardHeader>
                   <CardContent className="space-y-2 text-sm">
                     {tr.description && <p className="text-muted-foreground">{tr.description}</p>}
+                    {tr.trainingType === 'gaba' && tr.traineeKits && tr.traineeKits.length > 0 && (
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div className="rounded-lg border bg-muted/30 px-3 py-2">
+                          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Kits prévus</p>
+                          <p className="text-lg font-semibold">{tr.traineeKits.length}</p>
+                        </div>
+                        <div className="rounded-lg border border-success/30 bg-success/5 px-3 py-2">
+                          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Kits livrés</p>
+                          <p className="text-lg font-semibold text-success">{tr.traineeKits.filter(kit => kit.delivered).length}</p>
+                        </div>
+                        <div className="rounded-lg border border-amber-500/30 bg-amber-50/70 px-3 py-2 dark:bg-amber-950/20">
+                          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Reste à livrer</p>
+                          <p className="text-lg font-semibold text-amber-700 dark:text-amber-400">{tr.traineeKits.filter(kit => !kit.delivered).length}</p>
+                        </div>
+                      </div>
+                    )}
                     <div className="flex flex-wrap gap-1">
                       <span className="font-medium">Formés :</span>
                       {tr.trainees.map((t, i) => <Badge key={i} variant="secondary">{t}</Badge>)}
                     </div>
                     {/* Trainee kits */}
                     {tr.traineeKits && tr.traineeKits.length > 0 && (
-                      <div>
-                        <span className="font-medium">Kits de démarrage :</span>
-                        <ul className="list-disc list-inside text-muted-foreground">
+                      <div className="space-y-2">
+                        <span className="font-medium">Livraison des kits par formé :</span>
+                        <div className="space-y-2">
                           {tr.traineeKits.map((kit, i) => (
-                            <li key={i}>
-                              <span className="font-medium text-foreground">{kit.traineeName}</span>
-                              {kit.starterKitHannetons > 0 && ` — ${kit.starterKitHannetons} hanneton(s)`}
-                              {kit.hasBook && ' — Livre ✓'}
-                              {kit.otherItems?.length > 0 && ` — ${kit.otherItems.map(oi => { const it = items.find(x => x.id === oi.itemId); return `${it?.name ?? '?'} ×${oi.quantity}`; }).join(', ')}`}
-                            </li>
+                            <div key={i} className="rounded-lg border p-3 bg-card">
+                              <div className="flex flex-col gap-1 py-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="font-medium text-foreground">{kit.traineeName}</span>
+                                  <Badge variant={kit.delivered ? 'default' : 'secondary'}>
+                                    {kit.delivered ? 'Kit livré' : 'Kit non livré'}
+                                  </Badge>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant={kit.delivered ? 'outline' : 'default'}
+                                    className="h-7 text-[11px]"
+                                    onClick={() => handleSetKitDelivered(tr.id, kit.traineeName, !kit.delivered)}
+                                  >
+                                    {kit.delivered ? 'Marquer non livré' : 'Marquer livré'}
+                                  </Button>
+                                </div>
+                                <div className="text-muted-foreground">
+                                  {kit.enrollmentDate && `inscrit le ${new Date(kit.enrollmentDate).toLocaleDateString('fr-FR')}`}
+                                  {kit.selectedPackName && `${kit.enrollmentDate ? ' · ' : ''}pack ${kit.selectedPackName}`}
+                                  {kit.starterKitHannetons > 0 && ` — ${kit.starterKitHannetons} hanneton(s)`}
+                                  {kit.hasBook && ' — Livre ✓'}
+                                  {kit.otherItems?.length > 0 && ` — ${kit.otherItems.map(oi => { const it = items.find(x => x.id === oi.itemId); return `${it?.name ?? '?'} ×${oi.quantity}`; }).join(', ')}`}
+                                  {kit.delivered && kit.deliveredAt && ` · livré le ${new Date(kit.deliveredAt).toLocaleDateString('fr-FR')}`}
+                                </div>
+                              </div>
+                            </div>
                           ))}
-                        </ul>
+                        </div>
                       </div>
+                    )}
+                    {(!tr.traineeKits || tr.traineeKits.length === 0) && tr.trainingType === 'gaba' && (
+                      <p className="text-xs text-muted-foreground">Aucune attribution de kit enregistrée pour cette session.</p>
                     )}
                     {tr.materialsUsed.length > 0 && (
                       <div>
@@ -1657,20 +2000,30 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
                 </Select>
               </div>
               <div className="space-y-2">
-                <Label>{trainingForm.trainingType === 'gaba' ? 'Parc de formation *' : 'Lieu de formation *'}</Label>
-                <Input placeholder={trainingForm.trainingType === 'gaba' ? 'Ex: Parc Central, Parc Nord...' : 'Ex: Salle A, Campus...'} value={trainingForm.parkName} onChange={e => setTrainingForm(f => ({ ...f, parkName: e.target.value }))} />
+                {trainingForm.trainingType === 'gaba' ? (
+                  <>
+                    <Label>Catégorie de formation GABA *</Label>
+                    <Select value={trainingForm.gabaCategory} onValueChange={(v: string) => setTrainingForm(f => ({ ...f, gabaCategory: v as GabaCategoryId }))}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {GABA_CATEGORIES.map((category) => (
+                          <SelectItem key={category.id} value={category.id}>{category.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </>
+                ) : (
+                  <>
+                    <Label>Lieu de formation *</Label>
+                    <Input placeholder="Ex: Salle A, Campus..." value={trainingForm.parkName} onChange={e => setTrainingForm(f => ({ ...f, parkName: e.target.value }))} />
+                  </>
+                )}
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>Date de formation</Label>
-                <Input type="date" value={trainingForm.date} onChange={e => setTrainingForm(f => ({ ...f, date: e.target.value }))} />
-              </div>
-              <div className="space-y-2">
-                <Label>Date d'inscription *</Label>
-                <Input type="date" value={trainingForm.enrollmentDate} onChange={e => setTrainingForm(f => ({ ...f, enrollmentDate: e.target.value }))} />
-              </div>
+            <div className="space-y-2">
+              <Label>Date de formation</Label>
+              <Input type="date" value={trainingForm.date} onChange={e => setTrainingForm(f => ({ ...f, date: e.target.value }))} />
             </div>
 
             {trainingForm.trainingType === 'guims-academy' && (
@@ -1692,31 +2045,100 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
               <Label>Description / notes</Label>
               <Input placeholder="Description de la formation..." value={trainingForm.description} onChange={e => setTrainingForm(f => ({ ...f, description: e.target.value }))} />
             </div>
-            <div className="space-y-2">
-              <Label>Formés (séparer par des virgules) *</Label>
-              <Input placeholder="Jean Dupont, Marie Kamga, ..." value={trainingForm.trainees} onChange={e => {
-                const names = e.target.value;
-                setTrainingForm(f => ({ ...f, trainees: names }));
-              }} />
-              {trainingForm.trainees && (
-                <Button type="button" variant="outline" size="sm" className="mt-1" onClick={() => {
-                  const nameList = trainingForm.trainees.split(',').map(n => n.trim()).filter(Boolean);
-                  setTrainingForm(f => ({
-                    ...f,
-                    traineeKits: nameList.map(name => {
-                      const existing = f.traineeKits.find(k => k.traineeName === name);
-                      return existing ?? { traineeName: name, starterKitHannetons: '0', hasBook: false };
-                    }),
-                  }));
-                }}>
-                  Générer les kits pour chaque formé
-                </Button>
-              )}
-            </div>
+            {trainingForm.trainingType === 'gaba' ? (
+              <div className="space-y-2">
+                <Label>Apprenants (sélection depuis la base) *</Label>
+                <div className="flex gap-2">
+                  <Select value={gabaLearnerToAdd} onValueChange={setGabaLearnerToAdd}>
+                    <SelectTrigger className="flex-1">
+                      <SelectValue placeholder="Sélectionner un apprenant déjà inscrit" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {learnerOptions.length === 0 ? (
+                        <SelectItem value="__none__" disabled>Aucun apprenant inscrit dans la base</SelectItem>
+                      ) : (
+                        learnerOptions.map((learner) => (
+                          <SelectItem key={learner.key} value={learner.key}>{learner.fullName}</SelectItem>
+                        ))
+                      )}
+                    </SelectContent>
+                  </Select>
+                  <Button type="button" variant="outline" onClick={() => {
+                    if (!gabaLearnerToAdd || gabaLearnerToAdd === '__none__') {
+                      toast.error('Sélectionnez un apprenant');
+                      return;
+                    }
+                    addLearnerToTraining(gabaLearnerToAdd);
+                  }}>
+                    Ajouter
+                  </Button>
+                </div>
 
-            <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-3 text-sm text-blue-700 dark:text-blue-400">
-              📋 La date d'inscription est définie ci-dessus. Par défaut c'est la date du jour ({new Date().toLocaleDateString('fr-FR')}).
-            </div>
+                {selectedLearners.length > 0 && (
+                  <div className="rounded-lg border p-3 space-y-2">
+                    {selectedLearners.map((learner) => {
+                      const selectedKit = trainingForm.traineeKits.find(k => k.traineeName === learner.fullName);
+                      const matchingEnrollment = learner.enrollments.find(entry => entry.matchesSelectedCategory);
+                      return (
+                        <div key={learner.key} className="rounded-md border p-2 space-y-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="font-medium text-sm">{learner.fullName}</p>
+                            <Button type="button" variant="ghost" size="icon" className="h-7 w-7" onClick={() => removeLearnerFromTraining(learner.key)}>
+                              <Trash2 className="h-4 w-4 text-destructive" />
+                            </Button>
+                          </div>
+                          {matchingEnrollment ? (
+                            <p className="text-xs text-success">
+                              Inscrit le {new Date(matchingEnrollment.enrolledAt).toLocaleDateString('fr-FR')} ({matchingEnrollment.formationName})
+                            </p>
+                          ) : (
+                            <p className="text-xs text-amber-700 dark:text-amber-400">
+                              Cet apprenant n'est pas inscrit dans cette catégorie. Vous pouvez tout de même le garder dans la session.
+                            </p>
+                          )}
+                          {categoryPackOptions.length > 0 && (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 items-center">
+                              <Label className="text-xs">Pack choisi</Label>
+                              <Select
+                                value={selectedKit?.selectedPackId || '__none__'}
+                                onValueChange={(value) => setTraineePackSelection(learner.fullName, value)}
+                              >
+                                <SelectTrigger className="h-8">
+                                  <SelectValue placeholder="Sélectionner un pack" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="__none__">Aucun pack</SelectItem>
+                                  {categoryPackOptions.map((option) => (
+                                    <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-3 text-sm text-blue-700 dark:text-blue-400">
+                  Les dates d'inscription des formés sont récupérées automatiquement depuis la base dès leur sélection.
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Date d'inscription *</Label>
+                    <Input type="date" value={trainingForm.enrollmentDate} onChange={e => setTrainingForm(f => ({ ...f, enrollmentDate: e.target.value }))} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Formés (séparer par des virgules) *</Label>
+                    <Input placeholder="Jean Dupont, Marie Kamga, ..." value={trainingForm.trainees} onChange={e => setTrainingForm(f => ({ ...f, trainees: e.target.value }))} />
+                  </div>
+                </div>
+              </>
+            )}
 
             {/* Trainee kits (GABA) */}
             {trainingForm.trainingType === 'gaba' && trainingForm.traineeKits.length > 0 && (
@@ -1828,7 +2250,21 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
                 </div>
                 {trainingForm.gifts.map((gift, idx) => (
                   <div key={idx} className="flex gap-2 items-end">
-                    <Input className="w-36" placeholder="Nom du formé" value={gift.traineeName} onChange={e => { const g = [...trainingForm.gifts]; g[idx].traineeName = e.target.value; setTrainingForm(f => ({ ...f, gifts: g })); }} />
+                    <div className="w-44">
+                      <Select value={gift.traineeName || '__none__'} onValueChange={v => {
+                        const g = [...trainingForm.gifts];
+                        g[idx].traineeName = v === '__none__' ? '' : v;
+                        setTrainingForm(f => ({ ...f, gifts: g }));
+                      }}>
+                        <SelectTrigger><SelectValue placeholder="Formé" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">Sélectionner</SelectItem>
+                          {selectedLearners.map((learner) => (
+                            <SelectItem key={learner.key} value={learner.fullName}>{learner.fullName}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
                     <div className="flex-1">
                       <Select value={gift.itemId} onValueChange={v => { const g = [...trainingForm.gifts]; g[idx].itemId = v; setTrainingForm(f => ({ ...f, gifts: g })); }}>
                         <SelectTrigger><SelectValue placeholder="Article" /></SelectTrigger>

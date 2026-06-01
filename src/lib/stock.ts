@@ -107,6 +107,15 @@ export interface TraineeKit {
   starterKitHannetons: number; // Nombre de hannetons du kit de démarrage
   hasBook: boolean;            // A-t-il droit à un livre ?
   otherItems: TrainingGift[];  // Autres éléments offerts
+  selectedPackId?: string;
+  selectedPackName?: string;
+  enrollmentId?: string;
+  enrolledFormationId?: string;
+  enrolledFormationName?: string;
+  enrollmentDate?: string;
+  delivered?: boolean;
+  deliveredAt?: string;
+  deliveredBy?: string;
 }
 
 export interface TrainingKitUsage {
@@ -117,6 +126,7 @@ export interface TrainingKitUsage {
 export interface Training {
   id: string;
   trainingType: TrainingType;  // GABA ou Guims Academy
+  gabaCategory?: string;       // Catégorie GABA (foss, escargot, champignon, poisson, autre)
   parkName: string;            // Parc de formation (GABA) ou lieu (Academy)
   date: string;
   enrollmentDate: string;      // Date d'inscription (automatique)
@@ -394,6 +404,24 @@ export function addTraining(training: Omit<Training, 'id' | 'createdAt'>, depart
   trainings.push(newTraining);
   saveTrainings(trainings, departmentId);
   return newTraining;
+}
+
+export function updateTraining(
+  id: string,
+  updates: Partial<Omit<Training, 'id' | 'createdAt' | 'createdBy'>>,
+  departmentId: string = 'gaba',
+): Training | null {
+  const trainings = getTrainings(departmentId);
+  const index = trainings.findIndex(training => training.id === id);
+  if (index === -1) return null;
+
+  trainings[index] = {
+    ...trainings[index],
+    ...updates,
+  };
+
+  saveTrainings(trainings, departmentId);
+  return trainings[index];
 }
 
 export function deleteTraining(id: string, departmentId: string = 'gaba'): boolean {

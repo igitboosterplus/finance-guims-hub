@@ -235,6 +235,19 @@ export async function pullAllFromSupabase(): Promise<{ success: boolean; error?:
   const sb = getSupabase();
   if (!sb) return { success: false, error: "Supabase non initialise" };
   try {
+    const { data: authData, error: authError } = await sb.auth.getUser();
+    if (authError || !authData?.user) {
+      return { success: false, error: "Session Supabase invalide - reconnectez-vous" };
+    }
+
+    const role = String(authData.user.app_metadata?.role || '').toLowerCase();
+    if (role !== 'admin' && role !== 'superadmin') {
+      return {
+        success: false,
+        error: "Rôle de session non provisionné - reconnectez-vous pour synchroniser",
+      };
+    }
+
     cloudDeletedIds = await fetchCloudDeletedIds();
     await Promise.all([
       pullTable(TABLES.transactions, "finance-transactions"),
