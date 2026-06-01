@@ -45,6 +45,7 @@ const ENTRY_REASONS = ['Achat', 'Don reçu', 'Production', 'Retour', 'Autre'];
 const EXIT_REASONS = ['Vente', 'Utilisation', 'Perte/Mortalité', 'Don', 'Autre'];
 const TRAINING_REASONS = ['Usage formation', 'Substrat formation', 'Démonstration', 'Autre'];
 const GIFT_REASONS = ['Don au formé', 'Kit de démarrage', 'Échantillon', 'Autre'];
+const FINANCIAL_ENTRY_REASON = 'Achat';
 const DECIMAL_STEP = '0.01';
 
 type StockCorrectionMode = 'create-movement' | 'link-transaction' | 'create-transaction';
@@ -91,7 +92,19 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
   const [moveDialog, setMoveDialog] = useState(false);
   const [moveType, setMoveType] = useState<MovementType>('entry');
   const [moveItemId, setMoveItemId] = useState('');
-  const [moveForm, setMoveForm] = useState({ quantity: '', unitPrice: '', reason: '', date: new Date().toISOString().slice(0, 10), parkName: '', traineeName: '', transactionId: '' });
+  const [moveForm, setMoveForm] = useState({
+    quantity: '',
+    unitPrice: '',
+    reason: '',
+    date: new Date().toISOString().slice(0, 10),
+    parkName: '',
+    traineeName: '',
+    transactionId: '',
+    paymentMethod: (getPaymentMethodsForDepartment(departmentId)[0]?.value ?? 'especes') as PaymentMethod,
+    supplierName: '',
+    supplierPhone: '',
+    priceVarianceNote: '',
+  });
 
   // --- Training dialog ---
   const [trainingDialog, setTrainingDialog] = useState(false);
@@ -235,6 +248,33 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
     () => userPermissions.canRecordStockExitWithoutPrice ? EXIT_REASONS : EXIT_REASONS.filter(reason => reason === 'Vente'),
     [userPermissions.canRecordStockExitWithoutPrice],
   );
+
+  const selectedMoveItem = useMemo(
+    () => items.find(i => i.id === moveItemId),
+    [items, moveItemId],
+  );
+
+  const isFinancialEntry = useMemo(
+    () => moveType === 'entry' && moveForm.reason === FINANCIAL_ENTRY_REASON,
+    [moveType, moveForm.reason],
+  );
+
+  const entryUnitPrice = useMemo(() => {
+    const parsed = parseDecimal(moveForm.unitPrice);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }, [moveForm.unitPrice]);
+
+  const entryTotal = useMemo(() => {
+    if (!isFinancialEntry) return 0;
+    const qty = parseDecimal(moveForm.quantity);
+    if (!Number.isFinite(qty) || qty <= 0) return 0;
+    if (!Number.isFinite(entryUnitPrice) || entryUnitPrice <= 0) return 0;
+    return qty * entryUnitPrice;
+  }, [isFinancialEntry, moveForm.quantity, entryUnitPrice]);
+
+  const purchaseReferencePrice = selectedMoveItem?.purchasePrice ?? 0;
+  const purchasePriceDelta = isFinancialEntry ? entryUnitPrice - purchaseReferencePrice : 0;
+  const hasPurchasePriceDelta = isFinancialEntry && purchaseReferencePrice > 0 && Math.abs(purchasePriceDelta) > 0.0001;
 
   const openCorrectionForMissingMovement = (transactionId: string) => {
     const tx = transactionsById.get(transactionId);
@@ -459,8 +499,10 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
   };
 
   const openMovement = (type: MovementType, itemId?: string) => {
+    const selectedItemId = itemId ?? (items.length > 0 ? items[0].id : '');
+    const selectedItem = items.find(i => i.id === selectedItemId);
     setMoveType(type);
-    setMoveItemId(itemId ?? (items.length > 0 ? items[0].id : ''));
+    setMoveItemId(selectedItemId);
     const defaultReason = type === 'entry'
       ? ENTRY_REASONS[0]
       : type === 'training'
@@ -468,14 +510,39 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
         : type === 'gift'
           ? GIFT_REASONS[0]
           : allowedExitReasons[0];
-    setMoveForm({ quantity: '', unitPrice: '', reason: defaultReason, date: new Date().toISOString().slice(0, 10), parkName: '', traineeName: '', transactionId: '' });
+    setMoveForm({
+      quantity: '',
+      unitPrice: type === 'entry' && defaultReason === FINANCIAL_ENTRY_REASON && (selectedItem?.purchasePrice ?? 0) > 0
+        ? String(selectedItem?.purchasePrice ?? 0)
+        : '',
+      reason: defaultReason,
+      date: new Date().toISOString().slice(0, 10),
+      parkName: '',
+      traineeName: '',
+      transactionId: '',
+      paymentMethod: (getPaymentMethodsForDepartment(departmentId)[0]?.value ?? 'especes') as PaymentMethod,
+      supplierName: '',
+      supplierPhone: '',
+      priceVarianceNote: '',
+    });
     setMoveDialog(true);
   };
 
   const handleSaveMovement = () => {
     const qty = parseDecimal(moveForm.quantity);
     if (isNaN(qty) || qty <= 0) { toast.error('Quantité invalide'); return; }
-    const price = (moveType === 'training' || moveType === 'gift') ? 0 : (parseDecimal(moveForm.unitPrice) || 0);
+    const price = moveType === 'entry'
+      ? (isFinancialEntry ? (parseDecimal(moveForm.unitPrice) || 0) : 0)
+      : (moveType === 'training' || moveType === 'gift')
+        ? 0
+        : (parseDecimal(moveForm.unitPrice) || 0);
+    if (isFinancialEntry && price <= 0) { toast.error('Prix unitaire requis pour un achat'); return; }
+    if (isFinancialEntry && !moveForm.paymentMethod) { toast.error('Veuillez sélectionner la caisse de retrait'); return; }
+    if (isFinancialEntry && !moveForm.supplierName.trim()) { toast.error('Fournisseur requis pour une entrée payante'); return; }
+    if (hasPurchasePriceDelta && !moveForm.priceVarianceNote.trim()) {
+      toast.error('Veuillez préciser la raison de l\'écart de prix avec la référence');
+      return;
+    }
     if (!moveForm.reason.trim()) { toast.error('Motif requis'); return; }
     if (moveType === 'exit' && moveForm.reason !== 'Vente' && !userPermissions.canRecordStockExitWithoutPrice) {
       toast.error('Seuls les utilisateurs autorisés par le Super Admin peuvent enregistrer une sortie sans prix');
@@ -503,8 +570,35 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
       return;
     }
 
+    if (isFinancialEntry && price > 0) {
+      const item = items.find(i => i.id === moveItemId);
+      const totalAmount = qty * price;
+      const priceDeltaText = hasPurchasePriceDelta
+        ? ` | Réf: ${formatCurrency(purchaseReferencePrice)} | Écart: ${purchasePriceDelta > 0 ? '+' : ''}${formatCurrency(purchasePriceDelta)}`
+        : '';
+      const linkedExpense = addTransaction({
+        departmentId: departmentId as DepartmentId,
+        type: 'expense',
+        paymentMethod: moveForm.paymentMethod,
+        category: 'Achat stock',
+        personName: moveForm.supplierName.trim(),
+        phoneNumber: moveForm.supplierPhone.trim() || undefined,
+        description: `${moveForm.reason.trim()} - ${item?.name ?? 'Article'} (${formatQuantity(qty)} ${item?.unit ?? ''} x ${formatCurrency(price)})${priceDeltaText}${hasPurchasePriceDelta ? ` | Note: ${moveForm.priceVarianceNote.trim()}` : ''}`,
+        amount: totalAmount,
+        date: moveForm.date,
+      });
+
+      if (result.movement) {
+        updateStockMovementLink(result.movement.id, { transactionId: linkedExpense.id }, departmentId);
+      }
+    }
+
     const labels: Record<MovementType, string> = { entry: 'Entrée enregistrée', exit: 'Sortie enregistrée', adjustment: 'Ajustement enregistré', training: 'Usage formation enregistré', gift: 'Don au formé enregistré' };
-    toast.success(labels[moveType]);
+    if (isFinancialEntry && price > 0) {
+      toast.success(`Entrée enregistrée. Dépense de ${formatCurrency(qty * price)} imputée à la caisse sélectionnée.`);
+    } else {
+      toast.success(labels[moveType]);
+    }
     setMoveDialog(false);
     refresh();
   };
@@ -1277,7 +1371,13 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
           <div className="space-y-4 py-2">
             <div className="space-y-2">
               <Label>Article</Label>
-              <Select value={moveItemId} onValueChange={setMoveItemId}>
+              <Select value={moveItemId} onValueChange={(value) => {
+                setMoveItemId(value);
+                const item = items.find(i => i.id === value);
+                if (moveType === 'entry' && moveForm.reason === FINANCIAL_ENTRY_REASON && (item?.purchasePrice ?? 0) > 0) {
+                  setMoveForm(f => ({ ...f, unitPrice: String(item?.purchasePrice ?? 0) }));
+                }
+              }}>
                 <SelectTrigger><SelectValue placeholder="Sélectionner un article" /></SelectTrigger>
                 <SelectContent>
                   {items.map(i => (
@@ -1293,13 +1393,74 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
                 <Label>Quantité</Label>
                 <Input type="number" min="0" step={DECIMAL_STEP} placeholder="0" value={moveForm.quantity} onChange={e => setMoveForm(f => ({ ...f, quantity: e.target.value }))} />
               </div>
-              {moveType !== 'training' && moveType !== 'gift' && (
+              {(moveType === 'exit' || moveType === 'adjustment' || isFinancialEntry) && (
                 <div className="space-y-2">
                   <Label>Prix unitaire (FCFA)</Label>
                   <Input type="number" min="0" step={DECIMAL_STEP} placeholder="0" value={moveForm.unitPrice} onChange={e => setMoveForm(f => ({ ...f, unitPrice: e.target.value }))} />
                 </div>
               )}
             </div>
+            {isFinancialEntry && (
+              <div className="space-y-2">
+                <Label>Caisse de retrait</Label>
+                <Select value={moveForm.paymentMethod} onValueChange={v => setMoveForm(f => ({ ...f, paymentMethod: v as PaymentMethod }))}>
+                  <SelectTrigger><SelectValue placeholder="Sélectionner une caisse" /></SelectTrigger>
+                  <SelectContent>
+                    {getPaymentMethodsForDepartment(departmentId as DepartmentId).map(method => (
+                      <SelectItem key={method.value} value={method.value}>{method.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            {isFinancialEntry && (
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Fournisseur *</Label>
+                  <Input
+                    placeholder="Nom du fournisseur"
+                    value={moveForm.supplierName}
+                    onChange={e => setMoveForm(f => ({ ...f, supplierName: e.target.value }))}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Téléphone fournisseur</Label>
+                  <Input
+                    placeholder="Ex: 6XXXXXXXX"
+                    value={moveForm.supplierPhone}
+                    onChange={e => setMoveForm(f => ({ ...f, supplierPhone: e.target.value }))}
+                  />
+                </div>
+              </div>
+            )}
+            {isFinancialEntry && (
+              <div className="rounded-lg border bg-muted/40 p-3 text-sm space-y-1">
+                <p>
+                  Montant total : <span className="font-semibold">{formatCurrency(entryTotal)}</span>
+                </p>
+                <p>
+                  Prix de base (BD) : <span className="font-semibold">{formatCurrency(purchaseReferencePrice)}</span>
+                </p>
+                {hasPurchasePriceDelta && (
+                  <p className={purchasePriceDelta > 0 ? 'text-amber-700 dark:text-amber-400' : 'text-emerald-700 dark:text-emerald-400'}>
+                    Écart unitaire : <span className="font-semibold">{purchasePriceDelta > 0 ? '+' : ''}{formatCurrency(purchasePriceDelta)}</span>
+                  </p>
+                )}
+                <p className="text-muted-foreground">
+                  Cette somme sera enregistrée comme dépense dans la caisse sélectionnée.
+                </p>
+              </div>
+            )}
+            {hasPurchasePriceDelta && (
+              <div className="space-y-2">
+                <Label>Justification de l'écart de prix *</Label>
+                <Input
+                  placeholder="Ex: hausse marché, promo fournisseur, transport inclus..."
+                  value={moveForm.priceVarianceNote}
+                  onChange={e => setMoveForm(f => ({ ...f, priceVarianceNote: e.target.value }))}
+                />
+              </div>
+            )}
             {(moveType === 'training' || moveType === 'gift') && (
               <div className="space-y-2">
                 <Label>Parc de formation</Label>
@@ -1314,7 +1475,22 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
             )}
             <div className="space-y-2">
               <Label>Motif</Label>
-              <Select value={moveForm.reason} onValueChange={v => setMoveForm(f => ({ ...f, reason: v, transactionId: '' }))}>
+              <Select value={moveForm.reason} onValueChange={v => setMoveForm(f => {
+                const next = { ...f, reason: v, transactionId: '' };
+                if (moveType === 'entry') {
+                  if (v === FINANCIAL_ENTRY_REASON) {
+                    const ref = selectedMoveItem?.purchasePrice ?? 0;
+                    if (ref > 0) next.unitPrice = String(ref);
+                  } else {
+                    next.unitPrice = '';
+                    next.paymentMethod = (getPaymentMethodsForDepartment(departmentId)[0]?.value ?? 'especes') as PaymentMethod;
+                    next.supplierName = '';
+                    next.supplierPhone = '';
+                    next.priceVarianceNote = '';
+                  }
+                }
+                return next;
+              })}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {(moveType === 'entry' ? ENTRY_REASONS : moveType === 'training' ? TRAINING_REASONS : moveType === 'gift' ? GIFT_REASONS : allowedExitReasons).map(r => (
@@ -1323,6 +1499,11 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
                 </SelectContent>
               </Select>
             </div>
+            {moveType === 'entry' && !isFinancialEntry && (
+              <div className="rounded-lg border border-emerald-600/30 bg-emerald-50/70 p-3 text-sm text-emerald-700 dark:border-emerald-700/40 dark:bg-emerald-950/20 dark:text-emerald-400">
+                Cette entrée est non financière ({moveForm.reason}). Aucun retrait de caisse ni transaction de dépense ne sera créé.
+              </div>
+            )}
             {moveType === 'exit' && !userPermissions.canRecordStockExitWithoutPrice && (
               <div className="rounded-lg border border-amber-500/30 bg-amber-50/70 p-3 text-sm text-amber-700 dark:border-amber-700/40 dark:bg-amber-950/20 dark:text-amber-400">
                 Les sorties sans prix comme utilisation, perte ou don sont réservées aux utilisateurs autorisés par le Super Admin.
