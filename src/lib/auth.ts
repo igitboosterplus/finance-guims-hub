@@ -130,6 +130,46 @@ function parseRole(value: unknown): UserRole | null {
   return null;
 }
 
+function shouldAttemptAuthRecovery(errorMessage: string): boolean {
+  const value = errorMessage.toLowerCase();
+  return (
+    value.includes('invalid login credentials') ||
+    value.includes('email not confirmed') ||
+    value.includes('user not found') ||
+    value.includes('invalid grant')
+  );
+}
+
+async function recoverMissingAuthUserFromLocal(localUser: User, password: string): Promise<{ success: boolean; error?: string }> {
+  if (!isSupabaseConfigured()) return { success: false, error: 'Supabase non configuré' };
+  const supabase = getSupabase() || initSupabase();
+  if (!supabase) return { success: false, error: 'Supabase non initialisé' };
+
+  const role = parseRole(localUser.role);
+  if (!role) {
+    return { success: false, error: 'Rôle utilisateur local invalide' };
+  }
+
+  const email = usernameToAuthEmail(localUser.username);
+  const signUpResult = await supabase.auth.signUp({
+    email,
+    password,
+    options: {
+      data: {
+        username: localUser.username,
+        displayName: localUser.displayName,
+        role,
+      },
+    },
+  });
+
+  if (signUpResult.error && !/already registered|already been registered/i.test(signUpResult.error.message)) {
+    return { success: false, error: signUpResult.error.message || 'Échec création compte Auth' };
+  }
+
+  return { success: true };
+}
+
 function upsertLocalUserFromSupabaseAuth(supabaseUser: {
   email?: string | null;
   app_metadata?: Record<string, unknown>;
@@ -371,6 +411,36 @@ export async function login(username: string, password: string): Promise<{ succe
   const email = usernameToAuthEmail(user?.username || normalized);
   const signInAttempt = await supabase.auth.signInWithPassword({ email, password });
   if (signInAttempt.error) {
+    if (user?.approved && shouldAttemptAuthRecovery(signInAttempt.error.message || '')) {
+      const recovered = await recoverMissingAuthUserFromLocal(user, password);
+      if (recovered.success) {
+        const retry = await supabase.auth.signInWithPassword({ email, password });
+        if (!retry.error) {
+          const retriedUser = retry.data.user;
+          if (retriedUser) {
+            user = upsertLocalUserFromSupabaseAuth(retriedUser) || user;
+          }
+        }
+        if (!retry.error) {
+          let effectiveSupabaseUser = retry.data.user ?? null;
+          await provisionRoleClaimAndRefreshSession(normalized);
+          const refreshedAfterClaim = await supabase.auth.getUser();
+          if (!refreshedAfterClaim.error && refreshedAfterClaim.data?.user) {
+            effectiveSupabaseUser = refreshedAfterClaim.data.user;
+          }
+          if (!user) {
+            user = upsertLocalUserFromSupabaseAuth(effectiveSupabaseUser ?? {});
+          }
+          if (user) {
+            user.passwordHash = 'supabase$managed';
+            saveUsers(getUsers().map(existing => existing.id === user!.id ? user! : existing));
+            await provisionRoleClaimAndRefreshSession(user.username);
+            localStorage.setItem(SESSION_KEY, JSON.stringify({ userId: user.id, loginAt: new Date().toISOString() }));
+            return { success: true, user };
+          }
+        }
+      }
+    }
     return {
       success: false,
       error: 'Connexion Supabase impossible. Verifiez le mot de passe ou demandez un reset admin.',
