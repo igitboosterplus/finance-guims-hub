@@ -33,7 +33,6 @@ function getOrigin(request: Request): string {
   return (request.headers.get("origin") || "").trim();
 }
 
-function isOriginAllowed(request: Request): boolean {
 function isLocalOrigin(origin: string): boolean {
   return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
 }
