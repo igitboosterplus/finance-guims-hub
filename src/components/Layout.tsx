@@ -4,7 +4,6 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { LogOut, ShieldCheck, Shield, UserCircle, RefreshCw } from "lucide-react";
 import { LogOut, ShieldCheck, Shield, UserCircle, RefreshCw, UploadCloud } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -12,6 +11,20 @@ import { toast } from "sonner";
 export default function Layout({ children }: { children: React.ReactNode }) {
   const { user, syncing, logout, forceSync, forcePushAll } = useAuth();
   const navigate = useNavigate();
+
+  const formatUiError = (error: unknown): string => {
+    if (!error) return "inconnu";
+    if (typeof error === "string") return error;
+    if (error instanceof Error) return error.message;
+    if (typeof error === "object" && "message" in error && typeof (error as { message?: unknown }).message === "string") {
+      return String((error as { message?: unknown }).message);
+    }
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return "inconnu";
+    }
+  };
 
   const handleSync = async () => {
     await forceSync();
@@ -21,7 +34,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const handleForcePush = async () => {
     const result = await forcePushAll();
     if (result.success) toast.success("Toutes les données locales ont été envoyées vers Supabase");
-    else toast.error(`Erreur push: ${result.error || 'inconnu'}`);
+    else toast.error(`Erreur push: ${formatUiError(result.error)}`);
   };
 
   return (

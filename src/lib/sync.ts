@@ -33,6 +33,30 @@ const CRITICAL_TABLES = new Set<CriticalTableName>([
   TABLES.superAudit,
 ]);
 const PENDING_SYNC_KEY = 'guims-sync-pending-ops';
+const BULK_UPSERT_CHUNK_SIZE = 500;
+
+function toErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  if (error && typeof error === 'object') {
+    const maybeMessage = (error as { message?: unknown }).message;
+    if (typeof maybeMessage === 'string' && maybeMessage.trim()) return maybeMessage;
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return 'Erreur inconnue';
+    }
+  }
+  return 'Erreur inconnue';
+}
+
+function chunkItems<T>(items: T[], chunkSize: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += chunkSize) {
+    chunks.push(items.slice(i, i + chunkSize));
+  }
+  return chunks;
+}
 
 function getPendingSyncOps(): PendingSyncOperation[] {
   try {
@@ -401,25 +425,36 @@ async function pushArrayToSupabase(tableName: TableName, items: { id: string }[]
   const sb = getSupabase();
   if (!sb || items.length === 0) return;
 
+  const chunks = chunkItems(items, BULK_UPSERT_CHUNK_SIZE);
+
   if (isCriticalTable(tableName)) {
-    const ok = await invokeSecureWrite({
-      operation: 'upsert_collection',
-      table: tableName,
-      rows: items.map(item => ({ id: item.id, data: item })),
-    });
-    if (!ok) {
-      // Fallback to direct write (same RLS protection applies — safe).
-      if (!ALLOW_INSECURE_DIRECT_SYNC) {
-        console.warn(`[Sync] secure-write rejected for ${tableName}, falling back to direct RLS write`);
+    let allSecureChunksOk = true;
+    for (const chunk of chunks) {
+      const ok = await invokeSecureWrite({
+        operation: 'upsert_collection',
+        table: tableName,
+        rows: chunk.map(item => ({ id: item.id, data: item })),
+      });
+      if (!ok) {
+        allSecureChunksOk = false;
+        break;
       }
-    } else {
+    }
+    if (allSecureChunksOk) {
       return;
+    }
+
+    // Fallback to direct write (same RLS protection applies — safe).
+    if (!ALLOW_INSECURE_DIRECT_SYNC) {
+      console.warn(`[Sync] secure-write rejected for ${tableName}, falling back to direct RLS write`);
     }
   }
 
-  const rows = items.map(item => ({ id: item.id, data: item }));
-  const { error } = await sb.from(tableName).upsert(rows, { onConflict: "id" });
-  if (error) throw error;
+  for (const chunk of chunks) {
+    const rows = chunk.map(item => ({ id: item.id, data: item }));
+    const { error } = await sb.from(tableName).upsert(rows, { onConflict: "id" });
+    if (error) throw error;
+  }
 }
 
 export async function pushAllToSupabase(): Promise<{ success: boolean; error?: string }> {
@@ -472,7 +507,7 @@ export async function pushAllToSupabase(): Promise<{ success: boolean; error?: s
     return { success: true };
   } catch (error) {
     console.error("[Sync] Erreur push global:", error);
-    return { success: false, error: String(error) };
+    return { success: false, error: toErrorMessage(error) };
   }
 }
 
