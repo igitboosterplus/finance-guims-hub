@@ -93,7 +93,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const forcePushAll = async (): Promise<{ success: boolean; error?: string }> => {
     setSyncing(true);
     try {
-      const result = await pushAllToSupabase();
+      await syncSessionFromSupabase();
+      let result = await pushAllToSupabase();
+      if (!result.success) {
+        await syncSessionFromSupabase();
+        result = await pushAllToSupabase();
+      }
       refresh();
       return result;
     } finally {

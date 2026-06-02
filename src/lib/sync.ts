@@ -473,7 +473,8 @@ export async function pushAllToSupabase(): Promise<{ success: boolean; error?: s
   if (!isSupabaseConfigured()) return { success: false, error: "Supabase non configure" };
   const sb = getSupabase();
   if (!sb) return { success: false, error: "Supabase non initialise" };
-  try {
+
+  const pushOnce = async (): Promise<void> => {
     await flushPendingSyncOps();
 
     const sharedPairs: [TableName, string][] = [
@@ -493,6 +494,7 @@ export async function pushAllToSupabase(): Promise<{ success: boolean; error?: s
         await pushArrayToSupabase(tableName, items);
       }
     }
+
     const stockSuffixes: [TableName, string][] = [
       [TABLES.stockItems, 'stock-items'],
       [TABLES.stockMovements, 'stock-movements'],
@@ -514,7 +516,43 @@ export async function pushAllToSupabase(): Promise<{ success: boolean; error?: s
         await pushArrayToSupabase(tableName, allTagged);
       }
     }
+
     await flushPendingSyncOps();
+  };
+
+  try {
+    const { data: authData, error: authError } = await sb.auth.getUser();
+    if (authError || !authData?.user) {
+      return { success: false, error: "Session Supabase invalide - reconnectez-vous" };
+    }
+
+    const role = String(authData.user.app_metadata?.role || '').toLowerCase();
+    if (role !== 'admin' && role !== 'superadmin') {
+      return {
+        success: false,
+        error: "Session sans role admin/superadmin. Reconnectez-vous puis reessayez.",
+      };
+    }
+
+    try {
+      await pushOnce();
+    } catch (firstError) {
+      const firstMessage = toErrorMessage(firstError).toLowerCase();
+      const retryable =
+        firstMessage.includes('failed to fetch') ||
+        firstMessage.includes('network') ||
+        firstMessage.includes('permission denied') ||
+        firstMessage.includes('jwt') ||
+        firstMessage.includes('token') ||
+        firstMessage.includes('not allowed');
+
+      if (!retryable) throw firstError;
+
+      // Refresh session and retry once for transient/network/claim timing issues.
+      await sb.auth.refreshSession();
+      await pushOnce();
+    }
+
     console.log("[Sync] Push complet vers Supabase.");
     return { success: true };
   } catch (error) {
