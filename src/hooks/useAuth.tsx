@@ -1,6 +1,5 @@
 import { createContext, useContext, useState, useEffect, useRef, useCallback, type ReactNode } from 'react';
 import { getCurrentUser, initDefaultSuperAdmin, logout as doLogout, syncSessionFromSupabase, type User } from '@/lib/auth';
-import { flushPendingSyncOps, pullAllFromSupabase } from '@/lib/sync';
 import { flushPendingSyncOps, pullAllFromSupabase, pushAllToSupabase } from '@/lib/sync';
 import { getSupabase, isSupabaseConfigured, TABLES } from '@/lib/firebase';
 import { migrateInscriptionInstallments, cleanupOrphanedInstallments } from '@/lib/stock';
@@ -43,17 +42,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     const run = (async () => {
-    if (!isSupabaseConfigured()) return;
-    try {
-      await flushPendingSyncOps();
-      const result = await pullAllFromSupabase();
-      if (result.success) console.log("[Sync] Auto-sync OK");
-      else console.warn("[Sync] Auto-sync échouée:", result.error);
-      await syncSessionFromSupabase();
-      refresh();
-    } catch (err) {
-      console.error("[Sync] Erreur auto-sync:", err);
-    }
+      if (!isSupabaseConfigured()) return;
+      try {
+        // Ensure auth session and claims are up-to-date before any pull.
+        await syncSessionFromSupabase();
+        await flushPendingSyncOps();
+        let result = await pullAllFromSupabase();
+        if (!result.success) {
+          // Retry once after refreshing session claims.
+          await syncSessionFromSupabase();
+          result = await pullAllFromSupabase();
+        }
+        if (result.success) console.log("[Sync] Auto-sync OK");
+        else console.warn("[Sync] Auto-sync échouée:", result.error);
+        refresh();
+      } catch (err) {
+        console.error("[Sync] Erreur auto-sync:", err);
+      }
     })();
 
     syncInFlightRef.current = run;
@@ -98,13 +103,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     (async () => {
-      // 1. Pull from Supabase (get accounts/data created on other devices)
+      // 1. Stabilize Supabase session/claims first
       if (isSupabaseConfigured()) {
         try {
+          await syncSessionFromSupabase();
           const result = await pullAllFromSupabase();
           if (result.success) console.log("[Auth] Sync Supabase OK");
           else console.warn("[Auth] Sync échouée:", result.error);
-          await syncSessionFromSupabase();
         } catch (err) {
           console.error("[Auth] Erreur sync:", err);
         }
@@ -196,7 +201,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [user]);
 
   return (
-    <AuthContext.Provider value={{ user, loading, syncing, refresh, logout, forceSync }}>
+    <AuthContext.Provider value={{ user, loading, syncing, refresh, logout, forceSync, forcePushAll }}>
       {children}
     </AuthContext.Provider>
   );

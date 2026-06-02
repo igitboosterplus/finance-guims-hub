@@ -368,14 +368,6 @@ export async function pullAllFromSupabase(): Promise<{ success: boolean; error?:
       return { success: false, error: "Session Supabase invalide - reconnectez-vous" };
     }
 
-    const role = String(authData.user.app_metadata?.role || '').toLowerCase();
-    if (role !== 'admin' && role !== 'superadmin') {
-      return {
-        success: false,
-        error: "Rôle de session non provisionné - reconnectez-vous pour synchroniser",
-      };
-    }
-
     // Flush pending local ops first (fire-and-forget — never block the pull
     // even if some ops are still stuck; the queue persists for the next cycle).
     const pendingFlush = await flushPendingSyncOps();
