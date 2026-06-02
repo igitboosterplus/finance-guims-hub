@@ -307,9 +307,10 @@ async function pullTable(tableName: TableName, storageKey: string): Promise<bool
   }
 }
 
-async function pullStockTables(): Promise<void> {
+async function pullStockTables(): Promise<boolean> {
   const sb = getSupabase();
-  if (!sb) return;
+  if (!sb) return false;
+  let allOk = true;
   const stockTableSuffixes: [TableName, string][] = [
     [TABLES.stockItems, 'stock-items'],
     [TABLES.stockMovements, 'stock-movements'],
@@ -330,9 +331,11 @@ async function pullStockTables(): Promise<void> {
       }
     } catch (err) {
       console.error(`[Sync] Erreur pull stock ${tableName}:`, err);
+      allOk = false;
     }
   }
   recalcStockQuantities();
+  return allOk;
 }
 
 function recalcStockQuantities() {
@@ -400,7 +403,7 @@ export async function pullAllFromSupabase(): Promise<{ success: boolean; error?:
     }
 
     cloudDeletedIds = await fetchCloudDeletedIds();
-    await Promise.all([
+    const sharedPullResults = await Promise.all([
       pullTable(TABLES.transactions, "finance-transactions"),
       pullTable(TABLES.users, "finance-users"),
       pullTable(TABLES.employees, "finance-employees"),
@@ -410,7 +413,16 @@ export async function pullAllFromSupabase(): Promise<{ success: boolean; error?:
       pullTable(TABLES.paymentPlans, "payment-plans"),
       pullTable(TABLES.enrollments, "formation-enrollments"),
     ]);
-    await pullStockTables();
+    const stockPullOk = await pullStockTables();
+
+    const hasSharedPullFailure = sharedPullResults.some(ok => !ok);
+    if (hasSharedPullFailure || !stockPullOk) {
+      return {
+        success: false,
+        error: "Lecture Supabase partielle: au moins une table n'a pas pu etre synchronisee.",
+      };
+    }
+
     console.log("[Sync] Pull complet depuis Supabase.");
     return { success: true };
   } catch (error) {

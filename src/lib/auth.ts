@@ -377,12 +377,21 @@ export async function login(username: string, password: string): Promise<{ succe
     };
   }
 
+  let effectiveSupabaseUser = signInAttempt.data.user ?? null;
+
+  // Ensure role claim exists on fresh devices before trying to hydrate local user.
+  await provisionRoleClaimAndRefreshSession(normalized);
+  const refreshedAfterClaim = await supabase.auth.getUser();
+  if (!refreshedAfterClaim.error && refreshedAfterClaim.data?.user) {
+    effectiveSupabaseUser = refreshedAfterClaim.data.user;
+  }
+
   if (!user) {
-    user = upsertLocalUserFromSupabaseAuth(signInAttempt.data.user ?? {});
+    user = upsertLocalUserFromSupabaseAuth(effectiveSupabaseUser ?? {});
     if (!user) {
       return {
         success: false,
-        error: 'Compte Auth reconnu, mais role absent. Definir app_metadata.role=admin ou superadmin.',
+        error: 'Compte Auth reconnu, mais role absent dans la session. Reconnectez-vous puis contactez l\'admin si le probleme persiste.',
       };
     }
   }
@@ -433,10 +442,19 @@ export async function syncSessionFromSupabase(): Promise<void> {
     return;
   }
 
+  // Try to provision claim first, then re-read the user to get refreshed app_metadata.
+  await provisionRoleClaimAndRefreshSession(username);
+
+  let effectiveSupabaseUser = data.user;
+  const refreshedAfterClaim = await supabase.auth.getUser();
+  if (!refreshedAfterClaim.error && refreshedAfterClaim.data?.user) {
+    effectiveSupabaseUser = refreshedAfterClaim.data.user;
+  }
+
   const users = getUsers();
   let appUser = users.find(u => normalizeUsername(u.username) === username);
   if (!appUser) {
-    appUser = upsertLocalUserFromSupabaseAuth(data.user ?? {});
+    appUser = upsertLocalUserFromSupabaseAuth(effectiveSupabaseUser ?? {});
   }
   if (!appUser || !appUser.approved) {
     localStorage.removeItem(SESSION_KEY);
