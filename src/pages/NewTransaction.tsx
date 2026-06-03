@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { departments, addTransaction, getPaymentMethodsForDepartment, isEnrollmentCategory, isInscriptionCategory, isTranche, type DepartmentId, type PaymentMethod, formatCurrency, getMonthlyStats, getTransactions } from "@/lib/data";
+import { departments, addTransaction, getPaymentMethodsForDepartment, isEnrollmentCategory, isExternalContributionCategory, isInscriptionCategory, isTranche, type DepartmentId, type IncomeNature, type PaymentMethod, formatCurrency, getMonthlyStats, getTransactions } from "@/lib/data";
 import { addAuditEntry, getCurrentUser, hasPermission, hasDepartmentAccess } from "@/lib/auth";
 import { getStockItems, addStockMovement, generateSaleTicketNumber, getFormationsByDepartment, addPaymentPlan, addInstallment, getPaymentPlans, getEnrolledStudents, buildAllocationMessage, updatePlanInscription, getAllocationSummary, getRemainingAmount, addEnrollment, getEnrollmentsByFormation, updateEnrollment, type StockItem, type FormationCatalog, type FormationPack } from "@/lib/stock";
 import { findEmployeeByName, getActiveEmployeesByDepartment, getEmployeeSalaryStatus } from "@/lib/employees";
@@ -26,6 +26,7 @@ export default function NewTransaction() {
 
   const [departmentId, setDepartmentId] = useState<string>(preselectedDept);
   const [type, setType] = useState<'income' | 'expense'>('income');
+  const [incomeNature, setIncomeNature] = useState<IncomeNature>('operational');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('especes');
   const [category, setCategory] = useState('');
   const [personName, setPersonName] = useState('');
@@ -50,6 +51,13 @@ export default function NewTransaction() {
     ? type === 'income' ? selectedDept.incomeCategories : selectedDept.expenseCategories
     : [];
   const paymentMethods = getPaymentMethodsForDepartment(selectedDept?.id);
+
+  useEffect(() => {
+    if (type !== 'income') return;
+    if (isExternalContributionCategory(category)) {
+      setIncomeNature('external-contribution');
+    }
+  }, [type, category]);
 
   // Categories that involve stock movements (multi-department)
   const STOCK_CATEGORIES_MAP: Record<string, Record<string, 'entry' | 'exit'>> = {
@@ -511,6 +519,7 @@ export default function NewTransaction() {
     addTransaction({
       departmentId: departmentId as DepartmentId,
       type,
+      ...(type === 'income' ? { incomeNature } : {}),
       paymentMethod,
       category,
       personName: personName.trim(),
@@ -734,7 +743,7 @@ export default function NewTransaction() {
 
               <div className="space-y-2">
                 <Label>Type *</Label>
-                <Select value={type} onValueChange={(v) => { setType(v as 'income' | 'expense'); setCategory(''); setStockItemId(''); setQuantity(''); setFormationName(''); setFormationPackId(''); setDesiredTrainingDate(''); }}>
+                <Select value={type} onValueChange={(v) => { setType(v as 'income' | 'expense'); setIncomeNature('operational'); setCategory(''); setStockItemId(''); setQuantity(''); setFormationName(''); setFormationPackId(''); setDesiredTrainingDate(''); }}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
@@ -773,6 +782,24 @@ export default function NewTransaction() {
                   </SelectContent>
                 </Select>
               </div>
+
+              {type === 'income' && (
+                <div className="space-y-2">
+                  <Label>Origine de l'entrée *</Label>
+                  <Select value={incomeNature} onValueChange={(v) => setIncomeNature(v as IncomeNature)}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="operational">Revenu d'activité (vente, service, inscription...)</SelectItem>
+                      <SelectItem value="external-contribution">Apport externe (don, injection, financement externe)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Ce champ sert a distinguer les revenus operationnels des apports externes.
+                  </p>
+                </div>
+              )}
 
               <div className="space-y-2">
                 <Label>Date et heure</Label>

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { TrendingUp, ArrowUpRight, ArrowDownRight, Receipt, Wallet, Smartphone, Building2, Banknote, FileDown } from "lucide-react";
+import { TrendingUp, ArrowUpRight, ArrowDownRight, Receipt, Wallet, Smartphone, Building2, Banknote, FileDown, HandCoins } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatsCard } from "@/components/StatsCard";
 import { DepartmentCard } from "@/components/DepartmentCard";
@@ -138,8 +138,9 @@ export default function Dashboard() {
               <h3 className="text-lg font-semibold text-foreground">Vue globale (toutes périodes)</h3>
               <p className="text-xs sm:text-sm text-muted-foreground">Depuis le début des enregistrements</p>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
               <StatsCard title="Revenus totaux" value={stats.income} icon={ArrowUpRight} colorClass="text-success" />
+              <StatsCard title="Apports externes" value={stats.externalIncome} icon={HandCoins} colorClass="text-primary" />
               <StatsCard title="Dépenses totales" value={stats.expenses} icon={ArrowDownRight} colorClass="text-destructive" />
               <StatsCard title="Solde global" value={stats.balance} icon={TrendingUp} colorClass={stats.balance >= 0 ? "text-success" : "text-destructive"} />
               <StatsCard title="Transactions globales" value={stats.count} icon={Receipt} isCurrency={false} />
@@ -217,8 +218,9 @@ export default function Dashboard() {
             </p>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
             <StatsCard title="Revenus du mois" value={currentMonthStats.income} icon={ArrowUpRight} colorClass="text-success" trend={incomeTrend} />
+            <StatsCard title="Apports externes (mois)" value={currentMonthStats.externalIncome} icon={HandCoins} colorClass="text-primary" />
             <StatsCard title="Dépenses du mois" value={currentMonthStats.expenses} icon={ArrowDownRight} colorClass="text-destructive" trend={expenseTrend} invertTrend />
             <StatsCard title="Solde du mois" value={currentMonthStats.balance} icon={TrendingUp} colorClass={currentMonthStats.balance >= 0 ? "text-success" : "text-destructive"} trend={balanceTrend} />
             <StatsCard title="Transactions du mois" value={currentMonthStats.count} icon={Receipt} isCurrency={false} />

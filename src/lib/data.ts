@@ -35,6 +35,8 @@ export type PaymentMethod =
   | 'momo-digitboosterplus'
   | 'om-digitboosterplus';
 
+export type IncomeNature = 'operational' | 'external-contribution';
+
 export const PAYMENT_METHODS: { value: PaymentMethod; label: string }[] = [
   { value: 'especes', label: 'Espèces' },
   { value: 'banque', label: 'Banque' },
@@ -105,6 +107,7 @@ export interface Transaction {
   id: string;
   departmentId: DepartmentId;
   type: 'income' | 'expense';
+  incomeNature?: IncomeNature;
   paymentMethod: PaymentMethod;
   category: string;
   personName: string;       // Nom de la personne (client, fournisseur, formé, etc.)
@@ -133,7 +136,7 @@ export const departments: Department[] = [
     colorClass: 'dept-gaba',
     bgClass: 'bg-dept-gaba',
     bgLightClass: 'bg-dept-gaba-light',
-    incomeCategories: ['Vente intrants', 'Vente géniteurs', 'Inscriptions formation', 'Frais de formation', 'Autres revenus'],
+    incomeCategories: ['Vente intrants', 'Vente géniteurs', 'Inscriptions formation', 'Frais de formation', 'Apport externe', 'Autres revenus'],
     expenseCategories: ['Achat composants intrants', 'Achat géniteurs', 'Frais de transport', 'Frais divers'],
   },
   {
@@ -144,7 +147,7 @@ export const departments: Department[] = [
     colorClass: 'dept-guims-educ',
     bgClass: 'bg-dept-guims-educ',
     bgLightClass: 'bg-dept-guims-educ-light',
-    incomeCategories: ['Inscription élève/étudiant', 'Frais de cours à domicile', 'Frais cours en ligne', 'Prépas concours', 'Coaching scolaire', 'Autres formations'],
+    incomeCategories: ['Inscription élève/étudiant', 'Frais de cours à domicile', 'Frais cours en ligne', 'Prépas concours', 'Coaching scolaire', 'Apport externe', 'Autres formations'],
     expenseCategories: ['Communication Facebook', 'Frais de déplacement', 'Matériel pédagogique', 'Autres dépenses'],
   },
   {
@@ -155,7 +158,7 @@ export const departments: Department[] = [
     colorClass: 'dept-guims-academy',
     bgClass: 'bg-dept-guims-academy',
     bgLightClass: 'bg-dept-guims-academy-light',
-    incomeCategories: ['Inscription étudiant', 'Frais de formation - Tranche 1', 'Frais de formation - Tranche 2', 'Frais de formation - Tranche 3', 'Frais de formation - Complet'],
+    incomeCategories: ['Inscription étudiant', 'Frais de formation - Tranche 1', 'Frais de formation - Tranche 2', 'Frais de formation - Tranche 3', 'Frais de formation - Complet', 'Apport externe'],
     expenseCategories: ['Matériel de formation', 'Location salle', 'Rémunération formateur', 'Autres dépenses'],
   },
   {
@@ -166,7 +169,7 @@ export const departments: Department[] = [
     colorClass: 'dept-digitbooster',
     bgClass: 'bg-dept-digitbooster',
     bgLightClass: 'bg-dept-digitbooster-light',
-    incomeCategories: ['Création site web', 'Boost Facebook', 'Publication Facebook', 'Community management', 'Autres services digitaux'],
+    incomeCategories: ['Création site web', 'Boost Facebook', 'Publication Facebook', 'Community management', 'Apport externe', 'Autres services digitaux'],
     expenseCategories: ['Hébergement', 'Outils digitaux', 'Publicité', 'Autres dépenses'],
   },
   {
@@ -177,7 +180,7 @@ export const departments: Department[] = [
     colorClass: 'dept-charges-entreprise',
     bgClass: 'bg-dept-charges-entreprise',
     bgLightClass: 'bg-dept-charges-entreprise-light',
-    incomeCategories: ['Apport de trésorerie', 'Remboursement de charges', 'Autres revenus'],
+    incomeCategories: ['Apport de trésorerie', 'Apport externe', 'Remboursement de charges', 'Autres revenus'],
     expenseCategories: ['Paiement employés', 'Connexion internet', 'Loyer et charges locatives', 'Transport et missions', 'Impôts et taxes', 'Fournitures et services', 'Autres dépenses'],
   },
 ];
@@ -188,6 +191,39 @@ export const getDepartment = (id: DepartmentId) => departments.find(d => d.id ==
 
 // LocalStorage-based data management
 const STORAGE_KEY = 'finance-transactions';
+
+const EXTERNAL_INCOME_CATEGORY_MARKERS = [
+  'apport externe',
+  'apport de tresorerie',
+  'apport de trésorerie',
+  'don',
+  'subvention',
+  'financement externe',
+  'injection',
+];
+
+function normalizeText(value: string): string {
+  return value
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+}
+
+export function isExternalContributionCategory(category: string): boolean {
+  const normalized = normalizeText(category || '');
+  return EXTERNAL_INCOME_CATEGORY_MARKERS.some(marker => normalized.includes(normalizeText(marker)));
+}
+
+function normalizeIncomeNature(tx: Partial<Transaction>): Transaction['incomeNature'] {
+  if (tx.type !== 'income') return undefined;
+  if (tx.incomeNature === 'external-contribution' || tx.incomeNature === 'operational') {
+    return tx.incomeNature;
+  }
+  return isExternalContributionCategory(String(tx.category || ''))
+    ? 'external-contribution'
+    : 'operational';
+}
 
 function normalizeStoredTransaction(tx: any): Transaction {
   const normalizedCreatedAt = normalizeTransactionDate(tx?.createdAt || tx?.date || '');
@@ -202,12 +238,16 @@ function normalizeStoredTransaction(tx: any): Transaction {
     tx?.date !== normalizedDate ||
     (hasEnrollmentDate && tx?.enrollmentDate !== normalizedEnrollmentDate);
 
-  if (!changed) return tx as Transaction;
+  const normalizedIncomeNature = normalizeIncomeNature(tx as Partial<Transaction>);
+  const incomeNatureChanged = tx?.incomeNature !== normalizedIncomeNature;
+
+  if (!changed && !incomeNatureChanged) return tx as Transaction;
 
   return {
     ...tx,
     createdAt: normalizedCreatedAt,
     date: normalizedDate,
+    incomeNature: normalizedIncomeNature,
     ...(hasEnrollmentDate ? { enrollmentDate: normalizedEnrollmentDate } : {}),
   } as Transaction;
 }
@@ -233,6 +273,7 @@ export const addTransaction = (tx: Omit<Transaction, 'id' | 'createdAt'>): Trans
   const now = new Date();
   const newTx: Transaction = {
     ...tx,
+    incomeNature: normalizeIncomeNature(tx),
     date: normalizeTransactionDate(tx.date, now),
     ...(tx.enrollmentDate ? { enrollmentDate: normalizeTransactionDate(tx.enrollmentDate, now) } : {}),
     id: crypto.randomUUID(),
@@ -257,7 +298,11 @@ export const updateTransaction = (id: string, updates: Partial<Omit<Transaction,
     normalizedUpdates.enrollmentDate = normalizeTransactionDate(normalizedUpdates.enrollmentDate, new Date(transactions[index].createdAt));
   }
 
-  transactions[index] = { ...transactions[index], ...normalizedUpdates };
+  transactions[index] = {
+    ...transactions[index],
+    ...normalizedUpdates,
+    incomeNature: normalizeIncomeNature({ ...transactions[index], ...normalizedUpdates }),
+  };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(transactions));
   syncSetDoc(TABLES.transactions, transactions[index]);
   return transactions[index];
@@ -274,7 +319,7 @@ export const deleteTransaction = (id: string) => {
 
 export const exportTransactionsCSV = (): string => {
   const txs = getTransactions();
-  const headers = ['Date/Heure', 'Département', 'Type', 'Caisse', 'Nom', 'Téléphone', 'Catégorie', 'Description', 'Montant (FCFA)'];
+  const headers = ['Date/Heure', 'Département', 'Type', 'Origine entrée', 'Caisse', 'Nom', 'Téléphone', 'Catégorie', 'Description', 'Montant (FCFA)'];
   const rows = txs
     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
     .map(tx => {
@@ -283,6 +328,9 @@ export const exportTransactionsCSV = (): string => {
         new Date(tx.date).toLocaleString('fr-FR'),
         dept.name,
         tx.type === 'income' ? 'Revenu' : 'Dépense',
+        tx.type === 'income'
+          ? (tx.incomeNature === 'external-contribution' ? 'Apport externe' : 'Activité opérationnelle')
+          : '',
         getPaymentMethodLabel(tx.paymentMethod || 'especes', tx.departmentId),
         `"${(tx.personName || '').replace(/"/g, '""')}"`,
         `"${(tx.phoneNumber || '').replace(/"/g, '""')}"`,
@@ -326,15 +374,23 @@ export const getTransactionsByDepartment = (deptId: DepartmentId) => {
 export const getDepartmentStats = (deptId: DepartmentId) => {
   const txs = getTransactionsByDepartment(deptId);
   const income = txs.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
+  const externalIncome = txs
+    .filter(t => t.type === 'income' && t.incomeNature === 'external-contribution')
+    .reduce((s, t) => s + t.amount, 0);
+  const externalIncomeCount = txs.filter(t => t.type === 'income' && t.incomeNature === 'external-contribution').length;
   const expenses = txs.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
-  return { income, expenses, balance: income - expenses, count: txs.length };
+  return { income, externalIncome, externalIncomeCount, expenses, balance: income - expenses, count: txs.length };
 };
 
 export const getGlobalStats = () => {
   const txs = getTransactions();
   const income = txs.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
+  const externalIncome = txs
+    .filter(t => t.type === 'income' && t.incomeNature === 'external-contribution')
+    .reduce((s, t) => s + t.amount, 0);
+  const externalIncomeCount = txs.filter(t => t.type === 'income' && t.incomeNature === 'external-contribution').length;
   const expenses = txs.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
-  return { income, expenses, balance: income - expenses, count: txs.length };
+  return { income, externalIncome, externalIncomeCount, expenses, balance: income - expenses, count: txs.length };
 };
 
 export const getTransactionsByMonth = (year: number, month: number) => {
@@ -347,8 +403,12 @@ export const getTransactionsByMonth = (year: number, month: number) => {
 export const getMonthlyStats = (year: number, month: number) => {
   const txs = getTransactionsByMonth(year, month);
   const income = txs.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
+  const externalIncome = txs
+    .filter(t => t.type === 'income' && t.incomeNature === 'external-contribution')
+    .reduce((s, t) => s + t.amount, 0);
+  const externalIncomeCount = txs.filter(t => t.type === 'income' && t.incomeNature === 'external-contribution').length;
   const expenses = txs.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
-  return { income, expenses, balance: income - expenses, count: txs.length };
+  return { income, externalIncome, externalIncomeCount, expenses, balance: income - expenses, count: txs.length };
 };
 
 /** Returns % change: positive = improvement, negative = decrease. null if no previous data. */
