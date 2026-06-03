@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { TrendingUp, ArrowUpRight, ArrowDownRight, Receipt, Wallet, Smartphone, Building2, Banknote, FileDown, HandCoins } from "lucide-react";
+import { TrendingUp, ArrowUpRight, ArrowDownRight, Receipt, Wallet, Smartphone, Building2, Banknote, FileDown, HandCoins, PackageOpen, BadgeDollarSign } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatsCard } from "@/components/StatsCard";
 import { DepartmentCard } from "@/components/DepartmentCard";
@@ -10,6 +10,7 @@ import { DepartmentAnalysis } from "@/components/DepartmentAnalysis";
 import { departments, getGlobalStats, getTransactions, getStatsByPaymentMethod, getMonthlyStats, computeTrend, getTransactionsByMonth } from "@/lib/data";
 import { getCurrentUser, hasPermission, hasDepartmentAccess } from "@/lib/auth";
 import { getTreasuryControlAlerts } from "@/lib/controlAlerts";
+import { getGlobalStockEconomicsSummary } from "@/lib/stock";
 import { toast } from "sonner";
 import { downloadDashboardReport, downloadTransactionsReport } from "@/lib/reports";
 import logoGuimsGroup from "@/assets/logo-guims-group.jpg";
@@ -40,6 +41,12 @@ export default function Dashboard() {
     ? getMonthlyStats(now.getFullYear() - 1, 11)
     : getMonthlyStats(now.getFullYear(), now.getMonth() - 1);
   const currentMonthTransactions = getTransactionsByMonth(now.getFullYear(), now.getMonth());
+  const globalStockEconomics = getGlobalStockEconomicsSummary();
+  const monthlyStockEconomics = getGlobalStockEconomicsSummary(now.getFullYear(), now.getMonth());
+  const cashResultExcludingExternal = stats.operationalIncome - stats.expenses;
+  const monthlyCashResultExcludingExternal = currentMonthStats.operationalIncome - currentMonthStats.expenses;
+  const adjustedActivityMargin = stats.operationalIncome - globalStockEconomics.totalConsumedCost;
+  const adjustedMonthlyActivityMargin = currentMonthStats.operationalIncome - monthlyStockEconomics.totalConsumedCost;
 
   const incomeTrend = computeTrend(currentMonthStats.income, previousMonthStats.income);
   const expenseTrend = computeTrend(currentMonthStats.expenses, previousMonthStats.expenses);
@@ -138,13 +145,18 @@ export default function Dashboard() {
               <h3 className="text-lg font-semibold text-foreground">Vue globale (toutes périodes)</h3>
               <p className="text-xs sm:text-sm text-muted-foreground">Depuis le début des enregistrements</p>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4">
               <StatsCard title="Revenus totaux" value={stats.income} icon={ArrowUpRight} colorClass="text-success" />
               <StatsCard title="Apports externes" value={stats.externalIncome} icon={HandCoins} colorClass="text-primary" />
+              <StatsCard title="Résultat caisse hors apports" value={cashResultExcludingExternal} icon={BadgeDollarSign} colorClass={cashResultExcludingExternal >= 0 ? "text-success" : "text-destructive"} />
+              <StatsCard title="Coût stock consommé" value={globalStockEconomics.totalConsumedCost} icon={PackageOpen} colorClass="text-amber-600" />
+              <StatsCard title="Marge activité ajustée" value={adjustedActivityMargin} icon={TrendingUp} colorClass={adjustedActivityMargin >= 0 ? "text-success" : "text-destructive"} />
               <StatsCard title="Dépenses totales" value={stats.expenses} icon={ArrowDownRight} colorClass="text-destructive" />
-              <StatsCard title="Solde global" value={stats.balance} icon={TrendingUp} colorClass={stats.balance >= 0 ? "text-success" : "text-destructive"} />
               <StatsCard title="Transactions globales" value={stats.count} icon={Receipt} isCurrency={false} />
             </div>
+            <p className="text-xs text-muted-foreground">
+              Le solde de caisse reste base sur les entrees/sorties reelles. La marge activite ajustee deduit en plus le cout economique des articles sortis du stock.
+            </p>
           </div>
 
           <div>
@@ -218,13 +230,18 @@ export default function Dashboard() {
             </p>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4">
             <StatsCard title="Revenus du mois" value={currentMonthStats.income} icon={ArrowUpRight} colorClass="text-success" trend={incomeTrend} />
             <StatsCard title="Apports externes (mois)" value={currentMonthStats.externalIncome} icon={HandCoins} colorClass="text-primary" />
+            <StatsCard title="Résultat caisse hors apports" value={monthlyCashResultExcludingExternal} icon={BadgeDollarSign} colorClass={monthlyCashResultExcludingExternal >= 0 ? "text-success" : "text-destructive"} />
+            <StatsCard title="Coût stock consommé" value={monthlyStockEconomics.totalConsumedCost} icon={PackageOpen} colorClass="text-amber-600" />
+            <StatsCard title="Marge activité ajustée" value={adjustedMonthlyActivityMargin} icon={TrendingUp} colorClass={adjustedMonthlyActivityMargin >= 0 ? "text-success" : "text-destructive"} />
             <StatsCard title="Dépenses du mois" value={currentMonthStats.expenses} icon={ArrowDownRight} colorClass="text-destructive" trend={expenseTrend} invertTrend />
-            <StatsCard title="Solde du mois" value={currentMonthStats.balance} icon={TrendingUp} colorClass={currentMonthStats.balance >= 0 ? "text-success" : "text-destructive"} trend={balanceTrend} />
             <StatsCard title="Transactions du mois" value={currentMonthStats.count} icon={Receipt} isCurrency={false} />
           </div>
+          <p className="text-xs text-muted-foreground">
+            La marge ajustee du mois tient compte des supports/utilisations de stock pour montrer ce qui a reellement ete genere par l'activite.
+          </p>
 
           {currentMonthTransactions.length > 0 ? (
             <>

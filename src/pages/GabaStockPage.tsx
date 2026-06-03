@@ -31,7 +31,7 @@ import { downloadStockReport } from "@/lib/reports";
 import { ReportDialog } from "@/components/ReportDialog";
 import {
   getStockCategoriesForDept, getStockItems, addStockItem, updateStockItem, deleteStockItem,
-  addStockMovement, getStockMovements, getStockStats, getCategoryLabel,
+  addStockMovement, getStockMovements, getStockStats, getStockEconomicsSummary, getCategoryLabel,
   exportStockCSV, getTrainings, addTraining, updateTraining, deleteTraining,
   getStockKits, addStockKit, updateStockKit, deleteStockKit, checkKitAvailability, sellKit, useKitForTraining,
   getFormationsByDepartment, getEnrollmentsByFormation,
@@ -117,6 +117,7 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
   const [trainings, setTrainings] = useState<Training[]>(() => getTrainings(departmentId));
   const [kits, setKits] = useState<StockKit[]>(() => getStockKits(departmentId));
   const stats = useMemo(() => getStockStats(departmentId), [items, movements]);
+  const stockEconomics = useMemo(() => getStockEconomicsSummary(departmentId), [departmentId, movements, items]);
 
   const refresh = () => {
     setItems(getStockItems(departmentId));
@@ -1171,6 +1172,33 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
           <CardContent><p className="text-2xl font-bold">{stats.totalMovements}</p></CardContent>
         </Card>
       </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Marge brute ventes stock</CardTitle>
+            <ShoppingCart className="h-4 w-4 text-success" />
+          </CardHeader>
+          <CardContent><p className={`text-2xl font-bold ${stockEconomics.soldGrossMargin >= 0 ? 'text-success' : 'text-destructive'}`}>{formatCurrency(stockEconomics.soldGrossMargin)}</p></CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Coût supports formation</CardTitle>
+            <GraduationCap className="h-4 w-4 text-amber-600" />
+          </CardHeader>
+          <CardContent><p className="text-2xl font-bold text-amber-600">{formatCurrency(stockEconomics.trainingSupportCost)}</p></CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Coût total stock consommé</CardTitle>
+            <Gift className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent><p className="text-2xl font-bold">{formatCurrency(stockEconomics.totalConsumedCost)}</p></CardContent>
+        </Card>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Ces indicateurs montrent la valeur economique generee ou consommee par le stock sans modifier les chiffres reels de caisse.
+      </p>
 
       <Card className="border-0 shadow-sm">
         <CardHeader className="pb-2">

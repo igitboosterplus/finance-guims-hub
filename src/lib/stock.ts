@@ -81,10 +81,20 @@ export interface StockMovement {
   date: string;
   createdAt: string;
   createdBy: string;
+  unitCostSnapshot?: number;
   parkName?: string;       // Parc de formation (for training/gift)
   traineeName?: string;    // Nom du formé (for gift)
   transactionId?: string;  // Lien vers la transaction (pour les ventes)
   saleTicketNumber?: string; // Ticket de vente pour éviter une double sortie
+}
+
+export interface StockEconomicsSummary {
+  soldRevenue: number;
+  soldCost: number;
+  soldGrossMargin: number;
+  trainingSupportCost: number;
+  giftCost: number;
+  totalConsumedCost: number;
 }
 
 // ==================== TRAINING / FORMATION ====================
@@ -298,6 +308,7 @@ export function addStockMovement(
     previousQuantity,
     newQuantity,
     unitPrice: (type === 'training' || type === 'gift') ? 0 : unitPrice,
+    unitCostSnapshot: item.purchasePrice ?? 0,
     reason,
     date,
     createdAt: new Date().toISOString(),
@@ -353,6 +364,103 @@ export function getStockStats(departmentId: string = 'gaba') {
   const movements = getStockMovements(departmentId);
   const totalMovements = movements.length;
   return { totalItems, lowStock, totalValue, totalMovements };
+}
+
+function isMovementInPeriod(movement: StockMovement, year?: number, month?: number): boolean {
+  if (typeof year !== 'number' || typeof month !== 'number') return true;
+  const movementDate = new Date(movement.date || movement.createdAt);
+  return movementDate.getFullYear() === year && movementDate.getMonth() === month;
+}
+
+export function getStockEconomicsSummary(departmentId: string = 'gaba', year?: number, month?: number): StockEconomicsSummary {
+  const itemsById = new Map(getStockItems(departmentId).map(item => [item.id, item]));
+  const movements = [...getStockMovements(departmentId)].sort((a, b) => {
+    const da = new Date(a.date || a.createdAt).getTime();
+    const db = new Date(b.date || b.createdAt).getTime();
+    return da - db;
+  });
+
+  const qtyByItem = new Map<string, number>();
+  const avgCostByItem = new Map<string, number>();
+  const summary: StockEconomicsSummary = {
+    soldRevenue: 0,
+    soldCost: 0,
+    soldGrossMargin: 0,
+    trainingSupportCost: 0,
+    giftCost: 0,
+    totalConsumedCost: 0,
+  };
+
+  for (const movement of movements) {
+    const item = itemsById.get(movement.itemId);
+    const knownQty = qtyByItem.get(movement.itemId) ?? 0;
+    const currentAvgCost = avgCostByItem.get(movement.itemId) ?? item?.purchasePrice ?? movement.unitCostSnapshot ?? 0;
+
+    if (movement.type === 'entry') {
+      const entryQty = movement.quantity || 0;
+      const entryCost = movement.unitCostSnapshot ?? movement.unitPrice ?? item?.purchasePrice ?? 0;
+      const nextQty = knownQty + entryQty;
+      const nextAvgCost = nextQty > 0
+        ? ((knownQty * currentAvgCost) + (entryQty * entryCost)) / nextQty
+        : entryCost;
+      qtyByItem.set(movement.itemId, nextQty);
+      avgCostByItem.set(movement.itemId, nextAvgCost);
+      continue;
+    }
+
+    if (movement.type === 'adjustment') {
+      qtyByItem.set(movement.itemId, movement.newQuantity ?? knownQty);
+      if (!avgCostByItem.has(movement.itemId)) {
+        avgCostByItem.set(movement.itemId, currentAvgCost);
+      }
+      continue;
+    }
+
+    const unitCost = movement.unitCostSnapshot ?? currentAvgCost;
+    const consumedCost = Math.max(0, movement.quantity || 0) * Math.max(0, unitCost || 0);
+    qtyByItem.set(movement.itemId, Math.max(0, knownQty - (movement.quantity || 0)));
+    avgCostByItem.set(movement.itemId, currentAvgCost);
+
+    if (!isMovementInPeriod(movement, year, month)) {
+      continue;
+    }
+
+    summary.totalConsumedCost += consumedCost;
+
+    if (movement.type === 'exit') {
+      const revenue = Math.max(0, movement.quantity || 0) * Math.max(0, movement.unitPrice || item?.sellingPrice || 0);
+      summary.soldRevenue += revenue;
+      summary.soldCost += consumedCost;
+      summary.soldGrossMargin += revenue - consumedCost;
+    } else if (movement.type === 'training') {
+      summary.trainingSupportCost += consumedCost;
+    } else if (movement.type === 'gift') {
+      summary.giftCost += consumedCost;
+    }
+  }
+
+  return summary;
+}
+
+export function getGlobalStockEconomicsSummary(year?: number, month?: number): StockEconomicsSummary {
+  const departments = ['gaba', 'guims-academy', 'guims-educ', 'digitboosterplus'];
+  return departments.reduce<StockEconomicsSummary>((acc, departmentId) => {
+    const current = getStockEconomicsSummary(departmentId, year, month);
+    acc.soldRevenue += current.soldRevenue;
+    acc.soldCost += current.soldCost;
+    acc.soldGrossMargin += current.soldGrossMargin;
+    acc.trainingSupportCost += current.trainingSupportCost;
+    acc.giftCost += current.giftCost;
+    acc.totalConsumedCost += current.totalConsumedCost;
+    return acc;
+  }, {
+    soldRevenue: 0,
+    soldCost: 0,
+    soldGrossMargin: 0,
+    trainingSupportCost: 0,
+    giftCost: 0,
+    totalConsumedCost: 0,
+  });
 }
 
 export function getCategoryLabel(categoryId: string, departmentId: string = 'gaba'): string {

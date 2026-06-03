@@ -377,9 +377,10 @@ export const getDepartmentStats = (deptId: DepartmentId) => {
   const externalIncome = txs
     .filter(t => t.type === 'income' && t.incomeNature === 'external-contribution')
     .reduce((s, t) => s + t.amount, 0);
+  const operationalIncome = income - externalIncome;
   const externalIncomeCount = txs.filter(t => t.type === 'income' && t.incomeNature === 'external-contribution').length;
   const expenses = txs.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
-  return { income, externalIncome, externalIncomeCount, expenses, balance: income - expenses, count: txs.length };
+  return { income, operationalIncome, externalIncome, externalIncomeCount, expenses, balance: income - expenses, count: txs.length };
 };
 
 export const getGlobalStats = () => {
@@ -388,9 +389,10 @@ export const getGlobalStats = () => {
   const externalIncome = txs
     .filter(t => t.type === 'income' && t.incomeNature === 'external-contribution')
     .reduce((s, t) => s + t.amount, 0);
+  const operationalIncome = income - externalIncome;
   const externalIncomeCount = txs.filter(t => t.type === 'income' && t.incomeNature === 'external-contribution').length;
   const expenses = txs.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
-  return { income, externalIncome, externalIncomeCount, expenses, balance: income - expenses, count: txs.length };
+  return { income, operationalIncome, externalIncome, externalIncomeCount, expenses, balance: income - expenses, count: txs.length };
 };
 
 export const getTransactionsByMonth = (year: number, month: number) => {
@@ -406,9 +408,10 @@ export const getMonthlyStats = (year: number, month: number) => {
   const externalIncome = txs
     .filter(t => t.type === 'income' && t.incomeNature === 'external-contribution')
     .reduce((s, t) => s + t.amount, 0);
+  const operationalIncome = income - externalIncome;
   const externalIncomeCount = txs.filter(t => t.type === 'income' && t.incomeNature === 'external-contribution').length;
   const expenses = txs.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
-  return { income, externalIncome, externalIncomeCount, expenses, balance: income - expenses, count: txs.length };
+  return { income, operationalIncome, externalIncome, externalIncomeCount, expenses, balance: income - expenses, count: txs.length };
 };
 
 /** Returns % change: positive = improvement, negative = decrease. null if no previous data. */
