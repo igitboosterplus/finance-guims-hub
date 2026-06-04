@@ -372,7 +372,20 @@ function isMovementInPeriod(movement: StockMovement, year?: number, month?: numb
   return movementDate.getFullYear() === year && movementDate.getMonth() === month;
 }
 
-export function getStockEconomicsSummary(departmentId: string = 'gaba', year?: number, month?: number): StockEconomicsSummary {
+function isMovementInDateRange(movement: StockMovement, startDate?: string, endDate?: string): boolean {
+  const movementTime = getTransactionTimestamp(movement.date || movement.createdAt);
+  if (Number.isNaN(movementTime)) return false;
+  const startTime = startDate ? getTransactionTimestamp(`${startDate}T00:00:00`) : null;
+  const endTime = endDate ? getTransactionTimestamp(`${endDate}T23:59:59.999`) : null;
+  if (startTime !== null && movementTime < startTime) return false;
+  if (endTime !== null && movementTime > endTime) return false;
+  return true;
+}
+
+function buildStockEconomicsSummary(
+  departmentId: string,
+  includeMovement: (movement: StockMovement) => boolean,
+): StockEconomicsSummary {
   const itemsById = new Map(getStockItems(departmentId).map(item => [item.id, item]));
   const movements = [...getStockMovements(departmentId)].sort((a, b) => {
     const da = new Date(a.date || a.createdAt).getTime();
@@ -421,7 +434,7 @@ export function getStockEconomicsSummary(departmentId: string = 'gaba', year?: n
     qtyByItem.set(movement.itemId, Math.max(0, knownQty - (movement.quantity || 0)));
     avgCostByItem.set(movement.itemId, currentAvgCost);
 
-    if (!isMovementInPeriod(movement, year, month)) {
+    if (!includeMovement(movement)) {
       continue;
     }
 
@@ -442,10 +455,39 @@ export function getStockEconomicsSummary(departmentId: string = 'gaba', year?: n
   return summary;
 }
 
+export function getStockEconomicsSummary(departmentId: string = 'gaba', year?: number, month?: number): StockEconomicsSummary {
+  return buildStockEconomicsSummary(departmentId, (movement) => isMovementInPeriod(movement, year, month));
+}
+
+export function getStockEconomicsSummaryInRange(departmentId: string = 'gaba', startDate?: string, endDate?: string): StockEconomicsSummary {
+  return buildStockEconomicsSummary(departmentId, (movement) => isMovementInDateRange(movement, startDate, endDate));
+}
+
 export function getGlobalStockEconomicsSummary(year?: number, month?: number): StockEconomicsSummary {
   const departments = ['gaba', 'guims-academy', 'guims-educ', 'digitboosterplus'];
   return departments.reduce<StockEconomicsSummary>((acc, departmentId) => {
     const current = getStockEconomicsSummary(departmentId, year, month);
+    acc.soldRevenue += current.soldRevenue;
+    acc.soldCost += current.soldCost;
+    acc.soldGrossMargin += current.soldGrossMargin;
+    acc.trainingSupportCost += current.trainingSupportCost;
+    acc.giftCost += current.giftCost;
+    acc.totalConsumedCost += current.totalConsumedCost;
+    return acc;
+  }, {
+    soldRevenue: 0,
+    soldCost: 0,
+    soldGrossMargin: 0,
+    trainingSupportCost: 0,
+    giftCost: 0,
+    totalConsumedCost: 0,
+  });
+}
+
+export function getGlobalStockEconomicsSummaryInRange(startDate?: string, endDate?: string): StockEconomicsSummary {
+  const departments = ['gaba', 'guims-academy', 'guims-educ', 'digitboosterplus'];
+  return departments.reduce<StockEconomicsSummary>((acc, departmentId) => {
+    const current = getStockEconomicsSummaryInRange(departmentId, startDate, endDate);
     acc.soldRevenue += current.soldRevenue;
     acc.soldCost += current.soldCost;
     acc.soldGrossMargin += current.soldGrossMargin;

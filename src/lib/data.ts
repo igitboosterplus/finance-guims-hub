@@ -215,6 +215,28 @@ export function isExternalContributionCategory(category: string): boolean {
   return EXTERNAL_INCOME_CATEGORY_MARKERS.some(marker => normalized.includes(normalizeText(marker)));
 }
 
+const FORMATION_REVENUE_MARKERS = [
+  'formation',
+  'inscription',
+  'cours',
+  'coaching',
+  'prepa',
+  'prépa',
+  'concours',
+];
+
+export function isFormationRevenueCategory(category: string): boolean {
+  const normalized = normalizeText(category || '');
+  return FORMATION_REVENUE_MARKERS.some(marker => normalized.includes(normalizeText(marker)));
+}
+
+export function isStockSaleTransaction(tx: Pick<Transaction, 'type' | 'category' | 'stockItemId' | 'saleTicketNumber'>): boolean {
+  if (tx.type !== 'income') return false;
+  if (tx.stockItemId || tx.saleTicketNumber) return true;
+  const normalized = normalizeText(tx.category || '');
+  return normalized.includes('vente');
+}
+
 function normalizeIncomeNature(tx: Partial<Transaction>): Transaction['incomeNature'] {
   if (tx.type !== 'income') return undefined;
   if (tx.incomeNature === 'external-contribution' || tx.incomeNature === 'operational') {

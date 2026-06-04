@@ -12,15 +12,28 @@ interface StatsCardProps {
   trend?: number | null;
   /** If true, a lower value is considered good (e.g. expenses). Default false. */
   invertTrend?: boolean;
+  onClick?: () => void;
 }
 
-export function StatsCard({ title, value, icon: Icon, colorClass = "", isCurrency = true, trend, invertTrend = false }: StatsCardProps) {
+export function StatsCard({ title, value, icon: Icon, colorClass = "", isCurrency = true, trend, invertTrend = false, onClick }: StatsCardProps) {
   const trendGood = trend !== undefined && trend !== null
     ? (invertTrend ? trend < 0 : trend > 0)
     : null;
 
   return (
-    <Card className="hover:shadow-lg transition-all duration-300 border-0 shadow-md overflow-hidden">
+    <Card
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onClick={onClick}
+      onKeyDown={(event) => {
+        if (!onClick) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onClick();
+        }
+      }}
+      className={`border-0 shadow-md overflow-hidden transition-all duration-300 ${onClick ? 'cursor-pointer hover:shadow-xl hover:-translate-y-0.5 focus-visible:ring-2 focus-visible:ring-primary/40' : 'hover:shadow-lg'}`}
+    >
       <CardContent className="p-0">
         <div className="p-5 flex items-center gap-4">
           <div className="h-12 w-12 rounded-2xl bg-primary/10 flex items-center justify-center shrink-0">

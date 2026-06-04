@@ -1,18 +1,20 @@
 import { useState, useEffect } from "react";
-import { TrendingUp, ArrowUpRight, ArrowDownRight, Receipt, Wallet, Smartphone, Building2, Banknote, FileDown, HandCoins, PackageOpen, BadgeDollarSign } from "lucide-react";
+import { TrendingUp, ArrowUpRight, ArrowDownRight, Receipt, Wallet, Smartphone, Building2, Banknote, FileDown, HandCoins, PackageOpen, BadgeDollarSign, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatsCard } from "@/components/StatsCard";
+import { MetricDetailDialog } from "@/components/MetricDetailDialog";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { DepartmentCard } from "@/components/DepartmentCard";
 import { TransactionList } from "@/components/TransactionList";
 import { FinanceChart } from "@/components/FinanceChart";
 import { ReportDialog } from "@/components/ReportDialog";
 import { DepartmentAnalysis } from "@/components/DepartmentAnalysis";
-import { departments, getGlobalStats, getTransactions, getStatsByPaymentMethod, getMonthlyStats, computeTrend, getTransactionsByMonth } from "@/lib/data";
+import { departments, getGlobalStats, getTransactions, getStatsByPaymentMethod, getMonthlyStats, computeTrend, getTransactionsByMonth, isFormationRevenueCategory, isStockSaleTransaction, normalizePaymentMethod, type Transaction } from "@/lib/data";
 import { getCurrentUser, hasPermission, hasDepartmentAccess } from "@/lib/auth";
 import { getTreasuryControlAlerts } from "@/lib/controlAlerts";
 import { getGlobalStockEconomicsSummary } from "@/lib/stock";
 import { toast } from "sonner";
-import { downloadDashboardReport, downloadTransactionsReport } from "@/lib/reports";
+import { downloadDashboardReport, downloadRealProfitReport, downloadTransactionsReport } from "@/lib/reports";
 import logoGuimsGroup from "@/assets/logo-guims-group.jpg";
 import { getTransactionTimestamp } from "@/lib/transactionDates";
 import { useNavigate } from "react-router-dom";
@@ -33,6 +35,16 @@ export default function Dashboard() {
   const [controlAlerts, setControlAlerts] = useState(getTreasuryControlAlerts());
   const [reportOpen, setReportOpen] = useState(false);
   const [dashboardView, setDashboardView] = useState<'global' | 'monthly'>('global');
+  const [globalMetricsOpen, setGlobalMetricsOpen] = useState(false);
+  const [monthlyMetricsOpen, setMonthlyMetricsOpen] = useState(false);
+  const [metricDetail, setMetricDetail] = useState<{
+    title: string;
+    description: string;
+    summaryItems: Array<{ label: string; value: number; isCurrency?: boolean }>;
+    transactions: Transaction[];
+    note?: string;
+    showDepartment?: boolean;
+  } | null>(null);
 
   const now = new Date();
   const isSuperAdmin = getCurrentUser()?.role === 'superadmin';
@@ -41,12 +53,36 @@ export default function Dashboard() {
     ? getMonthlyStats(now.getFullYear() - 1, 11)
     : getMonthlyStats(now.getFullYear(), now.getMonth() - 1);
   const currentMonthTransactions = getTransactionsByMonth(now.getFullYear(), now.getMonth());
+  const monthlyPaymentStats = getStatsByPaymentMethod(currentMonthTransactions);
   const globalStockEconomics = getGlobalStockEconomicsSummary();
   const monthlyStockEconomics = getGlobalStockEconomicsSummary(now.getFullYear(), now.getMonth());
+  const getAdjustedFormationMargin = (items: typeof transactions, stockEconomics: typeof globalStockEconomics) => {
+    const formationRevenue = items
+      .filter((tx) => tx.type === 'income' && tx.incomeNature !== 'external-contribution' && isFormationRevenueCategory(tx.category))
+      .reduce((sum, tx) => sum + tx.amount, 0);
+    return formationRevenue - stockEconomics.trainingSupportCost - stockEconomics.giftCost;
+  };
   const cashResultExcludingExternal = stats.operationalIncome - stats.expenses;
   const monthlyCashResultExcludingExternal = currentMonthStats.operationalIncome - currentMonthStats.expenses;
   const adjustedActivityMargin = stats.operationalIncome - globalStockEconomics.totalConsumedCost;
   const adjustedMonthlyActivityMargin = currentMonthStats.operationalIncome - monthlyStockEconomics.totalConsumedCost;
+  const adjustedFormationMargin = getAdjustedFormationMargin(transactions, globalStockEconomics);
+  const adjustedMonthlyFormationMargin = getAdjustedFormationMargin(currentMonthTransactions, monthlyStockEconomics);
+
+  const openDetail = (detail: NonNullable<typeof metricDetail>) => setMetricDetail(detail);
+  const getPaymentIcon = (method: string) => {
+    if (method.startsWith('momo')) return Smartphone;
+    if (method.startsWith('om')) return Wallet;
+    if (method === 'especes') return Banknote;
+    return Building2;
+  };
+
+  const buildRealProfitReportOptions = () => {
+    if (dashboardView !== 'monthly') return undefined;
+    const startDate = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+    const endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10);
+    return { startDate, endDate };
+  };
 
   const incomeTrend = computeTrend(currentMonthStats.income, previousMonthStats.income);
   const expenseTrend = computeTrend(currentMonthStats.expenses, previousMonthStats.expenses);
@@ -124,6 +160,18 @@ export default function Dashboard() {
               <span className="hidden sm:inline">Rapport mensuel</span>
             </Button>
           )}
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-2"
+            onClick={async () => {
+              await downloadRealProfitReport(buildRealProfitReportOptions());
+              toast.success('Rapport bénéfice réel généré');
+            }}
+          >
+            <BadgeDollarSign className="h-4 w-4" />
+            <span className="hidden sm:inline">Bénéfice réel</span>
+          </Button>
           <Button variant="outline" size="sm" className="gap-2" onClick={() => setReportOpen(true)}>
             <FileDown className="h-4 w-4" />
             <span className="hidden sm:inline">Rapport PDF</span>
@@ -138,6 +186,17 @@ export default function Dashboard() {
         onGenerate={async (opts) => { await downloadDashboardReport(opts); toast.success('Rapport généré'); }}
       />
 
+      <MetricDetailDialog
+        open={!!metricDetail}
+        onOpenChange={(open) => !open && setMetricDetail(null)}
+        title={metricDetail?.title || "Détail"}
+        description={metricDetail?.description || ""}
+        summaryItems={metricDetail?.summaryItems || []}
+        transactions={metricDetail?.transactions || []}
+        showDepartment={metricDetail?.showDepartment ?? true}
+        note={metricDetail?.note}
+      />
+
       {dashboardView === 'global' ? (
         <>
           <div className="space-y-4">
@@ -146,14 +205,96 @@ export default function Dashboard() {
               <p className="text-xs sm:text-sm text-muted-foreground">Depuis le début des enregistrements</p>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4">
-              <StatsCard title="Revenus totaux" value={stats.income} icon={ArrowUpRight} colorClass="text-success" />
-              <StatsCard title="Apports externes" value={stats.externalIncome} icon={HandCoins} colorClass="text-primary" />
-              <StatsCard title="Résultat caisse hors apports" value={cashResultExcludingExternal} icon={BadgeDollarSign} colorClass={cashResultExcludingExternal >= 0 ? "text-success" : "text-destructive"} />
-              <StatsCard title="Coût stock consommé" value={globalStockEconomics.totalConsumedCost} icon={PackageOpen} colorClass="text-amber-600" />
-              <StatsCard title="Marge activité ajustée" value={adjustedActivityMargin} icon={TrendingUp} colorClass={adjustedActivityMargin >= 0 ? "text-success" : "text-destructive"} />
-              <StatsCard title="Dépenses totales" value={stats.expenses} icon={ArrowDownRight} colorClass="text-destructive" />
-              <StatsCard title="Transactions globales" value={stats.count} icon={Receipt} isCurrency={false} />
+              <StatsCard
+                title="Revenus totaux"
+                value={stats.income}
+                icon={ArrowUpRight}
+                colorClass="text-success"
+                onClick={() => openDetail({
+                  title: 'Revenus totaux',
+                  description: 'Tous les revenus enregistrés sur le périmètre global.',
+                  summaryItems: [
+                    { label: 'Revenus totaux', value: stats.income },
+                    { label: 'Revenus opérationnels', value: stats.operationalIncome },
+                    { label: 'Apports externes', value: stats.externalIncome },
+                  ],
+                  transactions: transactions.filter((tx) => tx.type === 'income'),
+                })}
+              />
+              <StatsCard
+                title="Solde de caisse"
+                value={stats.balance}
+                icon={BadgeDollarSign}
+                colorClass={stats.balance >= 0 ? "text-success" : "text-destructive"}
+                onClick={() => openDetail({
+                  title: 'Solde de caisse',
+                  description: 'Synthèse caisse complète: revenus, dépenses et solde net.',
+                  summaryItems: [
+                    { label: 'Revenus', value: stats.income },
+                    { label: 'Dépenses', value: stats.expenses },
+                    { label: 'Solde de caisse', value: stats.balance },
+                  ],
+                  transactions,
+                })}
+              />
+              <StatsCard
+                title="Résultat caisse hors apports"
+                value={cashResultExcludingExternal}
+                icon={ArrowDownRight}
+                colorClass={cashResultExcludingExternal >= 0 ? "text-success" : "text-destructive"}
+                onClick={() => openDetail({
+                  title: 'Résultat caisse hors apports',
+                  description: 'Lecture opérationnelle du cash sans les apports externes.',
+                  summaryItems: [
+                    { label: 'Revenus opérationnels', value: stats.operationalIncome },
+                    { label: 'Apports externes', value: stats.externalIncome },
+                    { label: 'Dépenses', value: stats.expenses },
+                    { label: 'Résultat hors apports', value: cashResultExcludingExternal },
+                  ],
+                  transactions,
+                })}
+              />
+              <StatsCard
+                title="Marge activité ajustée"
+                value={adjustedActivityMargin}
+                icon={TrendingUp}
+                colorClass={adjustedActivityMargin >= 0 ? "text-success" : "text-destructive"}
+                onClick={() => openDetail({
+                  title: 'Marge activité ajustée',
+                  description: 'Revenus opérationnels moins le coût économique du stock consommé.',
+                  summaryItems: [
+                    { label: 'Revenus opérationnels', value: stats.operationalIncome },
+                    { label: 'Coût stock consommé', value: globalStockEconomics.totalConsumedCost },
+                    { label: 'Marge ajustée', value: adjustedActivityMargin },
+                  ],
+                  transactions,
+                  note: 'Le détail du coût stock vient des mouvements de stock. Le tableau des transactions montre l’activité qui alimente ce calcul.',
+                })}
+              />
             </div>
+            <Collapsible open={globalMetricsOpen} onOpenChange={setGlobalMetricsOpen} className="rounded-2xl border bg-card/60 p-3 sm:p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-foreground">Indicateurs détaillés</p>
+                  <p className="text-xs text-muted-foreground">Apports, marges spécifiques, coût du stock et volume d'opérations.</p>
+                </div>
+                <CollapsibleTrigger asChild>
+                  <Button variant="ghost" size="sm" className="gap-2">
+                    {globalMetricsOpen ? 'Masquer' : 'Voir plus'}
+                    {globalMetricsOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                  </Button>
+                </CollapsibleTrigger>
+              </div>
+              <CollapsibleContent className="pt-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+                  <StatsCard title="Apports externes" value={stats.externalIncome} icon={HandCoins} colorClass="text-primary" onClick={() => openDetail({ title: 'Apports externes', description: 'Tous les apports externes du périmètre global.', summaryItems: [{ label: 'Total apports externes', value: stats.externalIncome }], transactions: transactions.filter((tx) => tx.type === 'income' && tx.incomeNature === 'external-contribution') })} />
+                  <StatsCard title="Marge ventes stock" value={globalStockEconomics.soldGrossMargin} icon={PackageOpen} colorClass={globalStockEconomics.soldGrossMargin >= 0 ? "text-success" : "text-destructive"} onClick={() => openDetail({ title: 'Marge ventes stock', description: 'Ventes de stock et coût d’achat associé.', summaryItems: [{ label: 'Revenu stock vendu', value: globalStockEconomics.soldRevenue }, { label: 'Coût stock vendu', value: globalStockEconomics.soldCost }, { label: 'Marge brute', value: globalStockEconomics.soldGrossMargin }], transactions: transactions.filter((tx) => tx.type === 'income' && isStockSaleTransaction(tx)), note: 'Le coût exact vient des mouvements de stock. La liste montre les ventes liées aux sorties de stock.' })} />
+                  <StatsCard title="Marge formation ajustée" value={adjustedFormationMargin} icon={TrendingUp} colorClass={adjustedFormationMargin >= 0 ? "text-success" : "text-destructive"} onClick={() => openDetail({ title: 'Marge formation ajustée', description: 'Revenus formation moins supports et cadeaux consommés.', summaryItems: [{ label: 'Revenus formation', value: transactions.filter((tx) => tx.type === 'income' && tx.incomeNature !== 'external-contribution' && isFormationRevenueCategory(tx.category)).reduce((sum, tx) => sum + tx.amount, 0) }, { label: 'Supports formation', value: globalStockEconomics.trainingSupportCost }, { label: 'Cadeaux', value: globalStockEconomics.giftCost }, { label: 'Marge formation', value: adjustedFormationMargin }], transactions: transactions.filter((tx) => tx.type === 'income' && tx.incomeNature !== 'external-contribution' && isFormationRevenueCategory(tx.category)) })} />
+                  <StatsCard title="Coût stock consommé" value={globalStockEconomics.totalConsumedCost} icon={PackageOpen} colorClass="text-amber-600" onClick={() => openDetail({ title: 'Coût stock consommé', description: 'Synthèse des consommations de stock.', summaryItems: [{ label: 'Coût stock consommé', value: globalStockEconomics.totalConsumedCost }, { label: 'Marge ventes stock', value: globalStockEconomics.soldGrossMargin }, { label: 'Coût supports formation', value: globalStockEconomics.trainingSupportCost + globalStockEconomics.giftCost }], transactions, note: 'Le détail complet des mouvements de stock est disponible dans la page Stock du département concerné.' })} />
+                  <StatsCard title="Transactions globales" value={stats.count} icon={Receipt} isCurrency={false} onClick={() => openDetail({ title: 'Transactions globales', description: 'Toutes les transactions du périmètre global.', summaryItems: [{ label: 'Transactions', value: stats.count, isCurrency: false }], transactions })} />
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
             <p className="text-xs text-muted-foreground">
               Le solde de caisse reste base sur les entrees/sorties reelles. La marge activite ajustee deduit en plus le cout economique des articles sortis du stock.
             </p>
@@ -174,7 +315,10 @@ export default function Dashboard() {
               <h3 className="text-lg font-semibold text-foreground mb-4">Soldes par caisse</h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 {paymentStats.map((ps) => {
-                  const icon = ps.method === 'especes' ? Banknote : ps.method === 'momo' ? Smartphone : ps.method === 'om' ? Wallet : Building2;
+                  const icon = getPaymentIcon(ps.method);
+                  const cashTransactions = transactions.filter(
+                    (tx) => normalizePaymentMethod(tx.paymentMethod || 'especes', tx.departmentId) === ps.method,
+                  );
                   return (
                     <StatsCard
                       key={ps.method}
@@ -182,6 +326,18 @@ export default function Dashboard() {
                       value={ps.balance}
                       icon={icon}
                       colorClass={ps.balance >= 0 ? 'text-success' : 'text-destructive'}
+                      onClick={() => openDetail({
+                        title: `Transactions caisse — ${ps.label}`,
+                        description: `Toutes les opérations enregistrées sur la caisse ${ps.label}.`,
+                        summaryItems: [
+                          { label: 'Revenus caisse', value: ps.income },
+                          { label: 'Dépenses caisse', value: ps.expenses },
+                          { label: 'Solde caisse', value: ps.balance },
+                          { label: 'Opérations', value: ps.count, isCurrency: false },
+                        ],
+                        transactions: cashTransactions,
+                        showDepartment: true,
+                      })}
                     />
                   );
                 })}
@@ -231,17 +387,72 @@ export default function Dashboard() {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4">
-            <StatsCard title="Revenus du mois" value={currentMonthStats.income} icon={ArrowUpRight} colorClass="text-success" trend={incomeTrend} />
-            <StatsCard title="Apports externes (mois)" value={currentMonthStats.externalIncome} icon={HandCoins} colorClass="text-primary" />
-            <StatsCard title="Résultat caisse hors apports" value={monthlyCashResultExcludingExternal} icon={BadgeDollarSign} colorClass={monthlyCashResultExcludingExternal >= 0 ? "text-success" : "text-destructive"} />
-            <StatsCard title="Coût stock consommé" value={monthlyStockEconomics.totalConsumedCost} icon={PackageOpen} colorClass="text-amber-600" />
-            <StatsCard title="Marge activité ajustée" value={adjustedMonthlyActivityMargin} icon={TrendingUp} colorClass={adjustedMonthlyActivityMargin >= 0 ? "text-success" : "text-destructive"} />
-            <StatsCard title="Dépenses du mois" value={currentMonthStats.expenses} icon={ArrowDownRight} colorClass="text-destructive" trend={expenseTrend} invertTrend />
-            <StatsCard title="Transactions du mois" value={currentMonthStats.count} icon={Receipt} isCurrency={false} />
+            <StatsCard title="Revenus du mois" value={currentMonthStats.income} icon={ArrowUpRight} colorClass="text-success" trend={incomeTrend} onClick={() => openDetail({ title: 'Revenus du mois', description: 'Tous les revenus du mois courant.', summaryItems: [{ label: 'Revenus du mois', value: currentMonthStats.income }, { label: 'Apports externes', value: currentMonthStats.externalIncome }], transactions: currentMonthTransactions.filter((tx) => tx.type === 'income') })} />
+            <StatsCard title="Solde de caisse" value={currentMonthStats.balance} icon={BadgeDollarSign} colorClass={currentMonthStats.balance >= 0 ? "text-success" : "text-destructive"} onClick={() => openDetail({ title: 'Solde de caisse mensuel', description: 'Solde net des opérations du mois.', summaryItems: [{ label: 'Revenus', value: currentMonthStats.income }, { label: 'Dépenses', value: currentMonthStats.expenses }, { label: 'Solde', value: currentMonthStats.balance }], transactions: currentMonthTransactions })} />
+            <StatsCard title="Résultat caisse hors apports" value={monthlyCashResultExcludingExternal} icon={ArrowDownRight} colorClass={monthlyCashResultExcludingExternal >= 0 ? "text-success" : "text-destructive"} onClick={() => openDetail({ title: 'Résultat caisse hors apports', description: 'Résultat du mois sans les apports externes.', summaryItems: [{ label: 'Revenus opérationnels', value: currentMonthStats.operationalIncome }, { label: 'Apports externes', value: currentMonthStats.externalIncome }, { label: 'Dépenses', value: currentMonthStats.expenses }, { label: 'Résultat hors apports', value: monthlyCashResultExcludingExternal }], transactions: currentMonthTransactions })} />
+            <StatsCard title="Marge activité ajustée" value={adjustedMonthlyActivityMargin} icon={TrendingUp} colorClass={adjustedMonthlyActivityMargin >= 0 ? "text-success" : "text-destructive"} onClick={() => openDetail({ title: 'Marge activité ajustée mensuelle', description: 'Revenus opérationnels du mois moins le coût du stock consommé.', summaryItems: [{ label: 'Revenus opérationnels', value: currentMonthStats.operationalIncome }, { label: 'Coût stock consommé', value: monthlyStockEconomics.totalConsumedCost }, { label: 'Marge ajustée', value: adjustedMonthlyActivityMargin }], transactions: currentMonthTransactions, note: 'Le coût stock est calculé à partir des mouvements de stock du mois.' })} />
           </div>
+          <Collapsible open={monthlyMetricsOpen} onOpenChange={setMonthlyMetricsOpen} className="rounded-2xl border bg-muted/30 p-3 sm:p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-foreground">Détails mensuels</p>
+                <p className="text-xs text-muted-foreground">Apports, marges détaillées, coût stock et nombre d'opérations du mois.</p>
+              </div>
+              <CollapsibleTrigger asChild>
+                <Button variant="ghost" size="sm" className="gap-2">
+                  {monthlyMetricsOpen ? 'Masquer' : 'Voir plus'}
+                  {monthlyMetricsOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                </Button>
+              </CollapsibleTrigger>
+            </div>
+            <CollapsibleContent className="pt-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+                <StatsCard title="Apports externes (mois)" value={currentMonthStats.externalIncome} icon={HandCoins} colorClass="text-primary" onClick={() => openDetail({ title: 'Apports externes du mois', description: 'Tous les apports externes du mois courant.', summaryItems: [{ label: 'Total apports externes', value: currentMonthStats.externalIncome }], transactions: currentMonthTransactions.filter((tx) => tx.type === 'income' && tx.incomeNature === 'external-contribution') })} />
+                <StatsCard title="Marge ventes stock" value={monthlyStockEconomics.soldGrossMargin} icon={PackageOpen} colorClass={monthlyStockEconomics.soldGrossMargin >= 0 ? "text-success" : "text-destructive"} onClick={() => openDetail({ title: 'Marge ventes stock du mois', description: 'Ventes de stock du mois et coût d’achat associé.', summaryItems: [{ label: 'Revenu stock vendu', value: monthlyStockEconomics.soldRevenue }, { label: 'Coût stock vendu', value: monthlyStockEconomics.soldCost }, { label: 'Marge brute', value: monthlyStockEconomics.soldGrossMargin }], transactions: currentMonthTransactions.filter((tx) => tx.type === 'income' && isStockSaleTransaction(tx)), note: 'Le coût de stock exact vient des mouvements de stock; la liste montre les ventes liées.' })} />
+                <StatsCard title="Marge formation ajustée" value={adjustedMonthlyFormationMargin} icon={TrendingUp} colorClass={adjustedMonthlyFormationMargin >= 0 ? "text-success" : "text-destructive"} onClick={() => openDetail({ title: 'Marge formation ajustée du mois', description: 'Revenus formation du mois moins supports et cadeaux consommés.', summaryItems: [{ label: 'Revenus formation', value: currentMonthTransactions.filter((tx) => tx.type === 'income' && tx.incomeNature !== 'external-contribution' && isFormationRevenueCategory(tx.category)).reduce((sum, tx) => sum + tx.amount, 0) }, { label: 'Supports formation', value: monthlyStockEconomics.trainingSupportCost }, { label: 'Cadeaux', value: monthlyStockEconomics.giftCost }, { label: 'Marge formation', value: adjustedMonthlyFormationMargin }], transactions: currentMonthTransactions.filter((tx) => tx.type === 'income' && tx.incomeNature !== 'external-contribution' && isFormationRevenueCategory(tx.category)) })} />
+                <StatsCard title="Coût stock consommé" value={monthlyStockEconomics.totalConsumedCost} icon={PackageOpen} colorClass="text-amber-600" onClick={() => openDetail({ title: 'Coût stock consommé du mois', description: 'Synthèse des consommations de stock du mois.', summaryItems: [{ label: 'Coût stock consommé', value: monthlyStockEconomics.totalConsumedCost }, { label: 'Marge ventes stock', value: monthlyStockEconomics.soldGrossMargin }, { label: 'Coût supports formation', value: monthlyStockEconomics.trainingSupportCost + monthlyStockEconomics.giftCost }], transactions: currentMonthTransactions, note: 'Le détail complet des mouvements de stock se trouve dans la page Stock.' })} />
+                <StatsCard title="Transactions du mois" value={currentMonthStats.count} icon={Receipt} isCurrency={false} onClick={() => openDetail({ title: 'Transactions du mois', description: 'Toutes les transactions enregistrées sur le mois courant.', summaryItems: [{ label: 'Transactions', value: currentMonthStats.count, isCurrency: false }], transactions: currentMonthTransactions })} />
+              </div>
+            </CollapsibleContent>
+          </Collapsible>
           <p className="text-xs text-muted-foreground">
             La marge ajustee du mois tient compte des supports/utilisations de stock pour montrer ce qui a reellement ete genere par l'activite.
           </p>
+
+          {monthlyPaymentStats.length > 0 && (
+            <div>
+              <h4 className="text-base font-semibold text-foreground mb-3">Soldes par caisse (mois)</h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                {monthlyPaymentStats.map((ps) => {
+                  const icon = getPaymentIcon(ps.method);
+                  const cashTransactions = currentMonthTransactions.filter(
+                    (tx) => normalizePaymentMethod(tx.paymentMethod || 'especes', tx.departmentId) === ps.method,
+                  );
+                  return (
+                    <StatsCard
+                      key={`monthly-${ps.method}`}
+                      title={ps.label}
+                      value={ps.balance}
+                      icon={icon}
+                      colorClass={ps.balance >= 0 ? 'text-success' : 'text-destructive'}
+                      onClick={() => openDetail({
+                        title: `Transactions caisse (mois) — ${ps.label}`,
+                        description: `Toutes les opérations du mois sur la caisse ${ps.label}.`,
+                        summaryItems: [
+                          { label: 'Revenus caisse', value: ps.income },
+                          { label: 'Dépenses caisse', value: ps.expenses },
+                          { label: 'Solde caisse', value: ps.balance },
+                          { label: 'Opérations', value: ps.count, isCurrency: false },
+                        ],
+                        transactions: cashTransactions,
+                        showDepartment: true,
+                      })}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {currentMonthTransactions.length > 0 ? (
             <>

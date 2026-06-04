@@ -9,6 +9,7 @@ import {
   departments, getTransactions, getGlobalStats, getDepartmentStats,
   getTransactionsByDepartment, getDepartment, formatCurrency,
   getPaymentMethodLabel, getStatsByPaymentMethod, type DepartmentId, type PaymentMethod, type Transaction,
+  isFormationRevenueCategory,
 } from "./data";
 import { getTransactionTimestamp, isOnOrAfterCalendarDate } from "./transactionDates";
 import {
@@ -16,6 +17,10 @@ import {
   getStockMovements,
   getCategoryLabel,
   getStockStats,
+  getGlobalStockEconomicsSummary,
+  getGlobalStockEconomicsSummaryInRange,
+  getStockEconomicsSummary,
+  getStockEconomicsSummaryInRange,
   getTrainings,
   getMovementTypeLabel,
   getFormationsCatalog,
@@ -647,6 +652,179 @@ function computeStats(txs: Transaction[]) {
   return { income, expenses, balance: income - expenses, count: txs.length };
 }
 
+function computeRealProfitMetrics(txs: Transaction[], stockEconomics: { soldGrossMargin: number; trainingSupportCost: number; giftCost: number; totalConsumedCost: number }) {
+  const income = txs.filter(t => t.type === 'income').reduce((sum, tx) => sum + tx.amount, 0);
+  const externalIncome = txs
+    .filter(tx => tx.type === 'income' && tx.incomeNature === 'external-contribution')
+    .reduce((sum, tx) => sum + tx.amount, 0);
+  const operationalIncome = income - externalIncome;
+  const expenses = txs.filter(t => t.type === 'expense').reduce((sum, tx) => sum + tx.amount, 0);
+  const cashResultExcludingExternal = operationalIncome - expenses;
+  const formationRevenue = txs
+    .filter(tx => tx.type === 'income' && tx.incomeNature !== 'external-contribution' && isFormationRevenueCategory(tx.category))
+    .reduce((sum, tx) => sum + tx.amount, 0);
+  const adjustedFormationMargin = formationRevenue - stockEconomics.trainingSupportCost - stockEconomics.giftCost;
+  const adjustedActivityMargin = operationalIncome - stockEconomics.totalConsumedCost;
+  return {
+    income,
+    externalIncome,
+    operationalIncome,
+    expenses,
+    cashResultExcludingExternal,
+    stockSalesGrossMargin: stockEconomics.soldGrossMargin,
+    formationRevenue,
+    formationSupportCost: stockEconomics.trainingSupportCost,
+    giftCost: stockEconomics.giftCost,
+    adjustedFormationMargin,
+    totalConsumedCost: stockEconomics.totalConsumedCost,
+    adjustedActivityMargin,
+  };
+}
+
+function addRealProfitSummaryTable(doc: jsPDF, metrics: ReturnType<typeof computeRealProfitMetrics>, y: number): number {
+  let nextY = addSectionTitle(doc, 'Bénéfice réel et marges ajustées', y);
+  autoTable(doc, {
+    startY: nextY,
+    head: [["Revenus op.", "Apports externes", "Résultat caisse hors apports", "Marge ventes stock", "Coût supports formation", "Marge formation ajustée", "Marge activité ajustée"]],
+    body: [[
+      fmtAmount(metrics.operationalIncome),
+      fmtAmount(metrics.externalIncome),
+      fmtAmount(metrics.cashResultExcludingExternal),
+      fmtAmount(metrics.stockSalesGrossMargin),
+      fmtAmount(metrics.formationSupportCost + metrics.giftCost),
+      fmtAmount(metrics.adjustedFormationMargin),
+      fmtAmount(metrics.adjustedActivityMargin),
+    ]],
+    theme: 'grid',
+    headStyles: { fillColor: [54, 93, 126], fontSize: 8 },
+    bodyStyles: { fontSize: 9.5, fontStyle: 'bold' },
+    margin: { left: 14 },
+  });
+  return (doc as any).lastAutoTable.finalY + 10;
+}
+
+function buildMonthlyRealProfitRows(txs: Transaction[], departmentId?: DepartmentId) {
+  const monthKeys = [...new Set(txs.map((tx) => {
+    const date = new Date(tx.date);
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+  }))].sort();
+
+  return monthKeys.map((monthKey) => {
+    const [yearText, monthText] = monthKey.split('-');
+    const year = Number(yearText);
+    const month = Number(monthText) - 1;
+    const monthTxs = txs.filter((tx) => {
+      const date = new Date(tx.date);
+      return date.getFullYear() === year && date.getMonth() === month;
+    });
+    const stockEconomics = departmentId
+      ? getStockEconomicsSummary(departmentId, year, month)
+      : getGlobalStockEconomicsSummary(year, month);
+    return {
+      label: new Date(year, month, 1).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' }),
+      metrics: computeRealProfitMetrics(monthTxs, stockEconomics),
+    };
+  });
+}
+
+function addMonthlyRealProfitTable(doc: jsPDF, txs: Transaction[], y: number, departmentId?: DepartmentId): number {
+  const rows = buildMonthlyRealProfitRows(txs, departmentId);
+  if (rows.length === 0) return y;
+  const nextY = addSectionTitle(doc, 'État mensuel revenus / apports / coûts stock / marge ajustée', y);
+  autoTable(doc, {
+    startY: nextY,
+    head: [["Mois", "Revenus op.", "Apports externes", "Coût stock consommé", "Marge ventes stock", "Marge formation ajustée", "Marge activité ajustée"]],
+    body: rows.map((row) => [
+      row.label,
+      fmtAmount(row.metrics.operationalIncome),
+      fmtAmount(row.metrics.externalIncome),
+      fmtAmount(row.metrics.totalConsumedCost),
+      fmtAmount(row.metrics.stockSalesGrossMargin),
+      fmtAmount(row.metrics.adjustedFormationMargin),
+      fmtAmount(row.metrics.adjustedActivityMargin),
+    ]),
+    theme: 'striped',
+    headStyles: { fillColor: [30, 95, 104], fontSize: 8 },
+    margin: { left: 14 },
+    styles: { fontSize: 8 },
+    columnStyles: {
+      1: { halign: 'right' },
+      2: { halign: 'right' },
+      3: { halign: 'right' },
+      4: { halign: 'right' },
+      5: { halign: 'right' },
+      6: { halign: 'right', fontStyle: 'bold' },
+    },
+    alternateRowStyles: { fillColor: [242, 248, 248] },
+  });
+  return (doc as any).lastAutoTable.finalY + 10;
+}
+
+function addDepartmentRealProfitTable(doc: jsPDF, txs: Transaction[], y: number, opts?: ReportOptions): number {
+  const nextY = addSectionTitle(doc, 'Bénéfice réel par département', y);
+  autoTable(doc, {
+    startY: nextY,
+    head: [["Département", "Revenus op.", "Apports externes", "Résultat caisse hors apports", "Marge ventes stock", "Marge formation ajustée", "Marge activité ajustée"]],
+    body: departments.map((dept) => {
+      const deptTxs = txs.filter((tx) => tx.departmentId === dept.id);
+      const metrics = computeRealProfitMetrics(deptTxs, getStockEconomicsSummaryInRange(dept.id, opts?.startDate, opts?.endDate));
+      return [
+        dept.name,
+        fmtAmount(metrics.operationalIncome),
+        fmtAmount(metrics.externalIncome),
+        fmtAmount(metrics.cashResultExcludingExternal),
+        fmtAmount(metrics.stockSalesGrossMargin),
+        fmtAmount(metrics.adjustedFormationMargin),
+        fmtAmount(metrics.adjustedActivityMargin),
+      ];
+    }),
+    theme: 'striped',
+    headStyles: { fillColor: [82, 80, 135], fontSize: 8 },
+    margin: { left: 14 },
+    styles: { fontSize: 8 },
+    columnStyles: {
+      1: { halign: 'right' },
+      2: { halign: 'right' },
+      3: { halign: 'right' },
+      4: { halign: 'right' },
+      5: { halign: 'right' },
+      6: { halign: 'right', fontStyle: 'bold' },
+    },
+    alternateRowStyles: { fillColor: [246, 244, 251] },
+  });
+  return (doc as any).lastAutoTable.finalY + 10;
+}
+
+export async function downloadRealProfitReport(opts?: ReportOptions) {
+  const reportTitle = 'Rapport spécialisé — bénéfice réel';
+  const doc = await setupDoc(reportTitle, opts);
+  const txs = filterTransactions(getTransactions(), opts).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  const metrics = computeRealProfitMetrics(txs, getGlobalStockEconomicsSummaryInRange(opts?.startDate, opts?.endDate));
+  let y = 20;
+
+  y = addRealProfitSummaryTable(doc, metrics, y);
+  y = addDepartmentRealProfitTable(doc, txs, y, opts);
+  y = addMonthlyRealProfitTable(doc, txs, y);
+
+  decoratePages(doc, reportTitle);
+  presentPdf(doc, `rapport-benefice-reel-${new Date().toISOString().slice(0, 10)}.pdf`, opts?.reportMode || 'download');
+}
+
+export async function downloadDepartmentRealProfitReport(deptId: DepartmentId, opts?: ReportOptions) {
+  const dept = getDepartment(deptId);
+  const reportTitle = `Rapport bénéfice réel — ${dept.name}`;
+  const doc = await setupDoc(reportTitle, opts);
+  const txs = filterTransactions(getTransactionsByDepartment(deptId), opts).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  const metrics = computeRealProfitMetrics(txs, getStockEconomicsSummaryInRange(deptId, opts?.startDate, opts?.endDate));
+  let y = 20;
+
+  y = addRealProfitSummaryTable(doc, metrics, y);
+  y = addMonthlyRealProfitTable(doc, txs, y, deptId);
+
+  decoratePages(doc, reportTitle);
+  presentPdf(doc, `rapport-benefice-reel-${deptId}-${new Date().toISOString().slice(0, 10)}.pdf`, opts?.reportMode || 'download');
+}
+
 export async function downloadDashboardReport(opts?: ReportOptions) {
   const reportTitle = "Rapport global — Tableau de bord";
   const doc = await setupDoc(reportTitle, opts);
@@ -661,6 +839,7 @@ export async function downloadDashboardReport(opts?: ReportOptions) {
   const insights = await resolveInsights("Rapport global — Tableau de bord", allTxs, buildDashboardInsights(allTxs), opts);
   const expenseBreakdown = buildCategoryBreakdown(allTxs, 'expense');
   const strategicExpenses = buildStrategicExpenseBreakdown(allTxs);
+  const realProfitMetrics = computeRealProfitMetrics(allTxs, getGlobalStockEconomicsSummaryInRange(opts?.startDate, opts?.endDate));
   let y = 20;
 
   y = addExecutiveSummaryTable(doc, stats, y);
@@ -672,6 +851,7 @@ export async function downloadDashboardReport(opts?: ReportOptions) {
   }
 
   y = addInsightSections(doc, insights, y);
+  y = addRealProfitSummaryTable(doc, realProfitMetrics, y);
 
   // Global stats
   y = addSectionTitle(doc, "Statistiques globales", y);
@@ -776,6 +956,7 @@ export async function downloadDepartmentReport(deptId: DepartmentId, opts?: Repo
   const insights = await resolveInsights(`Rapport — ${dept.name}`, allTxs, buildTransactionInsights(allTxs, `Le département ${dept.name}`), opts);
   const expenseBreakdown = buildCategoryBreakdown(allTxs, 'expense');
   const strategicExpenses = buildStrategicExpenseBreakdown(allTxs);
+  const realProfitMetrics = computeRealProfitMetrics(allTxs, getStockEconomicsSummaryInRange(deptId, opts?.startDate, opts?.endDate));
   let y = 20;
 
   y = addExecutiveSummaryTable(doc, stats, y);
@@ -787,6 +968,7 @@ export async function downloadDepartmentReport(deptId: DepartmentId, opts?: Repo
   }
 
   y = addInsightSections(doc, insights, y);
+  y = addRealProfitSummaryTable(doc, realProfitMetrics, y);
 
   // Department stats
   y = addSectionTitle(doc, `Statistiques — ${dept.name}`, y);

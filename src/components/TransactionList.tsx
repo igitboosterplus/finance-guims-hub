@@ -22,11 +22,13 @@ interface TransactionListProps {
   transactions: Transaction[];
   onDelete?: () => void;
   showDepartment?: boolean;
+  disablePagination?: boolean;
+  displayMode?: 'table' | 'cards';
 }
 
 const PAGE_SIZE = 15;
 
-export function TransactionList({ transactions, onDelete, showDepartment = false }: TransactionListProps) {
+export function TransactionList({ transactions, onDelete, showDepartment = false, disablePagination = false, displayMode = 'table' }: TransactionListProps) {
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
@@ -78,7 +80,10 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const currentPage = Math.min(page, totalPages);
-  const paginated = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+  const activePageSize = disablePagination ? Math.max(filtered.length, 1) : PAGE_SIZE;
+  const paginated = disablePagination
+    ? filtered
+    : filtered.slice((currentPage - 1) * activePageSize, currentPage * activePageSize);
 
   const txToDelete = deleteId ? transactions.find(t => t.id === deleteId) : null;
   const isInscriptionLinkedTransaction = (tx: Transaction) => {
@@ -456,8 +461,9 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
         </div>
       ) : (
         <>
-          <div className="rounded-lg border bg-card overflow-x-auto">
-            <Table className="min-w-[700px]">
+          {displayMode === 'table' ? (
+          <div className="rounded-xl border bg-background/95 shadow-sm overflow-x-auto">
+            <Table className="min-w-[700px] text-sm">
               <TableHeader>
                 <TableRow>
                   <TableHead>Date/Heure</TableHead>
@@ -475,11 +481,11 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
                 {paginated.map((tx) => {
                   const dept = getDepartment(tx.departmentId);
                   return (
-                    <TableRow key={tx.id}>
-                      <TableCell className="text-sm">
+                    <TableRow key={tx.id} className="border-b hover:bg-muted/60 data-[state=selected]:bg-muted/70">
+                      <TableCell className="py-4 align-top text-sm">
                         {new Date(tx.date).toLocaleString('fr-FR')}
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="py-4 align-top">
                         {tx.type === 'income' ? (
                           <Badge variant="outline" className="border-success/30 text-success bg-success/5">
                             <ArrowUpRight className="h-3 w-3 mr-1" />
@@ -492,32 +498,32 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
                           </Badge>
                         )}
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="py-4 align-top">
                         <Badge variant="secondary" className="text-xs">
                           {getPaymentMethodLabel(tx.paymentMethod || 'especes', tx.departmentId)}
                         </Badge>
                       </TableCell>
                       {showDepartment && (
-                        <TableCell>
+                        <TableCell className="py-4 align-top">
                           <div className="flex items-center gap-2">
                             <div className={`h-2 w-2 rounded-full ${dept.bgClass}`} />
                             <span className="text-sm">{dept.name}</span>
                           </div>
                         </TableCell>
                       )}
-                      <TableCell className="text-sm font-medium">{tx.personName || '—'}</TableCell>
-                      <TableCell className="text-sm">{tx.category}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground max-w-[260px]">
+                      <TableCell className="py-4 align-top text-sm font-medium">{tx.personName || '—'}</TableCell>
+                      <TableCell className="py-4 align-top text-sm">{tx.category}</TableCell>
+                      <TableCell className="max-w-[260px] py-4 align-top text-sm text-foreground/80">
                         <div className="space-y-1">
                           <p className="truncate">{tx.description || '—'}</p>
                           <p className="text-xs">Numéro: {tx.phoneNumber || '—'}</p>
                           {tx.saleTicketNumber && <p className="text-xs">Ticket vente: {tx.saleTicketNumber}</p>}
                         </div>
                       </TableCell>
-                      <TableCell className={`text-right font-semibold ${tx.type === 'income' ? 'text-success' : 'text-destructive'}`}>
+                      <TableCell className={`py-4 align-top text-right font-semibold ${tx.type === 'income' ? 'text-success' : 'text-destructive'}`}>
                         {tx.type === 'income' ? '+' : '-'}{formatCurrency(tx.amount)}
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="py-4 align-top">
                         <div className="flex gap-1">
                           {hasPermission(getCurrentUser(), 'canEditTransaction') && (
                             <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary" onClick={() => openEdit(tx)}>
@@ -537,9 +543,52 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
               </TableBody>
             </Table>
           </div>
+          ) : (
+            <div className="space-y-3">
+              {paginated.map((tx) => {
+                const dept = getDepartment(tx.departmentId);
+                return (
+                  <div key={tx.id} className="rounded-xl border bg-background p-4 shadow-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-sm font-semibold text-foreground">{tx.personName || 'Sans nom'}</p>
+                      <p className={`text-base font-bold ${tx.type === 'income' ? 'text-success' : 'text-destructive'}`}>
+                        {tx.type === 'income' ? '+' : '-'}{formatCurrency(tx.amount)}
+                      </p>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <Badge variant="outline" className={tx.type === 'income' ? "border-success/30 text-success bg-success/5" : "border-destructive/30 text-destructive bg-destructive/5"}>
+                        {tx.type === 'income' ? 'Entrée' : 'Sortie'}
+                      </Badge>
+                      <Badge variant="secondary">{getPaymentMethodLabel(tx.paymentMethod || 'especes', tx.departmentId)}</Badge>
+                      {showDepartment && <Badge variant="outline">{dept.name}</Badge>}
+                    </div>
+                    <div className="mt-3 grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
+                      <p><span className="font-medium text-muted-foreground">Date:</span> {new Date(tx.date).toLocaleString('fr-FR')}</p>
+                      <p><span className="font-medium text-muted-foreground">Catégorie:</span> {tx.category}</p>
+                      <p className="sm:col-span-2"><span className="font-medium text-muted-foreground">Détails:</span> {tx.description || '—'}</p>
+                      <p><span className="font-medium text-muted-foreground">Numéro:</span> {tx.phoneNumber || '—'}</p>
+                      {tx.saleTicketNumber && <p><span className="font-medium text-muted-foreground">Ticket:</span> {tx.saleTicketNumber}</p>}
+                    </div>
+                    <div className="mt-3 flex gap-1">
+                      {hasPermission(getCurrentUser(), 'canEditTransaction') && (
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary" onClick={() => openEdit(tx)}>
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                      )}
+                      {hasPermission(getCurrentUser(), 'canDeleteTransaction') && (
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive" onClick={() => setDeleteId(tx.id)}>
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
           {/* Pagination */}
-          {totalPages > 1 && (
+          {!disablePagination && totalPages > 1 && (
             <div className="flex items-center justify-between mt-4">
               <p className="text-sm text-muted-foreground">
                 {filtered.length} transaction{filtered.length > 1 ? 's' : ''} — Page {currentPage}/{totalPages}
