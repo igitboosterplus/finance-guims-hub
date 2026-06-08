@@ -374,7 +374,7 @@ export default function Dashboard() {
 
           <div>
             <h3 className="text-lg font-semibold text-foreground mb-4">Dernières transactions (global)</h3>
-            <TransactionList transactions={sortTransactionsByRecency(transactions).slice(0, 10)} onDelete={refresh} showDepartment />
+            <TransactionList transactions={sortTransactionsByRecency(transactions)} onDelete={refresh} showDepartment />
           </div>
         </>
       ) : (
