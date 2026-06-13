@@ -1,4 +1,4 @@
-import { LayoutDashboard, Plus, Users, FileText, Bell, UserCircle, Package, GraduationCap, CreditCard, ShieldCheck, Sparkles, LineChart, MessageCircle } from "lucide-react";
+import { LayoutDashboard, Plus, Users, FileText, Bell, UserCircle, Package, GraduationCap, CreditCard, ShieldCheck, Sparkles, LineChart, MessageCircle, BookOpen } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
 import { departments } from "@/lib/data";
@@ -330,6 +330,20 @@ export function AppSidebar() {
                       >
                         <LineChart className="mr-2 h-4 w-4" />
                         {!collapsed && <span>Ecart de solde</span>}
+                      </NavLink>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
+                {canViewAudit && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild>
+                      <NavLink
+                        to="/journal-comptable"
+                        className="hover:bg-sidebar-accent"
+                        activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
+                      >
+                        <BookOpen className="mr-2 h-4 w-4" />
+                        {!collapsed && <span>Journal Comptable</span>}
                       </NavLink>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
