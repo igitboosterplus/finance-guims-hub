@@ -24,6 +24,7 @@ export interface Department {
 export type PaymentMethod = string;
 
 export interface PaymentMethodOption {
+  id?: string;
   value: PaymentMethod;
   label: string;
   departmentIds: DepartmentId[];
@@ -39,18 +40,18 @@ const SHARED_PAYMENT_METHOD_VALUES = new Set<PaymentMethod>(['especes', 'banque'
 const REQUIRED_PAYMENT_METHOD_VALUES = new Set<PaymentMethod>(['especes', 'banque']);
 
 const DEFAULT_PAYMENT_METHOD_OPTIONS: PaymentMethodOption[] = [
-  { value: 'especes', label: 'Espèces', departmentIds: ALL_DEPARTMENT_IDS, system: true },
-  { value: 'banque', label: 'Banque', departmentIds: ALL_DEPARTMENT_IDS, system: true },
-  { value: 'momo', label: 'MoMo (ancien non affecté)', departmentIds: [], system: true },
-  { value: 'om', label: 'OM (ancien non affecté)', departmentIds: [], system: true },
-  { value: 'momo-gaba', label: 'MoMo GABA', departmentIds: ['gaba'], system: true },
-  { value: 'om-gaba', label: 'OM GABA', departmentIds: ['gaba'], system: true },
-  { value: 'momo-guims-educ', label: 'MoMo Guims Educ', departmentIds: ['guims-educ'], system: true },
-  { value: 'om-guims-educ', label: 'OM Guims Educ', departmentIds: ['guims-educ'], system: true },
-  { value: 'momo-guims-academy', label: 'MoMo Guims Academy', departmentIds: ['guims-academy'], system: true },
-  { value: 'om-guims-academy', label: 'OM Guims Academy', departmentIds: ['guims-academy'], system: true },
-  { value: 'momo-digitboosterplus', label: 'MoMo DigitBoosterPlus', departmentIds: ['digitboosterplus'], system: true },
-  { value: 'om-digitboosterplus', label: 'OM DigitBoosterPlus', departmentIds: ['digitboosterplus'], system: true },
+  { id: 'especes', value: 'especes', label: 'Espèces', departmentIds: ALL_DEPARTMENT_IDS, system: true },
+  { id: 'banque', value: 'banque', label: 'Banque', departmentIds: ALL_DEPARTMENT_IDS, system: true },
+  { id: 'momo', value: 'momo', label: 'MoMo (ancien non affecté)', departmentIds: [], system: true },
+  { id: 'om', value: 'om', label: 'OM (ancien non affecté)', departmentIds: [], system: true },
+  { id: 'momo-gaba', value: 'momo-gaba', label: 'MoMo GABA', departmentIds: ['gaba'], system: true },
+  { id: 'om-gaba', value: 'om-gaba', label: 'OM GABA', departmentIds: ['gaba'], system: true },
+  { id: 'momo-guims-educ', value: 'momo-guims-educ', label: 'MoMo Guims Educ', departmentIds: ['guims-educ'], system: true },
+  { id: 'om-guims-educ', value: 'om-guims-educ', label: 'OM Guims Educ', departmentIds: ['guims-educ'], system: true },
+  { id: 'momo-guims-academy', value: 'momo-guims-academy', label: 'MoMo Guims Academy', departmentIds: ['guims-academy'], system: true },
+  { id: 'om-guims-academy', value: 'om-guims-academy', label: 'OM Guims Academy', departmentIds: ['guims-academy'], system: true },
+  { id: 'momo-digitboosterplus', value: 'momo-digitboosterplus', label: 'MoMo DigitBoosterPlus', departmentIds: ['digitboosterplus'], system: true },
+  { id: 'om-digitboosterplus', value: 'om-digitboosterplus', label: 'OM DigitBoosterPlus', departmentIds: ['digitboosterplus'], system: true },
 ];
 
 export const PAYMENT_METHODS: { value: PaymentMethod; label: string }[] = DEFAULT_PAYMENT_METHOD_OPTIONS.map(({ value, label }) => ({ value, label }));
@@ -73,6 +74,7 @@ function normalizeStoredPaymentMethodOption(value: unknown): PaymentMethodOption
     ? uniqueDepartmentIds(item.departmentIds.filter(isDepartmentId))
     : [];
   return {
+    id: typeof item.id === 'string' && item.id.trim() ? item.id : item.value,
     value: item.value,
     label: item.label.trim(),
     departmentIds,
@@ -97,13 +99,14 @@ function sortPaymentMethods(items: PaymentMethodOption[]): PaymentMethodOption[]
 function mergePaymentMethodOptions(storedOptions: PaymentMethodOption[]): PaymentMethodOption[] {
   const merged = new Map<PaymentMethod, PaymentMethodOption>();
   for (const option of DEFAULT_PAYMENT_METHOD_OPTIONS) {
-    merged.set(option.value, { ...option, departmentIds: [...option.departmentIds] });
+    merged.set(option.value, { ...option, id: option.id || option.value, departmentIds: [...option.departmentIds] });
   }
   for (const option of storedOptions) {
     const existing = merged.get(option.value);
     if (existing?.system) {
       merged.set(option.value, {
         ...existing,
+        id: option.id || option.value,
         label: option.label || existing.label,
         departmentIds: option.departmentIds.length > 0 ? uniqueDepartmentIds(option.departmentIds) : existing.departmentIds,
         disabled: option.disabled === true,
@@ -111,6 +114,7 @@ function mergePaymentMethodOptions(storedOptions: PaymentMethodOption[]): Paymen
       continue;
     }
     merged.set(option.value, {
+      id: option.id || option.value,
       value: option.value,
       label: option.label,
       departmentIds: uniqueDepartmentIds(option.departmentIds),
@@ -122,7 +126,11 @@ function mergePaymentMethodOptions(storedOptions: PaymentMethodOption[]): Paymen
 }
 
 function savePaymentMethods(options: PaymentMethodOption[]) {
-  localStorage.setItem(PAYMENT_METHODS_STORAGE_KEY, JSON.stringify(options));
+  const normalizedForStorage = options.map(option => ({
+    ...option,
+    id: option.id || option.value,
+  }));
+  localStorage.setItem(PAYMENT_METHODS_STORAGE_KEY, JSON.stringify(normalizedForStorage));
   syncFullCollection(TABLES.paymentMethods, PAYMENT_METHODS_STORAGE_KEY);
 }
 
@@ -221,6 +229,7 @@ export function createPaymentMethod(label: string, departmentIds: DepartmentId[]
   }
 
   const method: PaymentMethodOption = {
+    id: candidate,
     value: candidate,
     label: normalizedLabel,
     departmentIds: normalizedDepartmentIds,
