@@ -28,6 +28,7 @@ export interface PaymentMethodOption {
   label: string;
   departmentIds: DepartmentId[];
   system?: boolean;
+  disabled?: boolean;
 }
 
 export type IncomeNature = 'operational' | 'external-contribution';
@@ -35,6 +36,7 @@ export type IncomeNature = 'operational' | 'external-contribution';
 const PAYMENT_METHODS_STORAGE_KEY = 'finance-payment-methods';
 const ALL_DEPARTMENT_IDS: DepartmentId[] = ['gaba', 'guims-educ', 'guims-academy', 'digitboosterplus', 'charges-entreprise'];
 const SHARED_PAYMENT_METHOD_VALUES = new Set<PaymentMethod>(['especes', 'banque']);
+const REQUIRED_PAYMENT_METHOD_VALUES = new Set<PaymentMethod>(['especes', 'banque']);
 
 const DEFAULT_PAYMENT_METHOD_OPTIONS: PaymentMethodOption[] = [
   { value: 'especes', label: 'Espèces', departmentIds: ALL_DEPARTMENT_IDS, system: true },
@@ -75,6 +77,7 @@ function normalizeStoredPaymentMethodOption(value: unknown): PaymentMethodOption
     label: item.label.trim(),
     departmentIds,
     system: item.system === true,
+    disabled: item.disabled === true,
   };
 }
 
@@ -97,12 +100,22 @@ function mergePaymentMethodOptions(storedOptions: PaymentMethodOption[]): Paymen
     merged.set(option.value, { ...option, departmentIds: [...option.departmentIds] });
   }
   for (const option of storedOptions) {
-    if (merged.has(option.value) && merged.get(option.value)?.system) continue;
+    const existing = merged.get(option.value);
+    if (existing?.system) {
+      merged.set(option.value, {
+        ...existing,
+        label: option.label || existing.label,
+        departmentIds: option.departmentIds.length > 0 ? uniqueDepartmentIds(option.departmentIds) : existing.departmentIds,
+        disabled: option.disabled === true,
+      });
+      continue;
+    }
     merged.set(option.value, {
       value: option.value,
       label: option.label,
       departmentIds: uniqueDepartmentIds(option.departmentIds),
       system: option.system === true,
+      disabled: option.disabled === true,
     });
   }
   return sortPaymentMethods(Array.from(merged.values()));
@@ -114,6 +127,29 @@ function savePaymentMethods(options: PaymentMethodOption[]) {
 }
 
 export function getAllPaymentMethods(): PaymentMethodOption[] {
+  const raw = localStorage.getItem(PAYMENT_METHODS_STORAGE_KEY);
+  const storedOptions = raw
+    ? (() => {
+        try {
+          const parsed = JSON.parse(raw);
+          return Array.isArray(parsed)
+            ? parsed.map(normalizeStoredPaymentMethodOption).filter((option): option is PaymentMethodOption => option !== null)
+            : [];
+        } catch {
+          return [];
+        }
+      })()
+    : [];
+
+  const mergedOptions = mergePaymentMethodOptions(storedOptions);
+  const shouldPersist = !raw || JSON.stringify(storedOptions) !== JSON.stringify(mergedOptions);
+  if (shouldPersist) {
+    localStorage.setItem(PAYMENT_METHODS_STORAGE_KEY, JSON.stringify(mergedOptions));
+  }
+  return mergedOptions.filter(option => option.disabled !== true);
+}
+
+function getAllPaymentMethodsIncludingDisabled(): PaymentMethodOption[] {
   const raw = localStorage.getItem(PAYMENT_METHODS_STORAGE_KEY);
   const storedOptions = raw
     ? (() => {
@@ -171,7 +207,7 @@ export function createPaymentMethod(label: string, departmentIds: DepartmentId[]
     return { success: false, error: 'Sélectionnez au moins un département pour cette caisse.' };
   }
 
-  const existing = getAllPaymentMethods();
+  const existing = getAllPaymentMethodsIncludingDisabled();
   if (existing.some(method => method.label.localeCompare(normalizedLabel, 'fr', { sensitivity: 'base' }) === 0)) {
     return { success: false, error: 'Une caisse avec ce nom existe déjà.' };
   }
@@ -195,6 +231,10 @@ export function createPaymentMethod(label: string, departmentIds: DepartmentId[]
   return { success: true, method };
 }
 
+export function canDeletePaymentMethod(value: PaymentMethod): boolean {
+  return !REQUIRED_PAYMENT_METHOD_VALUES.has(value);
+}
+
 function hasPaymentMethodUsage(value: PaymentMethod): boolean {
   if (getTransactions().some(transaction => transaction.paymentMethod === value)) {
     return true;
@@ -214,21 +254,30 @@ function hasPaymentMethodUsage(value: PaymentMethod): boolean {
 }
 
 export function deletePaymentMethod(value: PaymentMethod): { success: boolean; error?: string } {
-  const methods = getAllPaymentMethods();
+  const methods = getAllPaymentMethodsIncludingDisabled();
   const target = methods.find(method => method.value === value);
   if (!target) {
     return { success: false, error: 'Caisse introuvable.' };
   }
-  if (target.system) {
-    return { success: false, error: 'Les caisses système ne peuvent pas être supprimées.' };
+  if (!canDeletePaymentMethod(value)) {
+    return { success: false, error: 'Les caisses de base requises ne peuvent pas être supprimées.' };
   }
   if (hasPaymentMethodUsage(value)) {
     return { success: false, error: 'Impossible de supprimer une caisse déjà utilisée dans des opérations ou des paiements.' };
   }
 
-  const updated = methods.filter(method => method.value !== value);
-  savePaymentMethods(updated);
-  syncDeleteDoc(TABLES.paymentMethods, value);
+  if (target.system) {
+    const updated = methods.map(method =>
+      method.value === value
+        ? { ...method, disabled: true }
+        : method
+    );
+    savePaymentMethods(updated);
+  } else {
+    const updated = methods.filter(method => method.value !== value);
+    savePaymentMethods(updated);
+    syncDeleteDoc(TABLES.paymentMethods, value);
+  }
   return { success: true };
 }
 

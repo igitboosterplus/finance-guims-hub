@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { getAllUsers, approveUser, rejectUser, deleteUser, createUser, resetUserPassword, updateUserPermissions, getUserPermissions, hasPermission, type User, type UserRole, type UserPermissions, DEFAULT_PERMISSIONS } from "@/lib/auth";
-import { createPaymentMethod, deletePaymentMethod, departments, getAllPaymentMethods, STOCK_ENABLED_DEPARTMENT_IDS, type DepartmentId, type PaymentMethodOption } from "@/lib/data";
+import { canDeletePaymentMethod, createPaymentMethod, deletePaymentMethod, departments, getAllPaymentMethods, STOCK_ENABLED_DEPARTMENT_IDS, type DepartmentId, type PaymentMethodOption } from "@/lib/data";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import { UserPlus, Users, Check, X, Trash2, KeyRound, Shield, ShieldCheck, Settings2, Building2, Plus, PenLine, Download, Upload, Package, LineChart, Sparkles, CreditCard, GraduationCap, FileText, RotateCcw } from "lucide-react";
@@ -327,7 +327,7 @@ export default function UserManagement() {
             <CreditCard className="h-5 w-5" />
             Gestion des caisses ({paymentMethods.length})
           </CardTitle>
-          <p className="text-sm text-muted-foreground">Le Super Admin peut créer des caisses personnalisées et supprimer celles qui ne sont pas encore utilisées.</p>
+          <p className="text-sm text-muted-foreground">Le Super Admin peut créer et supprimer toute caisse non utilisée, sauf les caisses de base requises.</p>
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="rounded-lg border p-4 space-y-4">
@@ -392,7 +392,7 @@ export default function UserManagement() {
                       )}
                     </TableCell>
                     <TableCell>
-                      {!method.system && (
+                      {canDeletePaymentMethod(method.value) && (
                         <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => setDeletePaymentMethodId(method.value)} title="Supprimer la caisse">
                           <Trash2 className="h-4 w-4" />
                         </Button>
