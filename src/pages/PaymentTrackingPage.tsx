@@ -10,6 +10,7 @@ import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { departments, type DepartmentId, type PaymentMethod, formatCurrency, getPaymentMethodLabel, getPaymentMethodsForDepartment, addTransaction, isInscriptionCategory } from "@/lib/data";
 import { addAuditEntry, addSuperAuditEntry, getCurrentUser, hasPermission, hasDepartmentAccess } from "@/lib/auth";
 import {
@@ -56,6 +57,16 @@ export default function PaymentTrackingPage() {
   const [newDesc, setNewDesc] = useState("");
   const [newTotal, setNewTotal] = useState("");
   const [newTranches, setNewTranches] = useState<{ name: string; amount: string; dueDate: string }[]>([]);
+  const [newGuimsEducMonthlyMode, setNewGuimsEducMonthlyMode] = useState(false);
+  const [newMonthlyAmount, setNewMonthlyAmount] = useState("");
+  const [newMonthlyMonths, setNewMonthlyMonths] = useState("10");
+  const [newMonthlyStartDate, setNewMonthlyStartDate] = useState(formatLocalDateInputValue());
+  const [newGuimsEducCategory, setNewGuimsEducCategory] = useState("");
+  const [newParentName, setNewParentName] = useState("");
+  const [newParentPhone, setNewParentPhone] = useState("");
+  const [newStudentName, setNewStudentName] = useState("");
+  const [newStudentClass, setNewStudentClass] = useState("");
+  const [guimsEducCategoryFilter, setGuimsEducCategoryFilter] = useState<string>("all");
 
   // Reminders
   const [reminders, setReminders] = useState<PaymentReminder[]>([]);
@@ -81,7 +92,17 @@ export default function PaymentTrackingPage() {
       setFilterStatus('en_cours');
       setFilterDept('all');
     }
+    if (focus === 'guims-educ-reminders') {
+      setFilterStatus('en_cours');
+      setFilterDept('guims-educ');
+    }
   }, [focus]);
+
+  useEffect(() => {
+    if (newDept === 'guims-educ' && newGuimsEducMonthlyMode) {
+      setNewType('service');
+    }
+  }, [newDept, newGuimsEducMonthlyMode]);
 
   const refresh = () => {
     setPlans(getPaymentPlans());
@@ -111,6 +132,53 @@ export default function PaymentTrackingPage() {
 
   const formationPlans = filtered.filter(p => p.planType === 'formation');
   const servicePlans = filtered.filter(p => p.planType === 'service');
+  const guimsEducReminders = reminders.filter(r => r.departmentId === 'guims-educ');
+  const guimsEducOverdue = overdue.filter(r => r.departmentId === 'guims-educ');
+  const guimsEducReminderTotal = guimsEducReminders.reduce((sum, r) => sum + r.trancheAmount, 0);
+  const guimsEducOverdueTotal = guimsEducOverdue.reduce((sum, r) => sum + r.trancheAmount, 0);
+  const guimsEducPlans = plans.filter((p) => p.departmentId === 'guims-educ' && p.status !== 'archive');
+  const guimsEducPlansFiltered = guimsEducCategoryFilter === 'all'
+    ? guimsEducPlans
+    : guimsEducPlans.filter((p) => (p.guimsEducCategory || 'Non classé') === guimsEducCategoryFilter);
+
+  const guimsEducCategoryStats = Object.values(
+    guimsEducPlans.reduce((acc, plan) => {
+      const category = (plan.guimsEducCategory || 'Non classé').trim() || 'Non classé';
+      if (!acc[category]) {
+        acc[category] = {
+          category,
+          plans: 0,
+          students: 0,
+          due: 0,
+          paid: 0,
+          overdue: 0,
+        };
+      }
+      acc[category].plans += 1;
+      acc[category].students += 1;
+      acc[category].due += plan.totalAmount + (plan.inscriptionFee || 0);
+      acc[category].paid += getPaidAmount(plan) + (plan.inscriptionPaidAmount || (plan.inscriptionPaid && plan.inscriptionFee ? plan.inscriptionFee : 0));
+      if (guimsEducOverdue.some((o) => o.planId === plan.id)) {
+        acc[category].overdue += 1;
+      }
+      return acc;
+    }, {} as Record<string, { category: string; plans: number; students: number; due: number; paid: number; overdue: number }>),
+  ).sort((a, b) => a.category.localeCompare(b.category));
+
+  const guimsEducMonthColumns = Array.from(
+    new Set(
+      guimsEducPlansFiltered
+        .flatMap((p) => p.scheduledTranches || [])
+        .map((tr) => {
+          const d = new Date(tr.dueDate);
+          const monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+          const monthLabel = d.toLocaleDateString('fr-FR', { month: 'short', year: '2-digit' });
+          return JSON.stringify({ monthKey, monthLabel });
+        }),
+    ),
+  )
+    .map((item) => JSON.parse(item) as { monthKey: string; monthLabel: string })
+    .sort((a, b) => a.monthKey.localeCompare(b.monthKey));
 
   const formationGroups = Object.values(
     formationPlans.reduce((acc, plan) => {
@@ -142,28 +210,79 @@ export default function PaymentTrackingPage() {
     if (!newClient.trim()) { toast.error("Nom du client obligatoire"); return; }
     if (!newLabel.trim()) { toast.error("Libellé obligatoire"); return; }
     if (!newDept) { toast.error("Département obligatoire"); return; }
-    const total = parseInt(newTotal);
+    const isGuimsEducMonthly = newDept === 'guims-educ' && newGuimsEducMonthlyMode;
+    if (isGuimsEducMonthly) {
+      if (!newGuimsEducCategory.trim()) { toast.error("Catégorie Guims Educ obligatoire"); return; }
+      if (!newParentName.trim()) { toast.error("Nom du parent obligatoire"); return; }
+      if (!newStudentName.trim()) { toast.error("Nom de l'élève obligatoire"); return; }
+    }
+    const total = isGuimsEducMonthly
+      ? (parseInt(newMonthlyAmount || '0', 10) * parseInt(newMonthlyMonths || '0', 10))
+      : parseInt(newTotal, 10);
     if (isNaN(total) || total <= 0) { toast.error("Montant total invalide"); return; }
 
     // Build scheduled tranches if any
-    const scheduled: ScheduledTranche[] = newTranches
-      .filter(t => t.name.trim() && t.amount && t.dueDate)
-      .map(t => ({
-        id: crypto.randomUUID(),
-        name: t.name.trim(),
-        amount: parseInt(t.amount) || 0,
-        dueDate: t.dueDate,
-      }))
-      .filter(t => t.amount > 0);
+    let scheduled: ScheduledTranche[] = [];
+    if (isGuimsEducMonthly) {
+      const monthlyAmount = parseInt(newMonthlyAmount || '0', 10);
+      const monthlyMonths = parseInt(newMonthlyMonths || '0', 10);
+      if (isNaN(monthlyAmount) || monthlyAmount <= 0) {
+        toast.error("Mensualité invalide");
+        return;
+      }
+      if (isNaN(monthlyMonths) || monthlyMonths <= 0 || monthlyMonths > 36) {
+        toast.error("Nombre de mois invalide (1 à 36)");
+        return;
+      }
+      if (!newMonthlyStartDate) {
+        toast.error("Date de première échéance obligatoire");
+        return;
+      }
+
+      const startDate = new Date(newMonthlyStartDate);
+      if (Number.isNaN(startDate.getTime())) {
+        toast.error("Date de première échéance invalide");
+        return;
+      }
+
+      scheduled = Array.from({ length: monthlyMonths }, (_, index) => {
+        const dueDate = new Date(startDate.getFullYear(), startDate.getMonth() + index, startDate.getDate());
+        return {
+          id: crypto.randomUUID(),
+          name: `Mensualité ${index + 1}`,
+          amount: monthlyAmount,
+          dueDate: dueDate.toISOString().slice(0, 10),
+        };
+      });
+    } else {
+      scheduled = newTranches
+        .filter(t => t.name.trim() && t.amount && t.dueDate)
+        .map(t => ({
+          id: crypto.randomUUID(),
+          name: t.name.trim(),
+          amount: parseInt(t.amount) || 0,
+          dueDate: t.dueDate,
+        }))
+        .filter(t => t.amount > 0);
+    }
 
     addPaymentPlan({
       departmentId: newDept as DepartmentId,
-      clientName: newClient.trim(),
-      planType: newType,
+      clientName: isGuimsEducMonthly ? newParentName.trim() : newClient.trim(),
+      planType: isGuimsEducMonthly ? 'service' : newType,
       label: newLabel.trim(),
       description: newDesc.trim() || undefined,
       totalAmount: total,
       createdBy: currentUser?.displayName ?? "Inconnu",
+      ...(isGuimsEducMonthly
+        ? {
+            guimsEducCategory: newGuimsEducCategory.trim(),
+            parentName: newParentName.trim(),
+            parentPhone: newParentPhone.trim() || undefined,
+            studentName: newStudentName.trim(),
+            studentClass: newStudentClass.trim() || undefined,
+          }
+        : {}),
       ...(scheduled.length > 0 ? { scheduledTranches: scheduled } : {}),
     });
     toast.success("Plan de paiement créé");
@@ -176,6 +295,15 @@ export default function PaymentTrackingPage() {
     setNewClient(""); setNewLabel(""); setNewDesc(""); setNewTotal("");
     setNewType('service'); setNewDept(accessibleDepts[0]?.id || "");
     setNewTranches([]);
+    setNewGuimsEducMonthlyMode((accessibleDepts[0]?.id || '') === 'guims-educ');
+    setNewMonthlyAmount('');
+    setNewMonthlyMonths('10');
+    setNewMonthlyStartDate(formatLocalDateInputValue());
+    setNewGuimsEducCategory('');
+    setNewParentName('');
+    setNewParentPhone('');
+    setNewStudentName('');
+    setNewStudentClass('');
   };
 
   const addNewTranche = () => {
@@ -196,6 +324,7 @@ export default function PaymentTrackingPage() {
   const openCreateDialog = () => {
     resetCreateForm();
     setNewDept(accessibleDepts[0]?.id || "");
+    setNewGuimsEducMonthlyMode((accessibleDepts[0]?.id || '') === 'guims-educ');
     setCreateOpen(true);
   };
 
@@ -264,6 +393,8 @@ export default function PaymentTrackingPage() {
       // Determine proper category for the transaction
       const txCategory = noteText && noteText.startsWith('Tranche')
         ? `Frais de formation - ${noteText}`
+        : noteText && noteText.toLowerCase().startsWith('mensualité')
+        ? 'Mensualité parent'
         : noteText || 'Frais de formation';
       // Create a real transaction so the payment appears on the dashboard
       const tx = addTransaction({
@@ -401,6 +532,26 @@ export default function PaymentTrackingPage() {
       {/* Reminders and overdue alerts */}
       {(reminders.length > 0 || overdue.length > 0) && (
         <div className="space-y-3">
+          {(guimsEducReminders.length > 0 || guimsEducOverdue.length > 0) && (
+            <Card className="border-primary/30 bg-primary/5 shadow-sm">
+              <CardContent className="p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <Bell className="h-4 w-4 text-primary" />
+                  <p className="text-sm font-semibold text-primary">Rappel paiements Guims Educ</p>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                  <div className="rounded-md border bg-card p-2">
+                    <p className="text-muted-foreground">Échéances proches</p>
+                    <p className="font-semibold">{guimsEducReminders.length} · {formatCurrency(guimsEducReminderTotal)}</p>
+                  </div>
+                  <div className="rounded-md border bg-card p-2">
+                    <p className="text-muted-foreground">Mensualités en retard</p>
+                    <p className="font-semibold text-destructive">{guimsEducOverdue.length} · {formatCurrency(guimsEducOverdueTotal)}</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
           {overdue.length > 0 && (
             <Card className="border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/30 shadow-sm">
               <CardContent className="p-4">
@@ -449,6 +600,136 @@ export default function PaymentTrackingPage() {
               </CardContent>
             </Card>
           )}
+        </div>
+      )}
+
+      {guimsEducPlans.length > 0 && (
+        <div className="space-y-3">
+          <Card className="border-primary/30 bg-primary/5 shadow-sm">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm">Dashboards Guims Educ par catégorie</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex flex-wrap gap-2 mb-3">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={guimsEducCategoryFilter === 'all' ? 'default' : 'outline'}
+                  onClick={() => setGuimsEducCategoryFilter('all')}
+                >
+                  Toutes catégories
+                </Button>
+                {guimsEducCategoryStats.map((item) => (
+                  <Button
+                    key={item.category}
+                    type="button"
+                    size="sm"
+                    variant={guimsEducCategoryFilter === item.category ? 'default' : 'outline'}
+                    onClick={() => setGuimsEducCategoryFilter(item.category)}
+                  >
+                    {item.category}
+                  </Button>
+                ))}
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                {(guimsEducCategoryFilter === 'all'
+                  ? guimsEducCategoryStats
+                  : guimsEducCategoryStats.filter((s) => s.category === guimsEducCategoryFilter)
+                ).map((item) => (
+                  <div key={item.category} className="rounded-lg border bg-card p-3 text-xs space-y-1">
+                    <p className="font-semibold text-sm">{item.category}</p>
+                    <p>Parents/élèves: {item.students}</p>
+                    <p>En retard: {item.overdue}</p>
+                    <p>Encaissé: {formatCurrency(item.paid)}</p>
+                    <p>Reste: {formatCurrency(item.due - item.paid)}</p>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-primary/30 shadow-sm overflow-hidden">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm">Suivi mensuel Guims Educ (parents / élèves)</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {guimsEducPlansFiltered.length === 0 ? (
+                <p className="text-sm text-muted-foreground">Aucun plan Guims Educ pour ce filtre.</p>
+              ) : (
+                <div className="rounded-lg border overflow-x-auto">
+                  <Table className="min-w-[1100px]">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Catégorie</TableHead>
+                        <TableHead>Prestation</TableHead>
+                        <TableHead>Parent</TableHead>
+                        <TableHead>Téléphone</TableHead>
+                        <TableHead>Élève</TableHead>
+                        <TableHead>Classe</TableHead>
+                        <TableHead>Inscription</TableHead>
+                        {guimsEducMonthColumns.map((month) => (
+                          <TableHead key={month.monthKey}>{month.monthLabel}</TableHead>
+                        ))}
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {guimsEducPlansFiltered
+                        .slice()
+                        .sort((a, b) => {
+                          const cat = (a.guimsEducCategory || '').localeCompare(b.guimsEducCategory || '');
+                          if (cat !== 0) return cat;
+                          return (a.studentName || a.clientName).localeCompare(b.studentName || b.clientName);
+                        })
+                        .map((plan) => {
+                          const alloc = getAllocationSummary(plan);
+                          const byTrancheName = new Map(alloc.map((item) => [item.name, item]));
+                          const inscriptionPaidAmount = plan.inscriptionPaidAmount || (plan.inscriptionPaid && plan.inscriptionFee ? plan.inscriptionFee : 0);
+                          const inscriptionStatus = plan.inscriptionFee && plan.inscriptionFee > 0
+                            ? inscriptionPaidAmount >= plan.inscriptionFee
+                              ? 'Payée'
+                              : inscriptionPaidAmount > 0
+                                ? `Partielle (${formatCurrency(inscriptionPaidAmount)})`
+                                : 'Non payée'
+                            : 'N/A';
+
+                          return (
+                            <TableRow key={plan.id}>
+                              <TableCell>{plan.guimsEducCategory || 'Non classé'}</TableCell>
+                              <TableCell className="font-medium">{plan.label}</TableCell>
+                              <TableCell>{plan.parentName || plan.clientName}</TableCell>
+                              <TableCell>{plan.parentPhone || '—'}</TableCell>
+                              <TableCell>{plan.studentName || '—'}</TableCell>
+                              <TableCell>{plan.studentClass || '—'}</TableCell>
+                              <TableCell>{inscriptionStatus}</TableCell>
+                              {guimsEducMonthColumns.map((month) => {
+                                const trancheForMonth = (plan.scheduledTranches || []).find((tr) => {
+                                  const d = new Date(tr.dueDate);
+                                  const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+                                  return key === month.monthKey;
+                                });
+
+                                if (!trancheForMonth) {
+                                  return <TableCell key={`${plan.id}-${month.monthKey}`}>—</TableCell>;
+                                }
+
+                                const allocItem = byTrancheName.get(trancheForMonth.name);
+                                const text = allocItem?.status === 'paid'
+                                  ? 'Payée'
+                                  : allocItem?.status === 'partial'
+                                    ? `Partielle (${formatCurrency(allocItem.paid)})`
+                                    : `Due ${formatCurrency(trancheForMonth.amount)}`;
+
+                                return <TableCell key={`${plan.id}-${month.monthKey}`}>{text}</TableCell>;
+                              })}
+                            </TableRow>
+                          );
+                        })}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </div>
       )}
 
@@ -711,7 +992,12 @@ export default function PaymentTrackingPage() {
               </div>
               <div className="space-y-2">
                 <Label>Département *</Label>
-                <Select value={newDept} onValueChange={setNewDept}>
+                <Select value={newDept} onValueChange={(value) => {
+                  setNewDept(value);
+                  if (value === 'guims-educ') {
+                    setNewGuimsEducMonthlyMode(true);
+                  }
+                }}>
                   <SelectTrigger><SelectValue placeholder="Choisir..." /></SelectTrigger>
                   <SelectContent>
                     {accessibleDepts.map(d => (
@@ -721,6 +1007,66 @@ export default function PaymentTrackingPage() {
                 </Select>
               </div>
             </div>
+            {newDept === 'guims-educ' && (
+              <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 space-y-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold">Mode parent mensuel (Guims Educ)</p>
+                    <p className="text-xs text-muted-foreground">Le parent s'inscrit a une prestation et paie chaque mois.</p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant={newGuimsEducMonthlyMode ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setNewGuimsEducMonthlyMode(v => !v)}
+                  >
+                    {newGuimsEducMonthlyMode ? 'Activé' : 'Activer'}
+                  </Button>
+                </div>
+                {newGuimsEducMonthlyMode && (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <Label>Catégorie *</Label>
+                        <Input value={newGuimsEducCategory} onChange={(e) => setNewGuimsEducCategory(e.target.value)} placeholder="Ex: Vacances utiles" />
+                      </div>
+                      <div className="space-y-1">
+                        <Label>Parent *</Label>
+                        <Input value={newParentName} onChange={(e) => setNewParentName(e.target.value)} placeholder="Nom du parent" />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div className="space-y-1">
+                        <Label>Téléphone parent</Label>
+                        <Input value={newParentPhone} onChange={(e) => setNewParentPhone(e.target.value)} placeholder="6XXXXXXXX" />
+                      </div>
+                      <div className="space-y-1">
+                        <Label>Élève *</Label>
+                        <Input value={newStudentName} onChange={(e) => setNewStudentName(e.target.value)} placeholder="Nom de l'élève" />
+                      </div>
+                      <div className="space-y-1">
+                        <Label>Classe/Niveau</Label>
+                        <Input value={newStudentClass} onChange={(e) => setNewStudentClass(e.target.value)} placeholder="CM2, 3e, Terminale..." />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="space-y-1">
+                      <Label>Mensualité (FCFA) *</Label>
+                      <Input type="number" min="1" value={newMonthlyAmount} onChange={(e) => setNewMonthlyAmount(e.target.value)} placeholder="Ex: 25000" />
+                    </div>
+                    <div className="space-y-1">
+                      <Label>Nombre de mois *</Label>
+                      <Input type="number" min="1" max="36" value={newMonthlyMonths} onChange={(e) => setNewMonthlyMonths(e.target.value)} />
+                    </div>
+                    <div className="space-y-1">
+                      <Label>1ère échéance *</Label>
+                      <Input type="date" value={newMonthlyStartDate} onChange={(e) => setNewMonthlyStartDate(e.target.value)} />
+                    </div>
+                  </div>
+                  </div>
+                )}
+              </div>
+            )}
             <div className="space-y-2">
               <Label>Type *</Label>
               <div className="grid grid-cols-2 gap-3">
@@ -730,6 +1076,7 @@ export default function PaymentTrackingPage() {
                   <p className="text-[11px] text-muted-foreground">Création site web, boost, etc.</p>
                 </button>
                 <button type="button" onClick={() => setNewType('formation')}
+                  disabled={newDept === 'guims-educ' && newGuimsEducMonthlyMode}
                   className={`rounded-lg border-2 p-3 text-left transition-all ${newType === 'formation' ? 'border-primary bg-primary/5 ring-2 ring-primary' : 'border-border hover:border-primary/40'}`}>
                   <p className="font-semibold text-sm">Formation</p>
                   <p className="text-[11px] text-muted-foreground">Avance sur formation, inscription partielle</p>
@@ -737,9 +1084,9 @@ export default function PaymentTrackingPage() {
               </div>
             </div>
             <div className="space-y-2">
-              <Label>{newType === 'service' ? 'Nom du service *' : 'Nom de la formation *'}</Label>
+              <Label>{newDept === 'guims-educ' ? 'Prestation *' : newType === 'service' ? 'Nom du service *' : 'Nom de la formation *'}</Label>
               <Input
-                placeholder={newType === 'service' ? "Ex: Création site web Restaurant Chez Jo" : "Ex: Formation Hanneton — Pack Gold"}
+                placeholder={newDept === 'guims-educ' ? "Ex: Cours a domicile Maths 3eme" : newType === 'service' ? "Ex: Création site web Restaurant Chez Jo" : "Ex: Formation Hanneton — Pack Gold"}
                 value={newLabel}
                 onChange={(e) => setNewLabel(e.target.value)}
                 maxLength={200}
@@ -747,7 +1094,16 @@ export default function PaymentTrackingPage() {
             </div>
             <div className="space-y-2">
               <Label>Montant total (FCFA) *</Label>
-              <Input type="number" min="0" placeholder="Ex: 150000" value={newTotal} onChange={(e) => setNewTotal(e.target.value)} />
+              <Input
+                type="number"
+                min="0"
+                placeholder="Ex: 150000"
+                value={newDept === 'guims-educ' && newGuimsEducMonthlyMode
+                  ? String((parseInt(newMonthlyAmount || '0', 10) || 0) * (parseInt(newMonthlyMonths || '0', 10) || 0))
+                  : newTotal}
+                onChange={(e) => setNewTotal(e.target.value)}
+                readOnly={newDept === 'guims-educ' && newGuimsEducMonthlyMode}
+              />
             </div>
             {/* Scheduled tranches */}
             <div className="space-y-2">
@@ -757,7 +1113,11 @@ export default function PaymentTrackingPage() {
                   <Plus className="h-3 w-3" /> Ajouter une tranche
                 </Button>
               </div>
-              {newTranches.length > 0 && (
+              {newDept === 'guims-educ' && newGuimsEducMonthlyMode ? (
+                <div className="rounded-lg border p-3 bg-muted/20 text-xs text-muted-foreground">
+                  Les mensualités seront générées automatiquement a la création du plan.
+                </div>
+              ) : newTranches.length > 0 && (
                 <div className="space-y-2 rounded-lg border p-3 bg-muted/20">
                   {newTranches.map((tr, i) => (
                     <div key={i} className="grid grid-cols-[1fr_100px_130px_32px] gap-2 items-end">

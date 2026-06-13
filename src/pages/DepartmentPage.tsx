@@ -2,7 +2,10 @@ import { useState, useEffect } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowUpRight, ArrowDownRight, TrendingUp, Receipt, Plus, Package, FileDown, HandCoins, BadgeDollarSign, PackageOpen, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { StatsCard } from "@/components/StatsCard";
 import { MetricDetailDialog } from "@/components/MetricDetailDialog";
 import { TransactionList } from "@/components/TransactionList";
@@ -10,13 +13,13 @@ import { FinanceChart } from "@/components/FinanceChart";
 import { ReportDialog } from "@/components/ReportDialog";
 import { EmployeeDirectory } from "@/components/EmployeeDirectory";
 import { EmployeeSalaryForecast } from "@/components/EmployeeSalaryForecast";
-import { getDepartment, getDepartmentStats, getTransactionsByDepartment, STOCK_ENABLED_DEPARTMENT_IDS, isFormationRevenueCategory, isStockSaleTransaction, type DepartmentId, type Transaction } from "@/lib/data";
+import { formatCurrency, getDepartment, getDepartmentStats, getTransactionsByDepartment, STOCK_ENABLED_DEPARTMENT_IDS, isFormationRevenueCategory, isStockSaleTransaction, type DepartmentId, type Transaction } from "@/lib/data";
 import { getCurrentUser, hasDepartmentAccess, hasPermission, hasStockAccess } from "@/lib/auth";
 import { downloadDepartmentRealProfitReport, downloadDepartmentReport, downloadEmployeeSalaryReport } from "@/lib/reports";
 import { toast } from "sonner";
 import { getTransactionTimestamp } from "@/lib/transactionDates";
 import { getEmployeesByDepartment, getEmployeeSalaryStatus } from "@/lib/employees";
-import { getStockEconomicsSummary } from "@/lib/stock";
+import { getStockEconomicsSummary, getPaymentPlans, getPaymentReminders, getOverdueTranches, getPaidAmount, getRemainingAmount, getAllocationSummary, type PaymentPlan } from "@/lib/stock";
 
 export default function DepartmentPage() {
   const { id } = useParams<{ id: string }>();
@@ -80,6 +83,20 @@ export default function DepartmentPage() {
   const monthlyCashResultExcludingExternal = currentMonthStats.operationalIncome - currentMonthStats.expenses;
   const adjustedMonthlyActivityMargin = currentMonthStats.operationalIncome - monthlyStockEconomics.totalConsumedCost;
   const adjustedMonthlyFormationMargin = getAdjustedFormationMargin(currentMonthTransactions, monthlyStockEconomics.trainingSupportCost, monthlyStockEconomics.giftCost);
+
+  const guimsEducPlans = dept.id === 'guims-educ'
+    ? getPaymentPlans().filter((plan) => plan.departmentId === 'guims-educ' && plan.status === 'en_cours')
+    : [] as PaymentPlan[];
+  const guimsEducReminders = dept.id === 'guims-educ'
+    ? getPaymentReminders().filter((item) => item.departmentId === 'guims-educ')
+    : [];
+  const guimsEducOverdue = dept.id === 'guims-educ'
+    ? getOverdueTranches().filter((item) => item.departmentId === 'guims-educ')
+    : [];
+  const guimsEducTotalDue = guimsEducPlans.reduce((sum, plan) => sum + plan.totalAmount + (plan.inscriptionFee || 0), 0);
+  const guimsEducTotalPaid = guimsEducPlans.reduce((sum, plan) => sum + getPaidAmount(plan) + (plan.inscriptionPaidAmount || (plan.inscriptionPaid && plan.inscriptionFee ? plan.inscriptionFee : 0)), 0);
+  const guimsEducTotalRemaining = Math.max(0, guimsEducTotalDue - guimsEducTotalPaid);
+  const guimsEducCategories = [...new Set(guimsEducPlans.map((plan) => (plan.guimsEducCategory || 'Non classé').trim() || 'Non classé'))].sort((a, b) => a.localeCompare(b));
 
   const openDetail = (detail: NonNullable<typeof metricDetail>) => setMetricDetail(detail);
 
@@ -274,6 +291,89 @@ export default function DepartmentPage() {
 
           {dept.id === 'charges-entreprise' && <EmployeeDirectory departmentId={dept.id} />}
           {dept.id === 'charges-entreprise' && <EmployeeSalaryForecast />}
+
+          {dept.id === 'guims-educ' && (
+            <Card className="border-primary/30 bg-primary/5 shadow-sm">
+              <CardHeader className="pb-2">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <CardTitle className="text-lg">Suivi Guims Educ</CardTitle>
+                    <p className="text-sm text-muted-foreground">Créer un programme avant inscription puis suivre les paiements parent par parent.</p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="outline" size="sm" onClick={() => navigate('/formations?dept=guims-educ&open=create')}>
+                      Créer un programme
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => navigate('/formations?dept=guims-educ')}>
+                      Voir les programmes
+                    </Button>
+                    <Button size="sm" onClick={() => navigate('/paiements?focus=guims-educ-reminders')}>
+                      Suivi paiements
+                    </Button>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="rounded-lg border bg-card p-3">
+                    <p className="text-xs text-muted-foreground">Programmes actifs</p>
+                    <p className="text-xl font-bold">{guimsEducPlans.length}</p>
+                  </div>
+                  <div className="rounded-lg border bg-card p-3">
+                    <p className="text-xs text-muted-foreground">À encaisser</p>
+                    <p className="text-xl font-bold text-destructive">{formatCurrency(guimsEducTotalRemaining)}</p>
+                  </div>
+                  <div className="rounded-lg border bg-card p-3">
+                    <p className="text-xs text-muted-foreground">Échéances / retard</p>
+                    <p className="text-xl font-bold text-amber-600">{guimsEducReminders.length} / {guimsEducOverdue.length}</p>
+                  </div>
+                </div>
+
+                {guimsEducCategories.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {guimsEducCategories.map((category) => (
+                      <Badge key={category} variant="secondary">{category}</Badge>
+                    ))}
+                  </div>
+                )}
+
+                <div className="rounded-lg border overflow-x-auto bg-background">
+                  <Table className="min-w-[900px] text-xs">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Catégorie</TableHead>
+                        <TableHead>Parent</TableHead>
+                        <TableHead>Élève</TableHead>
+                        <TableHead>Inscription</TableHead>
+                        <TableHead>Programme</TableHead>
+                        <TableHead>Reste</TableHead>
+                        <TableHead>Prochaine échéance</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {guimsEducPlans.slice(0, 8).map((plan) => {
+                        const alloc = getAllocationSummary(plan);
+                        const next = alloc.find((item) => item.status !== 'paid');
+                        const nextTranche = next && plan.scheduledTranches?.find((tr) => tr.name === next.name);
+                        const inscriptionPaid = plan.inscriptionPaidAmount || (plan.inscriptionPaid && plan.inscriptionFee ? plan.inscriptionFee : 0);
+                        return (
+                          <TableRow key={plan.id}>
+                            <TableCell>{plan.guimsEducCategory || 'Non classé'}</TableCell>
+                            <TableCell className="font-medium">{plan.parentName || plan.clientName}</TableCell>
+                            <TableCell>{plan.studentName || '—'}</TableCell>
+                            <TableCell>{plan.inscriptionFee ? `${inscriptionPaid >= plan.inscriptionFee ? 'Payée' : 'En cours'} (${formatCurrency(inscriptionPaid)}/${formatCurrency(plan.inscriptionFee)})` : '—'}</TableCell>
+                            <TableCell>{plan.label}</TableCell>
+                            <TableCell className="font-semibold text-destructive">{formatCurrency(getRemainingAmount(plan))}</TableCell>
+                            <TableCell>{nextTranche ? `${nextTranche.name} · ${new Date(nextTranche.dueDate).toLocaleDateString('fr-FR')}` : 'Soldé'}</TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           <FinanceChart transactions={transactions} title={`Analyse globale - ${dept.name}`} />
 

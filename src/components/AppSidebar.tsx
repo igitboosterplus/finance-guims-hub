@@ -1,9 +1,10 @@
-import { LayoutDashboard, Plus, Users, FileText, Bell, UserCircle, Package, GraduationCap, CreditCard, ShieldCheck, Sparkles, LineChart } from "lucide-react";
+import { LayoutDashboard, Plus, Users, FileText, Bell, UserCircle, Package, GraduationCap, CreditCard, ShieldCheck, Sparkles, LineChart, MessageCircle } from "lucide-react";
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
 import { departments } from "@/lib/data";
 import { useAuth } from "@/hooks/useAuth";
 import { getUnseenAuditCount, getAllUsers, hasDepartmentAccess, hasPermission, hasStockAccess } from "@/lib/auth";
+import { getUnreadMessageCountForUser } from "@/lib/messaging";
 import logoGuimsGroup from "@/assets/logo-guims-group.jpg";
 import {
   Sidebar,
@@ -35,6 +36,7 @@ export function AppSidebar() {
   const accessibleDepts = departments.filter(d => hasDepartmentAccess(user, d.id));
   const canCreate = hasPermission(user, 'canCreateTransaction');
   const canViewBalanceDelta = hasPermission(user, 'canViewBalanceDelta');
+  const unreadMessages = user ? getUnreadMessageCountForUser(user.id) : 0;
 
   return (
     <Sidebar collapsible="icon">
@@ -237,6 +239,27 @@ export function AppSidebar() {
                   >
                     <UserCircle className="mr-2 h-4 w-4" />
                     {!collapsed && <span>Mon profil</span>}
+                  </NavLink>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild>
+                  <NavLink
+                    to="/messagerie"
+                    className="hover:bg-sidebar-accent"
+                    activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
+                  >
+                    <MessageCircle className="mr-2 h-4 w-4" />
+                    {!collapsed && (
+                      <span className="flex items-center gap-2">
+                        Messagerie
+                        {unreadMessages > 0 && (
+                          <span className="inline-flex items-center justify-center h-5 min-w-[20px] rounded-full bg-primary text-primary-foreground text-[10px] font-bold px-1">
+                            {unreadMessages}
+                          </span>
+                        )}
+                      </span>
+                    )}
                   </NavLink>
                 </SidebarMenuButton>
               </SidebarMenuItem>

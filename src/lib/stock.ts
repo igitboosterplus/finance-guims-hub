@@ -806,6 +806,12 @@ export interface PaymentPlan {
   inscriptionFee?: number;  // Frais d'inscription (hors formation)
   inscriptionPaid?: boolean; // Inscription entièrement payée ?
   inscriptionPaidAmount?: number; // Montant déjà payé pour l'inscription
+  // Guims Educ (mensualité parent/élève)
+  guimsEducCategory?: string;
+  parentName?: string;
+  parentPhone?: string;
+  studentName?: string;
+  studentClass?: string;
 }
 
 const PAYMENT_PLANS_KEY = 'payment-plans';

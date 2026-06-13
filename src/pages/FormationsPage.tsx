@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -334,6 +335,7 @@ function PackEditor({ pack, stockItems, stockKits, onChange, onRemove, index }: 
 
 export default function FormationsPage() {
   const currentUser = getCurrentUser();
+  const [searchParams] = useSearchParams();
   const canEdit = hasPermission(currentUser, 'canEditTransaction');
   const canCreate = hasPermission(currentUser, 'canCreateTransaction');
   const canExport = hasPermission(currentUser, 'canExportData');
@@ -387,6 +389,17 @@ export default function FormationsPage() {
   useEffect(() => {
     refresh();
   }, []);
+
+  useEffect(() => {
+    const dept = searchParams.get('dept');
+    if (dept && departments.some(d => d.id === dept)) {
+      setFilterDept(dept);
+    }
+    const open = searchParams.get('open');
+    if (open === 'create') {
+      openCreate();
+    }
+  }, [searchParams]);
 
   const refresh = () => {
     const fms = getFormationsCatalog();

@@ -302,6 +302,18 @@ async function pullTable(tableName: TableName, storageKey: string): Promise<bool
     localStorage.setItem(storageKey, JSON.stringify(items));
     return true;
   } catch (err) {
+    const errorCode = (err as { code?: string } | null)?.code;
+    // Some deployments may not have the employees table yet.
+    // Do not block the full finance pull in that case.
+    if (tableName === TABLES.employees && errorCode === 'PGRST205') {
+      console.warn('[Sync] Table employees absente sur ce projet Supabase — synchronisation employees ignorée.');
+      localStorage.setItem(storageKey, JSON.stringify([]));
+      return true;
+    }
+    if (tableName === TABLES.paymentMethods && errorCode === 'PGRST205') {
+      console.warn('[Sync] Table payment_methods absente sur ce projet Supabase — synchronisation des caisses ignorée.');
+      return true;
+    }
     console.error(`[Sync] Erreur pull ${tableName}:`, err);
     return false;
   }
@@ -407,6 +419,7 @@ export async function pullAllFromSupabase(): Promise<{ success: boolean; error?:
       pullTable(TABLES.transactions, "finance-transactions"),
       pullTable(TABLES.users, "finance-users"),
       pullTable(TABLES.employees, "finance-employees"),
+      pullTable(TABLES.paymentMethods, "finance-payment-methods"),
       pullTable(TABLES.auditLog, "finance-audit-log"),
       pullTable(TABLES.superAudit, "finance-super-audit"),
       pullTable(TABLES.formationsCatalog, "formations-catalog"),
@@ -481,6 +494,7 @@ export async function pushAllToSupabase(): Promise<{ success: boolean; error?: s
       [TABLES.transactions, "finance-transactions"],
       [TABLES.users, "finance-users"],
       [TABLES.employees, "finance-employees"],
+      [TABLES.paymentMethods, "finance-payment-methods"],
       [TABLES.auditLog, "finance-audit-log"],
       [TABLES.superAudit, "finance-super-audit"],
       [TABLES.formationsCatalog, "formations-catalog"],
@@ -567,7 +581,7 @@ export async function purgeAllSupabase(): Promise<void> {
   const sb = getSupabase();
   if (!sb) return;
   const allTables: TableName[] = [
-    TABLES.transactions, TABLES.users, TABLES.employees, TABLES.auditLog, TABLES.superAudit,
+    TABLES.transactions, TABLES.users, TABLES.employees, TABLES.paymentMethods, TABLES.auditLog, TABLES.superAudit,
     TABLES.stockItems, TABLES.stockMovements, TABLES.trainings,
     TABLES.formationsCatalog, TABLES.paymentPlans, TABLES.stockKits,
     TABLES.enrollments,

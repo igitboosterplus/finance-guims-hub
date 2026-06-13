@@ -371,6 +371,7 @@ export function purgeAllData(): void {
     'finance-super-audit',
     'finance-transactions',
     'finance-employees',
+    'finance-payment-methods',
     'gaba-stock-items',
     'gaba-stock-movements',
     'gaba-trainings',

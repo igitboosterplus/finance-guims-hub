@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { ReportOptions } from "@/lib/reports";
 import { getConfiguredAIProviders, getPreferredAIProvider, type AIProvider } from "@/lib/aiReports";
-import { PAYMENT_METHODS, getPaymentMethodLabel, type PaymentMethod } from "@/lib/data";
+import { getAllPaymentMethods, getPaymentMethodLabel, type PaymentMethod } from "@/lib/data";
 
 type PeriodPreset = "all" | "this-month" | "last-month" | "custom";
 
@@ -31,6 +31,7 @@ interface ReportDialogProps {
 
 export function ReportDialog({ open, onOpenChange, title, onGenerate }: ReportDialogProps) {
   const providers = getConfiguredAIProviders();
+  const paymentMethods = getAllPaymentMethods();
   const [preset, setPreset] = useState<PeriodPreset>("all");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
@@ -144,7 +145,7 @@ export function ReportDialog({ open, onOpenChange, title, onGenerate }: ReportDi
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Toutes les caisses</SelectItem>
-                  {PAYMENT_METHODS.map((method) => (
+                  {paymentMethods.map((method) => (
                     <SelectItem key={method.value} value={method.value}>{getPaymentMethodLabel(method.value)}</SelectItem>
                   ))}
                 </SelectContent>

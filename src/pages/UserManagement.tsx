@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { getAllUsers, approveUser, rejectUser, deleteUser, createUser, resetUserPassword, updateUserPermissions, getUserPermissions, hasPermission, type User, type UserRole, type UserPermissions, DEFAULT_PERMISSIONS } from "@/lib/auth";
-import { departments, STOCK_ENABLED_DEPARTMENT_IDS } from "@/lib/data";
+import { createPaymentMethod, deletePaymentMethod, departments, getAllPaymentMethods, STOCK_ENABLED_DEPARTMENT_IDS, type DepartmentId, type PaymentMethodOption } from "@/lib/data";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import { UserPlus, Users, Check, X, Trash2, KeyRound, Shield, ShieldCheck, Settings2, Building2, Plus, PenLine, Download, Upload, Package, LineChart, Sparkles, CreditCard, GraduationCap, FileText, RotateCcw } from "lucide-react";
@@ -38,8 +38,10 @@ const ACTION_PERMISSION_KEYS: ActionPermissionKey[] = [
 export default function UserManagement() {
   const { user: currentUser } = useAuth();
   const [users, setUsers] = useState<User[]>([]);
+  const [paymentMethods, setPaymentMethods] = useState<PaymentMethodOption[]>([]);
   const [showCreate, setShowCreate] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [deletePaymentMethodId, setDeletePaymentMethodId] = useState<string | null>(null);
   const [resetId, setResetId] = useState<string | null>(null);
   const [newPassword, setNewPassword] = useState("");
   const [permsUser, setPermsUser] = useState<User | null>(null);
@@ -50,8 +52,13 @@ export default function UserManagement() {
   const [newDisplayName, setNewDisplayName] = useState("");
   const [newPwd, setNewPwd] = useState("");
   const [newRole, setNewRole] = useState<UserRole>("admin");
+  const [newPaymentMethodLabel, setNewPaymentMethodLabel] = useState("");
+  const [newPaymentMethodDepartments, setNewPaymentMethodDepartments] = useState<DepartmentId[]>([]);
 
-  const refresh = () => setUsers(getAllUsers());
+  const refresh = () => {
+    setUsers(getAllUsers());
+    setPaymentMethods(getAllPaymentMethods());
+  };
 
   useEffect(() => { refresh(); }, []);
 
@@ -106,6 +113,38 @@ export default function UserManagement() {
     } else {
       toast.error(result.error);
     }
+  };
+
+  const togglePaymentMethodDept = (deptId: DepartmentId) => {
+    setNewPaymentMethodDepartments(prev => (
+      prev.includes(deptId)
+        ? prev.filter(id => id !== deptId)
+        : [...prev, deptId]
+    ));
+  };
+
+  const handleCreatePaymentMethod = () => {
+    const result = createPaymentMethod(newPaymentMethodLabel, newPaymentMethodDepartments);
+    if (!result.success) {
+      toast.error(result.error);
+      return;
+    }
+    toast.success(`Caisse ${result.method?.label} créée`);
+    setNewPaymentMethodLabel("");
+    setNewPaymentMethodDepartments([]);
+    refresh();
+  };
+
+  const handleDeletePaymentMethod = () => {
+    if (!deletePaymentMethodId) return;
+    const result = deletePaymentMethod(deletePaymentMethodId);
+    setDeletePaymentMethodId(null);
+    if (!result.success) {
+      toast.error(result.error);
+      return;
+    }
+    toast.success("Caisse supprimée");
+    refresh();
   };
 
   const handleResetPassword = async () => {
@@ -282,6 +321,91 @@ export default function UserManagement() {
         </Card>
       )}
 
+      <Card className="border-0 shadow-md">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-lg flex items-center gap-2">
+            <CreditCard className="h-5 w-5" />
+            Gestion des caisses ({paymentMethods.length})
+          </CardTitle>
+          <p className="text-sm text-muted-foreground">Le Super Admin peut créer des caisses personnalisées et supprimer celles qui ne sont pas encore utilisées.</p>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="rounded-lg border p-4 space-y-4">
+            <div className="space-y-2">
+              <Label>Nom de la nouvelle caisse</Label>
+              <Input value={newPaymentMethodLabel} onChange={e => setNewPaymentMethodLabel(e.target.value)} placeholder="Ex: Caisse terrain Bafoussam" />
+            </div>
+            <div className="space-y-3">
+              <Label>Départements concernés</Label>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {departments.map(dept => (
+                  <label key={dept.id} className="flex items-center gap-3 p-2.5 rounded-lg border cursor-pointer hover:bg-accent/50 transition-colors">
+                    <Checkbox
+                      checked={newPaymentMethodDepartments.includes(dept.id)}
+                      onCheckedChange={() => togglePaymentMethodDept(dept.id)}
+                    />
+                    <span className="text-sm font-medium">{dept.name}</span>
+                  </label>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <Button type="button" variant="outline" size="sm" className="text-xs" onClick={() => setNewPaymentMethodDepartments(departments.map(dept => dept.id))}>
+                  Tous les départements
+                </Button>
+                <Button type="button" variant="outline" size="sm" className="text-xs" onClick={() => setNewPaymentMethodDepartments([])}>
+                  Effacer
+                </Button>
+              </div>
+            </div>
+            <div className="flex justify-end">
+              <Button type="button" className="gap-2" onClick={handleCreatePaymentMethod}>
+                <Plus className="h-4 w-4" />
+                Créer la caisse
+              </Button>
+            </div>
+          </div>
+
+          <div className="rounded-lg border overflow-hidden">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Caisse</TableHead>
+                  <TableHead>Départements</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead className="w-24"></TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {paymentMethods.map(method => (
+                  <TableRow key={method.value}>
+                    <TableCell className="font-medium">{method.label}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">
+                      {method.departmentIds.length > 0
+                        ? method.departmentIds.map(deptId => departments.find(dept => dept.id === deptId)?.name ?? deptId).join(', ')
+                        : 'Historique non affecté'}
+                    </TableCell>
+                    <TableCell>
+                      {method.system ? (
+                        <Badge variant="outline" className="bg-muted text-muted-foreground">Système</Badge>
+                      ) : (
+                        <Badge variant="outline" className="bg-primary/10 text-primary border-primary/30">Personnalisée</Badge>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {!method.system && (
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => setDeletePaymentMethodId(method.value)} title="Supprimer la caisse">
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* All users */}
       <Card className="border-0 shadow-md">
         <CardHeader className="pb-3">
@@ -410,6 +534,19 @@ export default function UserManagement() {
           <AlertDialogFooter>
             <AlertDialogCancel>Annuler</AlertDialogCancel>
             <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground">Supprimer</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!deletePaymentMethodId} onOpenChange={open => !open && setDeletePaymentMethodId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Supprimer cette caisse ?</AlertDialogTitle>
+            <AlertDialogDescription>La suppression est refusée si cette caisse est déjà utilisée dans des transactions ou des paiements enregistrés.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Annuler</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDeletePaymentMethod} className="bg-destructive text-destructive-foreground">Supprimer</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

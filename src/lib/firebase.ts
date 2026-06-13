@@ -37,6 +37,7 @@ export const TABLES = {
   transactions: "transactions",
   users: "users",
   employees: "employees",
+  paymentMethods: "payment_methods",
   stockItems: "stock_items",
   stockMovements: "stock_movements",
   trainings: "trainings",
@@ -81,6 +82,12 @@ CREATE TABLE users (
 
 CREATE TABLE employees (
   id UUID PRIMARY KEY,
+  data JSONB,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE payment_methods (
+  id TEXT PRIMARY KEY,
   data JSONB,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -131,6 +138,7 @@ CREATE TABLE audit_log (
 ALTER TABLE transactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE employees ENABLE ROW LEVEL SECURITY;
+ALTER TABLE payment_methods ENABLE ROW LEVEL SECURITY;
 ALTER TABLE stock_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE stock_movements ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit_log ENABLE ROW LEVEL SECURITY;

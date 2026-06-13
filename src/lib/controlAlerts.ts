@@ -1,5 +1,6 @@
 import { getTransactions, getMonthlyStats, getStatsByPaymentMethod } from "./data";
 import { getEmployeesByDepartment, getEmployeeSalaryStatus } from "./employees";
+import { getOverdueTranches } from "./stock";
 import { getTransactionTimestamp } from "./transactionDates";
 
 export type ControlAlertSeverity = "high" | "medium" | "low";
@@ -109,6 +110,19 @@ export function getTreasuryControlAlerts(): ControlAlert[] {
       details: `${salaryOverruns.length} employé(s) dépassent déjà leur plafond salarial mensuel.`,
       actionLabel: "Ouvrir le département RH",
       actionPath: "/department/charges-entreprise?focus=salary-overrun",
+    });
+  }
+
+  const guimsEducOverdue = getOverdueTranches().filter((item) => item.departmentId === "guims-educ");
+  if (guimsEducOverdue.length > 0) {
+    const overdueTotal = guimsEducOverdue.reduce((sum, item) => sum + item.trancheAmount, 0);
+    alerts.push({
+      id: "guims-educ-overdue",
+      severity: "high",
+      title: "Guims Educ: mensualites en retard",
+      details: `${guimsEducOverdue.length} mensualite(s) non reglee(s), soit ${overdueTotal} FCFA a relancer.`,
+      actionLabel: "Ouvrir les rappels Guims Educ",
+      actionPath: "/paiements?focus=guims-educ-reminders",
     });
   }
 
