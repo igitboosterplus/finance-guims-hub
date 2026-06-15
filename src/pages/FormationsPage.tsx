@@ -17,15 +17,17 @@ import {
   getFormationsCatalog, addFormationCatalog, updateFormationCatalog, deleteFormationCatalog,
   getStockItems, getStockKits,
   getEnrollmentsByFormation, addEnrollment, updateEnrollment, deleteEnrollment,
+  updateEnrollmentKitStatus, deliverEnrollmentKit,
   addPaymentPlan, getPaymentPlans, getRemainingAmount, getOverdueTranches, getAllocationSummary,
   type FormationCatalog, type FormationPack, type FormationTranche, type PackAdvantage, type PackKitItem, type PackKitReference, type StockItem, type StockKit,
+  type EnrollmentKitStatus,
   type FormationEnrollment, type PaymentPlan, type PaymentReminder,
 } from "@/lib/stock";
 import { toast } from "sonner";
 import { downloadFormationPaymentScheduleReport } from "@/lib/reports";
 import {
   GraduationCap, Plus, Pencil, Trash2, Package, Star, Award, ChevronDown, ChevronUp, Search, Calendar, CreditCard, Boxes,
-  Users, UserPlus, Phone, Mail, MoreVertical, Eye, EyeOff, MessageCircle,
+  Users, UserPlus, Phone, Mail, MoreVertical, Eye, EyeOff, MessageCircle, Shield,
 } from "lucide-react";
 
 // ==================== PACK EDITOR COMPONENT ====================
@@ -370,6 +372,8 @@ export default function FormationsPage() {
   const [enrNotes, setEnrNotes] = useState("");
   const [enrPackId, setEnrPackId] = useState<string>("");
   const [enrStatus, setEnrStatus] = useState<FormationEnrollment['status']>('inscrit');
+  const [enrKitStatus, setEnrKitStatus] = useState<EnrollmentKitStatus>('reserve');
+  const [enrKitHoldReason, setEnrKitHoldReason] = useState("");
   const [enrPaymentMethod, setEnrPaymentMethod] = useState<PaymentMethod>('especes');
   const [enrInscriptionAmount, setEnrInscriptionAmount] = useState<string>("");
   const [enrCreatePlan, setEnrCreatePlan] = useState(true);
@@ -459,6 +463,9 @@ export default function FormationsPage() {
       isNotYetFormed: boolean;
       hasOverdue: boolean;
       contactMissing: boolean;
+      kitStatus: EnrollmentKitStatus;
+      kitBlockedByPayment: boolean;
+      kitPending: boolean;
       riskScore: number;
       riskLevel: 'faible' | 'moyen' | 'élevé';
       needsFollowUp: boolean;
@@ -478,6 +485,13 @@ export default function FormationsPage() {
         const totalTranches = allocation.length;
         const isFormed = enrollment.status === 'terminé';
         const isNotYetFormed = enrollment.status === 'inscrit' || enrollment.status === 'en_cours';
+        const kitBlockedByPayment = remainingAmount > 0 && enrollment.status !== 'annulé';
+        const kitStatus: EnrollmentKitStatus = enrollment.kitStatus === 'remis'
+          ? 'remis'
+          : kitBlockedByPayment
+            ? 'bloque'
+            : enrollment.kitStatus || 'reserve';
+        const kitPending = kitStatus !== 'remis' && enrollment.status !== 'annulé';
 
         const statusRisk = enrollment.status === 'inscrit' ? 20 : enrollment.status === 'en_cours' ? 10 : 0;
         const overdueRisk = overdueByClient.has(enrollment.fullName.trim().toLowerCase()) ? 45 : 0;
@@ -486,7 +500,7 @@ export default function FormationsPage() {
         const noPlanRisk = !plan && enrollment.status !== 'annulé' ? 15 : 0;
         const riskScore = Math.min(statusRisk + overdueRisk + contactRisk + paymentRisk + noPlanRisk, 100);
         const riskLevel: 'faible' | 'moyen' | 'élevé' = riskScore >= 70 ? 'élevé' : riskScore >= 40 ? 'moyen' : 'faible';
-        const needsFollowUp = overdueRisk > 0 || contactRisk > 0 || enrollment.status === 'inscrit';
+        const needsFollowUp = overdueRisk > 0 || contactRisk > 0 || enrollment.status === 'inscrit' || kitPending;
 
         rows.push({
           enrollment,
@@ -502,6 +516,9 @@ export default function FormationsPage() {
           isNotYetFormed,
           hasOverdue: overdueRisk > 0,
           contactMissing: contactRisk > 0,
+          kitStatus,
+          kitBlockedByPayment,
+          kitPending,
           riskScore,
           riskLevel,
           needsFollowUp: needsFollowUp || isNotYetFormed,
@@ -540,7 +557,8 @@ export default function FormationsPage() {
     const formes = allEnrollmentRows.filter(r => r.isFormed).length;
     const aRelancer = allEnrollmentRows.filter(r => r.needsFollowUp).length;
     const sansPlan = allEnrollmentRows.filter(r => !r.plan && r.enrollment.status !== 'annulé').length;
-    return { total, actifs, termines, nonFormes, formes, aRelancer, sansPlan };
+    const kitsEnAttente = allEnrollmentRows.filter(r => r.kitPending).length;
+    return { total, actifs, termines, nonFormes, formes, aRelancer, sansPlan, kitsEnAttente };
   }, [allEnrollmentRows]);
 
   const newEmptyPack = (): FormationPack => ({
@@ -675,6 +693,8 @@ export default function FormationsPage() {
     setEnrNotes("");
     setEnrPackId("");
     setEnrStatus('inscrit');
+    setEnrKitStatus('reserve');
+    setEnrKitHoldReason("");
     setEnrPaymentMethod('especes');
     setEnrInscriptionAmount(fm?.inscriptionFee ? String(fm.inscriptionFee) : "");
     setEnrCreatePlan(true);
@@ -690,6 +710,8 @@ export default function FormationsPage() {
     setEnrNotes(e.notes || "");
     setEnrPackId(e.packId || "");
     setEnrStatus(e.status);
+    setEnrKitStatus(e.kitStatus || 'reserve');
+    setEnrKitHoldReason(e.kitHoldReason || "");
     setEnrollmentDialogOpen(true);
   };
 
@@ -707,6 +729,8 @@ export default function FormationsPage() {
         notes: enrNotes.trim() || undefined,
         packId: enrPackId && enrPackId !== 'none' ? enrPackId : undefined,
         status: enrStatus,
+        kitStatus: enrKitStatus,
+        kitHoldReason: enrKitStatus === 'bloque' ? enrKitHoldReason.trim() || 'En attente de remise' : undefined,
       });
       toast.success("Inscription mise à jour");
     } else {
@@ -719,6 +743,8 @@ export default function FormationsPage() {
         notes: enrNotes.trim() || undefined,
         packId: enrPackId && enrPackId !== 'none' ? enrPackId : undefined,
         status: enrStatus,
+        kitStatus: enrKitStatus,
+        kitHoldReason: enrKitStatus === 'bloque' ? enrKitHoldReason.trim() || 'En attente de remise' : undefined,
         enrolledBy: currentUser?.displayName ?? "Inconnu",
       });
 
@@ -823,6 +849,19 @@ export default function FormationsPage() {
     annulé: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400',
   };
 
+  const kitStatusLabels: Record<EnrollmentKitStatus, string> = {
+    reserve: 'Réservé',
+    pret: 'Prêt',
+    remis: 'Remis',
+    bloque: 'Bloqué',
+  };
+  const kitStatusColors: Record<EnrollmentKitStatus, string> = {
+    reserve: 'bg-slate-100 text-slate-700 dark:bg-slate-800/60 dark:text-slate-300',
+    pret: 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400',
+    remis: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400',
+    bloque: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400',
+  };
+
   const getStockItemName = (id: string) => stockItems.find(s => s.id === id)?.name ?? "";
   const getDeptName = (id: string) => departments.find(d => d.id === id)?.name ?? id;
 
@@ -838,10 +877,15 @@ export default function FormationsPage() {
     return digits;
   };
 
-  const buildRelanceMessage = (row: { enrollment: FormationEnrollment; formation?: FormationCatalog; remainingAmount: number; hasOverdue: boolean; }) => {
+  const buildRelanceMessage = (row: { enrollment: FormationEnrollment; formation?: FormationCatalog; remainingAmount: number; hasOverdue: boolean; kitStatus?: EnrollmentKitStatus; kitBlockedByPayment?: boolean; }) => {
     const intro = `Bonjour ${row.enrollment.fullName},`;
     const formation = row.formation?.name ? `concernant votre formation "${row.formation.name}"` : "concernant votre formation";
-    const payment = row.remainingAmount > 0 ? `il reste ${formatCurrency(row.remainingAmount)} a regler` : "votre dossier administratif doit etre finalise";
+    const kit = row.kitStatus === 'remis'
+      ? 'votre kit a deja ete remis'
+      : row.kitBlockedByPayment
+        ? 'votre kit est en attente de paiement complet'
+        : 'votre kit est pret a etre retire';
+    const payment = row.remainingAmount > 0 ? `il reste ${formatCurrency(row.remainingAmount)} a regler` : kit;
     const urgency = row.hasOverdue ? "Une echeance est depassee." : "Merci de revenir vers nous rapidement.";
     return `${intro} ${formation}, ${payment}. ${urgency}`;
   };
@@ -948,7 +992,7 @@ export default function FormationsPage() {
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3">
             <div className="rounded-xl border p-3 bg-muted/30">
               <p className="text-xs uppercase tracking-wide text-muted-foreground">Inscrits total</p>
               <p className="mt-1 text-xl font-bold">{suiviStats.total}</p>
@@ -972,6 +1016,10 @@ export default function FormationsPage() {
             <div className="rounded-xl border p-3 bg-muted/30">
               <p className="text-xs uppercase tracking-wide text-muted-foreground">En cours de formation</p>
               <p className="mt-1 text-xl font-bold text-amber-600 dark:text-amber-400">{suiviStats.actifs}</p>
+            </div>
+            <div className="rounded-xl border p-3 bg-muted/30">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">Kits en attente</p>
+              <p className="mt-1 text-xl font-bold text-primary">{suiviStats.kitsEnAttente}</p>
             </div>
           </div>
 
@@ -1022,6 +1070,7 @@ export default function FormationsPage() {
                   <th className="px-3 py-2 font-medium hidden md:table-cell">Formation</th>
                   <th className="px-3 py-2 font-medium">Parcours</th>
                   <th className="px-3 py-2 font-medium hidden sm:table-cell">Paiement</th>
+                  <th className="px-3 py-2 font-medium hidden sm:table-cell">Kit</th>
                   <th className="px-3 py-2 font-medium hidden md:table-cell">Prochaine échéance</th>
                   <th className="px-3 py-2 font-medium hidden lg:table-cell">Contact</th>
                   <th className="px-3 py-2 font-medium hidden lg:table-cell">Risque</th>
@@ -1032,7 +1081,7 @@ export default function FormationsPage() {
               <tbody>
                 {suiviRows.length === 0 ? (
                   <tr>
-                    <td colSpan={canEdit ? 9 : 8} className="px-3 py-5 text-center text-muted-foreground">Aucun résultat sur ce filtre</td>
+                    <td colSpan={canEdit ? 10 : 9} className="px-3 py-5 text-center text-muted-foreground">Aucun résultat sur ce filtre</td>
                   </tr>
                 ) : (
                   suiviRows.map((row) => (
@@ -1065,6 +1114,16 @@ export default function FormationsPage() {
                         )}
                       </td>
                       <td className="px-3 py-2 hidden md:table-cell">
+                      <td className="px-3 py-2 hidden sm:table-cell">
+                        <div className="space-y-1">
+                          <Badge className={`text-[10px] border-0 ${kitStatusColors[row.kitStatus]}`}>
+                            {kitStatusLabels[row.kitStatus]}
+                          </Badge>
+                          {row.kitBlockedByPayment && row.remainingAmount > 0 && (
+                            <p className="text-[10px] text-muted-foreground">Paiement incomplet</p>
+                          )}
+                        </div>
+                      </td>
                         {row.nextTrancheDueDate ? (
                           <div className="space-y-0.5">
                             <p className="font-medium">{row.nextTrancheName || 'Tranche suivante'}</p>
@@ -1159,6 +1218,50 @@ export default function FormationsPage() {
                               </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
+                              <DropdownMenuItem
+                                onClick={() => {
+                                  if (row.remainingAmount > 0) {
+                                    toast.error("Le kit est bloqué tant que le paiement n'est pas soldé");
+                                    return;
+                                  }
+                                  updateEnrollmentKitStatus(row.enrollment.id, 'pret');
+                                  toast.success("Kit marqué comme prêt");
+                                  refresh();
+                                }}
+                              >
+                                <Package className="h-3.5 w-3.5 mr-2" />
+                                Kit prêt
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                onClick={() => {
+                                  if (row.remainingAmount > 0) {
+                                    toast.error("Le kit ne peut pas être remis avant paiement complet");
+                                    return;
+                                  }
+                                  const result = deliverEnrollmentKit(row.enrollment.id, currentUser?.displayName ?? 'Inconnu');
+                                  if (!result.success) {
+                                    toast.error(result.error || 'Impossible de remettre le kit');
+                                    return;
+                                  }
+                                  toast.success("Kit remis et stock débité");
+                                  refresh();
+                                }}
+                              >
+                                <Boxes className="h-3.5 w-3.5 mr-2" />
+                                Kit remis
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                onClick={() => {
+                                  updateEnrollmentKitStatus(row.enrollment.id, 'bloque', {
+                                    kitHoldReason: row.remainingAmount > 0 ? 'Paiement incomplet' : 'En attente de retrait',
+                                  });
+                                  toast.success("Kit bloqué");
+                                  refresh();
+                                }}
+                              >
+                                <Shield className="h-3.5 w-3.5 mr-2" />
+                                Bloquer le kit
+                              </DropdownMenuItem>
                               <DropdownMenuItem onClick={() => openEditEnrollment(row.enrollment)}>
                                 <Pencil className="h-3.5 w-3.5 mr-2" />
                                 Modifier inscription
@@ -1797,6 +1900,33 @@ export default function FormationsPage() {
                 </SelectContent>
               </Select>
             </div>
+            <div className="space-y-2">
+              <Label>Statut du kit</Label>
+              <Select value={enrKitStatus} onValueChange={(v) => setEnrKitStatus(v as EnrollmentKitStatus)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="reserve">Réservé</SelectItem>
+                  <SelectItem value="pret">Prêt</SelectItem>
+                  <SelectItem value="remis">Remis</SelectItem>
+                  <SelectItem value="bloque">Bloqué</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] text-muted-foreground">
+                Le kit peut rester réservé ou bloqué tant que le paiement n'est pas soldé.
+              </p>
+            </div>
+            {enrKitStatus === 'bloque' && (
+              <div className="space-y-2">
+                <Label>Motif du blocage</Label>
+                <Input
+                  placeholder="Ex: Paiement incomplet, retrait différé..."
+                  value={enrKitHoldReason}
+                  onChange={(e) => setEnrKitHoldReason(e.target.value)}
+                />
+              </div>
+            )}
             <div className="space-y-2">
               <Label>Notes</Label>
               <Textarea placeholder="Commentaires..." value={enrNotes} onChange={(e) => setEnrNotes(e.target.value)} maxLength={300} />

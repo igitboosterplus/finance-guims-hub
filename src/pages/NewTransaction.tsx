@@ -661,6 +661,7 @@ export default function NewTransaction() {
           packId: selectedPack?.id || undefined,
           fullName: trimmedName,
           status: 'inscrit',
+          kitStatus: 'reserve',
           enrolledBy: currentUser?.displayName ?? 'Inconnu',
         });
       } else if (selectedPack) {

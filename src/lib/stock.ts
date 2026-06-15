@@ -703,6 +703,8 @@ export function getFormationsByDepartment(departmentId: DepartmentId): Formation
 
 // ==================== ENROLLMENTS (Inscriptions aux formations) ====================
 
+export type EnrollmentKitStatus = 'reserve' | 'pret' | 'remis' | 'bloque';
+
 export interface FormationEnrollment {
   id: string;
   formationId: string;      // Ref to FormationCatalog
@@ -712,15 +714,48 @@ export interface FormationEnrollment {
   email?: string;            // Email
   notes?: string;            // Notes/commentaires
   status: 'inscrit' | 'en_cours' | 'terminé' | 'annulé';
+  kitStatus: EnrollmentKitStatus;
+  kitReadyAt?: string;
+  kitDeliveredAt?: string;
+  kitHoldReason?: string;
   enrolledAt: string;        // Date d'inscription (ISO)
   enrolledBy: string;        // Qui a enregistré
 }
 
 const ENROLLMENTS_KEY = 'formation-enrollments';
 
+function normalizeEnrollment(enrollment: Partial<FormationEnrollment>): FormationEnrollment {
+  return {
+    id: enrollment.id || crypto.randomUUID(),
+    formationId: enrollment.formationId || '',
+    packId: enrollment.packId,
+    fullName: enrollment.fullName || '',
+    phone: enrollment.phone,
+    email: enrollment.email,
+    notes: enrollment.notes,
+    status: enrollment.status || 'inscrit',
+    kitStatus: enrollment.kitStatus || 'reserve',
+    kitReadyAt: enrollment.kitReadyAt,
+    kitDeliveredAt: enrollment.kitDeliveredAt,
+    kitHoldReason: enrollment.kitHoldReason,
+    enrolledAt: enrollment.enrolledAt || new Date().toISOString(),
+    enrolledBy: enrollment.enrolledBy || 'Inconnu',
+  };
+}
+
 export function getEnrollments(): FormationEnrollment[] {
   const data = localStorage.getItem(ENROLLMENTS_KEY);
-  return data ? JSON.parse(data) : [];
+  if (!data) return [];
+  try {
+    const parsed = JSON.parse(data);
+    const normalized = Array.isArray(parsed) ? parsed.map((item) => normalizeEnrollment(item)) : [];
+    if (JSON.stringify(parsed) !== JSON.stringify(normalized)) {
+      saveEnrollments(normalized);
+    }
+    return normalized;
+  } catch {
+    return [];
+  }
 }
 
 function saveEnrollments(enrollments: FormationEnrollment[]) {
@@ -735,8 +770,9 @@ export function getEnrollmentsByFormation(formationId: string): FormationEnrollm
 export function addEnrollment(enrollment: Omit<FormationEnrollment, 'id' | 'enrolledAt'>): FormationEnrollment {
   const enrollments = getEnrollments();
   const newEnrollment: FormationEnrollment = {
-    ...enrollment,
     id: crypto.randomUUID(),
+    ...enrollment,
+    kitStatus: enrollment.kitStatus || 'reserve',
     enrolledAt: new Date().toISOString(),
   };
   enrollments.push(newEnrollment);
@@ -751,6 +787,130 @@ export function updateEnrollment(id: string, updates: Partial<Omit<FormationEnro
   enrollments[idx] = { ...enrollments[idx], ...updates };
   saveEnrollments(enrollments);
   return enrollments[idx];
+}
+
+export function updateEnrollmentKitStatus(
+  id: string,
+  kitStatus: EnrollmentKitStatus,
+  updates: Partial<Pick<FormationEnrollment, 'kitReadyAt' | 'kitDeliveredAt' | 'kitHoldReason'>> = {},
+): FormationEnrollment | null {
+  const enrollments = getEnrollments();
+  const idx = enrollments.findIndex(e => e.id === id);
+  if (idx === -1) return null;
+
+  enrollments[idx] = {
+    ...enrollments[idx],
+    kitStatus,
+    ...updates,
+    ...(kitStatus === 'pret' && !updates.kitReadyAt ? { kitReadyAt: new Date().toISOString(), kitHoldReason: undefined } : {}),
+    ...(kitStatus === 'remis' && !updates.kitDeliveredAt ? { kitDeliveredAt: new Date().toISOString(), kitHoldReason: undefined } : {}),
+  };
+  saveEnrollments(enrollments);
+  return enrollments[idx];
+}
+
+export function deliverEnrollmentKit(
+  enrollmentId: string,
+  createdBy: string,
+  date: string = new Date().toISOString(),
+): { success: boolean; error?: string; enrollment?: FormationEnrollment; movements?: StockMovement[] } {
+  const enrollments = getEnrollments();
+  const idx = enrollments.findIndex(e => e.id === enrollmentId);
+  if (idx === -1) return { success: false, error: 'Inscription introuvable' };
+
+  const enrollment = enrollments[idx];
+  if (enrollment.status === 'annulé') {
+    return { success: false, error: 'Impossible de remettre un kit pour une inscription annulée' };
+  }
+  if (enrollment.kitStatus === 'remis' && enrollment.kitDeliveredAt) {
+    return { success: false, error: 'Le kit a déjà été remis' };
+  }
+
+  const formation = getFormationsCatalog().find(f => f.id === enrollment.formationId);
+  if (!formation) return { success: false, error: 'Formation introuvable' };
+
+  const pack = enrollment.packId ? formation.packs.find(p => p.id === enrollment.packId) : undefined;
+  if (!pack) {
+    return { success: false, error: 'Aucun pack associé à cette inscription' };
+  }
+
+  const departmentId = formation.departmentId;
+  const missing: string[] = [];
+
+  const stockItems = getStockItems(departmentId);
+  for (const item of pack.kitItems || []) {
+    if (!item.stockItemId) continue;
+    const stockItem = stockItems.find(stock => stock.id === item.stockItemId);
+    const required = Math.max(0, item.quantity || 0);
+    if (!stockItem) {
+      missing.push(`Article ${item.label || item.stockItemId} introuvable`);
+      continue;
+    }
+    if (stockItem.currentQuantity < required) {
+      missing.push(`${stockItem.name}: besoin ${required}, dispo ${stockItem.currentQuantity}`);
+    }
+  }
+
+  for (const kitRef of pack.kits || []) {
+    const kitCheck = checkKitAvailability(kitRef.kitId, kitRef.quantity, departmentId);
+    if (!kitCheck.available) {
+      missing.push(...kitCheck.missing.map(m => `${m.itemName}: besoin ${m.required}, dispo ${m.available}`));
+    }
+  }
+
+  if (missing.length > 0) {
+    return { success: false, error: `Stock insuffisant — ${missing.join('; ')}` };
+  }
+
+  const movements: StockMovement[] = [];
+  const baseReason = `Remise kit formation "${formation.name}"${enrollment.fullName ? ` — ${enrollment.fullName}` : ''}`;
+
+  for (const item of pack.kitItems || []) {
+    if (!item.stockItemId) continue;
+    const quantity = Math.max(0, item.quantity || 0);
+    if (quantity <= 0) continue;
+    const result = addStockMovement(
+      item.stockItemId,
+      'training',
+      quantity,
+      0,
+      baseReason,
+      date,
+      createdBy,
+      formation.name,
+      enrollment.fullName,
+      departmentId,
+    );
+    if (!result.success) {
+      return { success: false, error: result.error ?? 'Erreur lors de la sortie du stock du kit' };
+    }
+    if (result.movement) movements.push(result.movement);
+  }
+
+  for (const kitRef of pack.kits || []) {
+    const result = useKitForTraining(
+      kitRef.kitId,
+      kitRef.quantity,
+      date,
+      createdBy,
+      formation.name,
+      departmentId,
+    );
+    if (!result.success) {
+      return { success: false, error: result.error ?? 'Erreur lors de la sortie du kit complet' };
+    }
+    if (result.movements) movements.push(...result.movements);
+  }
+
+  enrollments[idx] = {
+    ...enrollment,
+    kitStatus: 'remis',
+    kitReadyAt: enrollment.kitReadyAt || date,
+    kitDeliveredAt: date,
+    kitHoldReason: undefined,
+  };
+  saveEnrollments(enrollments);
+  return { success: true, enrollment: enrollments[idx], movements };
 }
 
 export function deleteEnrollment(id: string): boolean {

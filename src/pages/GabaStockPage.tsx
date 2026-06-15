@@ -34,7 +34,7 @@ import {
   addStockMovement, getStockMovements, getStockStats, getStockEconomicsSummary, getCategoryLabel,
   exportStockCSV, getTrainings, addTraining, updateTraining, deleteTraining,
   getStockKits, addStockKit, updateStockKit, deleteStockKit, checkKitAvailability, sellKit, useKitForTraining,
-  getFormationsByDepartment, getEnrollmentsByFormation,
+  getFormationsByDepartment, getEnrollmentsByFormation, addEnrollment, deliverEnrollmentKit,
   generateSaleTicketNumber, updateStockMovementLink,
   type StockItem, type StockMovement, type MovementType, type Training, type TrainingType, type TraineeKit,
   type StockKit, type KitComponent, type TrainingKitUsage, type FormationCatalog,
@@ -977,12 +977,66 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
       return;
     }
 
+    const targetKit = (training.traineeKits || []).find((kit) => kit.traineeName === traineeName);
+    if (!targetKit) {
+      toast.error('Kit du formé introuvable');
+      return;
+    }
+
+    let resolvedEnrollmentId = targetKit.enrollmentId;
+
+    if (delivered && !resolvedEnrollmentId) {
+      const selectedPackRaw = targetKit.selectedPackId || '';
+      const selectedPackParts = selectedPackRaw.includes('::') ? selectedPackRaw.split('::') : [];
+      const selectedFormationId = selectedPackParts.length === 2 ? selectedPackParts[0] : targetKit.enrolledFormationId;
+      const selectedPackId = selectedPackParts.length === 2 ? selectedPackParts[1] : (selectedPackRaw || undefined);
+
+      const fallbackCategory = GABA_CATEGORIES.find((category) => category.id === (training.gabaCategory || 'autre')) ?? GABA_CATEGORIES[0];
+      const formationForEnrollment = selectedFormationId
+        ? gabaFormations.find((formation) => formation.id === selectedFormationId)
+        : gabaFormations.find((formation) => matchesGabaCategory(formation, fallbackCategory));
+
+      if (!formationForEnrollment) {
+        toast.error('Aucune formation GABA trouvée pour créer l\'inscription avant livraison');
+        return;
+      }
+
+      const existing = getEnrollmentsByFormation(formationForEnrollment.id).find((enrollment) =>
+        normalizeText(enrollment.fullName) === normalizeText(traineeName) && enrollment.status !== 'annulé',
+      );
+
+      if (existing) {
+        resolvedEnrollmentId = existing.id;
+      } else {
+        const created = addEnrollment({
+          formationId: formationForEnrollment.id,
+          packId: selectedPackId,
+          fullName: traineeName,
+          phone: learnerOptions.find((learner) => normalizeText(learner.fullName) === normalizeText(traineeName))?.phone,
+          status: 'inscrit',
+          kitStatus: 'reserve',
+          notes: `Inscription auto créée depuis session ${training.id} pour traçabilité kit`,
+          enrolledBy: user?.displayName ?? 'Inconnu',
+        });
+        resolvedEnrollmentId = created.id;
+      }
+    }
+
+    if (delivered && resolvedEnrollmentId) {
+      const deliveryResult = deliverEnrollmentKit(resolvedEnrollmentId, user?.displayName ?? 'Inconnu', training.date);
+      if (!deliveryResult.success) {
+        toast.error(deliveryResult.error || 'Impossible de livrer le kit');
+        return;
+      }
+    }
+
     const now = new Date().toISOString();
     const nextKits = (training.traineeKits || []).map((kit) => {
       if (kit.traineeName !== traineeName) return kit;
       if (delivered) {
         return {
           ...kit,
+          ...(resolvedEnrollmentId ? { enrollmentId: resolvedEnrollmentId } : {}),
           delivered: true,
           deliveredAt: now,
           deliveredBy: user?.displayName ?? 'Inconnu',
@@ -1002,7 +1056,15 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
       return;
     }
 
-    toast.success(delivered ? 'Kit marqué comme livré' : 'Kit marqué comme non livré');
+    if (!delivered && targetKit.enrollmentId) {
+      toast.success('Kit marqué non livré (la sortie de stock déjà faite n\'est pas annulée automatiquement)');
+    } else if (delivered && !targetKit.enrollmentId) {
+      toast.success('Kit marqué comme livré (sans lien inscription, aucun débit automatique du pack)');
+    } else if (delivered) {
+      toast.success('Kit marqué comme livré et stock du pack débité');
+    } else {
+      toast.success('Kit marqué comme non livré');
+    }
     refresh();
   };
 
@@ -1609,6 +1671,11 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
                                   <Badge variant={kit.delivered ? 'default' : 'secondary'}>
                                     {kit.delivered ? 'Kit livré' : 'Kit non livré'}
                                   </Badge>
+                                  {kit.enrollmentId && (
+                                    <Badge variant="outline" className="text-[10px] border-primary/40 text-primary">
+                                      Lien inscription
+                                    </Badge>
+                                  )}
                                   <Button
                                     type="button"
                                     size="sm"
@@ -1616,7 +1683,7 @@ export default function GabaStockPage({ departmentId = 'gaba' as DepartmentId }:
                                     className="h-7 text-[11px]"
                                     onClick={() => handleSetKitDelivered(tr.id, kit.traineeName, !kit.delivered)}
                                   >
-                                    {kit.delivered ? 'Marquer non livré' : 'Marquer livré'}
+                                    {kit.delivered ? 'Marquer non livré' : kit.enrollmentId ? 'Marquer livré' : 'Créer inscription & livrer'}
                                   </Button>
                                 </div>
                                 <div className="text-muted-foreground">

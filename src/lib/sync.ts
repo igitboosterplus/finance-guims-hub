@@ -79,6 +79,11 @@ function setPendingSyncOps(ops: PendingSyncOperation[]) {
   localStorage.setItem(PENDING_SYNC_KEY, JSON.stringify(ops));
 }
 
+function getPendingTables(): Set<TableName> {
+  const pending = getPendingSyncOps();
+  return new Set(pending.map(op => op.tableName));
+}
+
 function enqueuePendingUpsert(tableName: TableName, item: { id: string }) {
   const existing = getPendingSyncOps().filter(
     op => !(op.tableName === tableName && op.itemId === item.id)
@@ -414,17 +419,26 @@ export async function pullAllFromSupabase(): Promise<{ success: boolean; error?:
       console.warn(`[Sync] ${pendingFlush.pending} operation(s) locale(s) toujours en attente — pull continue quand meme`);
     }
 
+    const pendingTables = getPendingTables();
+    const guardedPull = (tableName: TableName, storageKey: string) => {
+      if (pendingTables.has(tableName)) {
+        console.warn(`[Sync] Pull ignore pour ${tableName}: operations locales en attente.`);
+        return Promise.resolve(true);
+      }
+      return pullTable(tableName, storageKey);
+    };
+
     cloudDeletedIds = await fetchCloudDeletedIds();
     const sharedPullResults = await Promise.all([
-      pullTable(TABLES.transactions, "finance-transactions"),
-      pullTable(TABLES.users, "finance-users"),
-      pullTable(TABLES.employees, "finance-employees"),
-      pullTable(TABLES.paymentMethods, "finance-payment-methods"),
-      pullTable(TABLES.auditLog, "finance-audit-log"),
-      pullTable(TABLES.superAudit, "finance-super-audit"),
-      pullTable(TABLES.formationsCatalog, "formations-catalog"),
-      pullTable(TABLES.paymentPlans, "payment-plans"),
-      pullTable(TABLES.enrollments, "formation-enrollments"),
+      guardedPull(TABLES.transactions, "finance-transactions"),
+      guardedPull(TABLES.users, "finance-users"),
+      guardedPull(TABLES.employees, "finance-employees"),
+      guardedPull(TABLES.paymentMethods, "finance-payment-methods"),
+      guardedPull(TABLES.auditLog, "finance-audit-log"),
+      guardedPull(TABLES.superAudit, "finance-super-audit"),
+      guardedPull(TABLES.formationsCatalog, "formations-catalog"),
+      guardedPull(TABLES.paymentPlans, "payment-plans"),
+      guardedPull(TABLES.enrollments, "formation-enrollments"),
     ]);
     const stockPullOk = await pullStockTables();
 
@@ -629,7 +643,12 @@ export function syncFullCollection(tableName: TableName, storageKey: string, dep
   const items = data ? JSON.parse(data) : [];
   if (!Array.isArray(items) || items.length === 0) return;
   const tagged = deptId ? items.map((item: any) => ({ ...item, _dept: deptId })) : items;
-  pushArrayToSupabase(tableName, tagged).catch(err =>
-    console.error(`[Sync] Erreur sync collection ${tableName}:`, err)
-  );
+  pushArrayToSupabase(tableName, tagged).catch(err => {
+    console.error(`[Sync] Erreur sync collection ${tableName}:`, err);
+    for (const item of tagged) {
+      if (item?.id) {
+        enqueuePendingUpsert(tableName, item);
+      }
+    }
+  });
 }
