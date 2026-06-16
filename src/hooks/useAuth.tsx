@@ -155,6 +155,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             .on('postgres_changes', { event: '*', schema: 'public', table: TABLES.employees }, scheduleSync)
             .on('postgres_changes', { event: '*', schema: 'public', table: TABLES.auditLog }, scheduleSync)
             .on('postgres_changes', { event: '*', schema: 'public', table: TABLES.superAudit }, scheduleSync)
+            .on('postgres_changes', { event: '*', schema: 'public', table: TABLES.paymentMethods }, scheduleSync)
+            .on('postgres_changes', { event: '*', schema: 'public', table: TABLES.employees }, scheduleSync)
+            .on('postgres_changes', { event: '*', schema: 'public', table: TABLES.trainings }, scheduleSync)
+            .on('postgres_changes', { event: '*', schema: 'public', table: TABLES.paymentPlans }, scheduleSync)
             .subscribe()
         : null;
       document.addEventListener('visibilitychange', onVisibilityChange);
