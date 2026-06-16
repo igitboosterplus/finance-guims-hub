@@ -141,24 +141,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       };
       const onOnline = () => scheduleSync();
       const supabase = getSupabase();
+      const watchedTables = [
+        TABLES.paymentPlans,
+        TABLES.formationsCatalog,
+        TABLES.enrollments,
+        TABLES.transactions,
+        TABLES.stockItems,
+        TABLES.stockMovements,
+        TABLES.stockKits,
+        TABLES.users,
+        TABLES.employees,
+        TABLES.auditLog,
+        TABLES.superAudit,
+        TABLES.paymentMethods,
+        TABLES.trainings,
+      ];
       const channel = supabase
         ? supabase
             .channel('guims-shared-sync')
-            .on('postgres_changes', { event: '*', schema: 'public', table: TABLES.paymentPlans }, scheduleSync)
-            .on('postgres_changes', { event: '*', schema: 'public', table: TABLES.formationsCatalog }, scheduleSync)
-            .on('postgres_changes', { event: '*', schema: 'public', table: TABLES.enrollments }, scheduleSync)
-            .on('postgres_changes', { event: '*', schema: 'public', table: TABLES.transactions }, scheduleSync)
-            .on('postgres_changes', { event: '*', schema: 'public', table: TABLES.stockItems }, scheduleSync)
-            .on('postgres_changes', { event: '*', schema: 'public', table: TABLES.stockMovements }, scheduleSync)
-            .on('postgres_changes', { event: '*', schema: 'public', table: TABLES.stockKits }, scheduleSync)
-            .on('postgres_changes', { event: '*', schema: 'public', table: TABLES.users }, scheduleSync)
-            .on('postgres_changes', { event: '*', schema: 'public', table: TABLES.employees }, scheduleSync)
-            .on('postgres_changes', { event: '*', schema: 'public', table: TABLES.auditLog }, scheduleSync)
-            .on('postgres_changes', { event: '*', schema: 'public', table: TABLES.superAudit }, scheduleSync)
-            .on('postgres_changes', { event: '*', schema: 'public', table: TABLES.paymentMethods }, scheduleSync)
-            .on('postgres_changes', { event: '*', schema: 'public', table: TABLES.employees }, scheduleSync)
-            .on('postgres_changes', { event: '*', schema: 'public', table: TABLES.trainings }, scheduleSync)
-            .on('postgres_changes', { event: '*', schema: 'public', table: TABLES.paymentPlans }, scheduleSync)
+            .on('postgres_changes', { event: '*', schema: 'public', table: watchedTables[0] }, scheduleSync)
+            .on('postgres_changes', { event: '*', schema: 'public', table: watchedTables[1] }, scheduleSync)
+            .on('postgres_changes', { event: '*', schema: 'public', table: watchedTables[2] }, scheduleSync)
+            .on('postgres_changes', { event: '*', schema: 'public', table: watchedTables[3] }, scheduleSync)
+            .on('postgres_changes', { event: '*', schema: 'public', table: watchedTables[4] }, scheduleSync)
+            .on('postgres_changes', { event: '*', schema: 'public', table: watchedTables[5] }, scheduleSync)
+            .on('postgres_changes', { event: '*', schema: 'public', table: watchedTables[6] }, scheduleSync)
+            .on('postgres_changes', { event: '*', schema: 'public', table: watchedTables[7] }, scheduleSync)
+            .on('postgres_changes', { event: '*', schema: 'public', table: watchedTables[8] }, scheduleSync)
+            .on('postgres_changes', { event: '*', schema: 'public', table: watchedTables[9] }, scheduleSync)
+            .on('postgres_changes', { event: '*', schema: 'public', table: watchedTables[10] }, scheduleSync)
+            .on('postgres_changes', { event: '*', schema: 'public', table: watchedTables[11] }, scheduleSync)
+            .on('postgres_changes', { event: '*', schema: 'public', table: watchedTables[12] }, scheduleSync)
             .subscribe()
         : null;
       document.addEventListener('visibilitychange', onVisibilityChange);

@@ -5,6 +5,7 @@ type Operation = "upsert" | "upsert_collection" | "delete_by_id";
 type AllowedTable =
   | "transactions"
   | "users"
+  | "payment_methods"
   | "audit_log"
   | "super_audit"
   | "deleted_ids";
@@ -12,6 +13,7 @@ type AllowedTable =
 const ALLOWED_TABLES = new Set<AllowedTable>([
   "transactions",
   "users",
+  "payment_methods",
   "audit_log",
   "super_audit",
   "deleted_ids",

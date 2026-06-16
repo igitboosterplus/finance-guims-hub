@@ -13,7 +13,7 @@
 //   4. Le localStorage n est JAMAIS une source pour reinjecter des donnees dans Supabase.
 
 type TableName = typeof TABLES[keyof typeof TABLES];
-type CriticalTableName = typeof TABLES.transactions | typeof TABLES.users | typeof TABLES.auditLog | typeof TABLES.superAudit;
+type CriticalTableName = typeof TABLES.transactions | typeof TABLES.users | typeof TABLES.auditLog | typeof TABLES.superAudit | typeof TABLES.paymentMethods;
 type PendingSyncOperation = {
   op: 'upsert' | 'delete';
   tableName: TableName;
@@ -29,6 +29,7 @@ const ALLOW_INSECURE_DIRECT_SYNC = String(import.meta.env.VITE_ALLOW_INSECURE_DI
 const CRITICAL_TABLES = new Set<CriticalTableName>([
   TABLES.transactions,
   TABLES.users,
+  TABLES.paymentMethods,
   TABLES.auditLog,
   TABLES.superAudit,
 ]);
@@ -77,6 +78,25 @@ function getPendingSyncOps(): PendingSyncOperation[] {
 
 function setPendingSyncOps(ops: PendingSyncOperation[]) {
   localStorage.setItem(PENDING_SYNC_KEY, JSON.stringify(ops));
+}
+
+function applyPendingOpsOverlay(tableName: TableName, pulledItems: any[]): any[] {
+  const pending = getPendingSyncOps().filter(op => op.tableName === tableName);
+  if (pending.length === 0) return pulledItems;
+
+  const merged = new Map<string, any>(pulledItems.map(item => [item.id, item]));
+
+  for (const op of pending) {
+    if (op.op === 'delete') {
+      merged.delete(op.itemId);
+      continue;
+    }
+    if (op.op === 'upsert' && op.item?.id) {
+      merged.set(op.item.id, op.item);
+    }
+  }
+
+  return Array.from(merged.values()).filter(item => item?.id && !isDeleted(tableName, item.id));
 }
 
 function enqueuePendingUpsert(tableName: TableName, item: { id: string }) {
@@ -299,7 +319,8 @@ async function pullTable(tableName: TableName, storageKey: string): Promise<bool
     const items = (data || [])
       .map((row: any) => row.data)
       .filter((item: any) => item?.id && !isDeleted(tableName, item.id));
-    localStorage.setItem(storageKey, JSON.stringify(items));
+    const mergedWithPending = applyPendingOpsOverlay(tableName, items);
+    localStorage.setItem(storageKey, JSON.stringify(mergedWithPending));
     return true;
   } catch (err) {
     const errorCode = (err as { code?: string } | null)?.code;
