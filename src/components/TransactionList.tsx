@@ -24,11 +24,12 @@ interface TransactionListProps {
   showDepartment?: boolean;
   disablePagination?: boolean;
   displayMode?: 'table' | 'cards';
+  compactMode?: boolean;
 }
 
 const PAGE_SIZE = 15;
 
-export function TransactionList({ transactions, onDelete, showDepartment = false, disablePagination = false, displayMode = 'table' }: TransactionListProps) {
+export function TransactionList({ transactions, onDelete, showDepartment = false, disablePagination = false, displayMode = 'table', compactMode = false }: TransactionListProps) {
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
@@ -371,7 +372,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
   return (
     <>
       {/* Toolbar */}
-      <div className="flex flex-col gap-3 mb-4">
+      <div className={`mb-4 flex flex-col ${compactMode ? 'gap-2' : 'gap-3'}`}>
         <div className="flex flex-col sm:flex-row gap-3">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -404,55 +405,58 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
           </SelectContent>
         </Select>
         </div>
-        {/* Date range filters */}
-        <div className="flex flex-col sm:flex-row gap-2">
-          <div className="flex-1">
-            <Label htmlFor="dateFrom" className="text-xs text-muted-foreground block mb-1">De</Label>
-            <Input
-              id="dateFrom"
-              type="date"
-              value={dateFrom}
-              onChange={(e) => { setDateFrom(e.target.value); setPage(1); }}
-              className="text-sm"
-            />
+        {!compactMode && (
+          <div className="flex flex-col sm:flex-row gap-2">
+            <div className="flex-1">
+              <Label htmlFor="dateFrom" className="text-xs text-muted-foreground block mb-1">De</Label>
+              <Input
+                id="dateFrom"
+                type="date"
+                value={dateFrom}
+                onChange={(e) => { setDateFrom(e.target.value); setPage(1); }}
+                className="text-sm"
+              />
+            </div>
+            <div className="flex-1">
+              <Label htmlFor="dateTo" className="text-xs text-muted-foreground block mb-1">À</Label>
+              <Input
+                id="dateTo"
+                type="date"
+                value={dateTo}
+                onChange={(e) => { setDateTo(e.target.value); setPage(1); }}
+                className="text-sm"
+              />
+            </div>
+            {(dateFrom || dateTo) && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => { setDateFrom(""); setDateTo(""); setPage(1); }}
+                className="self-end"
+              >
+                Réinitialiser
+              </Button>
+            )}
           </div>
-          <div className="flex-1">
-            <Label htmlFor="dateTo" className="text-xs text-muted-foreground block mb-1">À</Label>
-            <Input
-              id="dateTo"
-              type="date"
-              value={dateTo}
-              onChange={(e) => { setDateTo(e.target.value); setPage(1); }}
-              className="text-sm"
-            />
-          </div>
-          {(dateFrom || dateTo) && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => { setDateFrom(""); setDateTo(""); setPage(1); }}
-              className="self-end"
-            >
-              Réinitialiser
-            </Button>
-          )}
-        </div>
-      </div>
-
-      <div className="flex flex-col sm:flex-row gap-2 mb-4">
-        {hasPermission(getCurrentUser(), 'canExportData') && (
-          <>
-          <Button variant="outline" size="sm" onClick={handleExportPDF} className="gap-2">
-            <FileDown className="h-4 w-4" />
-            PDF
-          </Button>
-          <Button variant="outline" size="sm" onClick={handleExportCSV} className="gap-2">
-            <Download className="h-4 w-4" />
-            CSV
-          </Button>
-          </>
         )}
       </div>
+
+      {!compactMode && (
+        <div className="flex flex-col sm:flex-row gap-2 mb-4">
+          {hasPermission(getCurrentUser(), 'canExportData') && (
+            <>
+            <Button variant="outline" size="sm" onClick={handleExportPDF} className="gap-2">
+              <FileDown className="h-4 w-4" />
+              PDF
+            </Button>
+            <Button variant="outline" size="sm" onClick={handleExportCSV} className="gap-2">
+              <Download className="h-4 w-4" />
+              CSV
+            </Button>
+            </>
+          )}
+        </div>
+      )}
 
       {filtered.length === 0 ? (
         <div className="text-center py-12 text-muted-foreground">
@@ -482,10 +486,10 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
                   const dept = getDepartment(tx.departmentId);
                   return (
                     <TableRow key={tx.id} className="border-b hover:bg-muted/60 data-[state=selected]:bg-muted/70">
-                      <TableCell className="py-4 align-top text-sm">
+                      <TableCell className={`${compactMode ? 'py-2' : 'py-4'} align-top text-sm`}>
                         {new Date(tx.date).toLocaleString('fr-FR')}
                       </TableCell>
-                      <TableCell className="py-4 align-top">
+                      <TableCell className={`${compactMode ? 'py-2' : 'py-4'} align-top`}>
                         {tx.type === 'income' ? (
                           <Badge variant="outline" className="border-success/30 text-success bg-success/5">
                             <ArrowUpRight className="h-3 w-3 mr-1" />
@@ -498,32 +502,32 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
                           </Badge>
                         )}
                       </TableCell>
-                      <TableCell className="py-4 align-top">
+                      <TableCell className={`${compactMode ? 'py-2' : 'py-4'} align-top`}>
                         <Badge variant="secondary" className="text-xs">
                           {getPaymentMethodLabel(tx.paymentMethod || 'especes', tx.departmentId)}
                         </Badge>
                       </TableCell>
                       {showDepartment && (
-                        <TableCell className="py-4 align-top">
+                        <TableCell className={`${compactMode ? 'py-2' : 'py-4'} align-top`}>
                           <div className="flex items-center gap-2">
                             <div className={`h-2 w-2 rounded-full ${dept.bgClass}`} />
                             <span className="text-sm">{dept.name}</span>
                           </div>
                         </TableCell>
                       )}
-                      <TableCell className="py-4 align-top text-sm font-medium">{tx.personName || '—'}</TableCell>
-                      <TableCell className="py-4 align-top text-sm">{tx.category}</TableCell>
-                      <TableCell className="max-w-[260px] py-4 align-top text-sm text-foreground/80">
+                      <TableCell className={`${compactMode ? 'py-2' : 'py-4'} align-top text-sm font-medium`}>{tx.personName || '—'}</TableCell>
+                      <TableCell className={`${compactMode ? 'py-2' : 'py-4'} align-top text-sm`}>{tx.category}</TableCell>
+                      <TableCell className={`max-w-[260px] ${compactMode ? 'py-2' : 'py-4'} align-top text-sm text-foreground/80`}>
                         <div className="space-y-1">
                           <p className="truncate">{tx.description || '—'}</p>
-                          <p className="text-xs">Numéro: {tx.phoneNumber || '—'}</p>
+                          {!compactMode && <p className="text-xs">Numéro: {tx.phoneNumber || '—'}</p>}
                           {tx.saleTicketNumber && <p className="text-xs">Ticket vente: {tx.saleTicketNumber}</p>}
                         </div>
                       </TableCell>
-                      <TableCell className={`py-4 align-top text-right font-semibold ${tx.type === 'income' ? 'text-success' : 'text-destructive'}`}>
+                      <TableCell className={`${compactMode ? 'py-2' : 'py-4'} align-top text-right font-semibold ${tx.type === 'income' ? 'text-success' : 'text-destructive'}`}>
                         {tx.type === 'income' ? '+' : '-'}{formatCurrency(tx.amount)}
                       </TableCell>
-                      <TableCell className="py-4 align-top">
+                      <TableCell className={`${compactMode ? 'py-2' : 'py-4'} align-top`}>
                         <div className="flex gap-1">
                           {hasPermission(getCurrentUser(), 'canEditTransaction') && (
                             <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary" onClick={() => openEdit(tx)}>

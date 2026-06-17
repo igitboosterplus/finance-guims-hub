@@ -116,7 +116,7 @@ export function MetricDetailDialog({
 
           <div className="flex min-h-[48vh] flex-1 flex-col gap-3 overflow-auto pr-1">
             {transactions.length > 0 ? (
-              <TransactionList transactions={transactions} showDepartment={showDepartment} disablePagination displayMode="table" />
+              <TransactionList transactions={transactions} showDepartment={showDepartment} disablePagination displayMode="table" compactMode />
             ) : (
               <p className="py-8 text-sm text-muted-foreground">Aucun élément lié pour cet indicateur.</p>
             )}
