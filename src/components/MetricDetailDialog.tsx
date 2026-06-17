@@ -58,7 +58,7 @@ export function MetricDetailDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex h-[92vh] max-w-7xl flex-col overflow-hidden">
+      <DialogContent className="flex h-[96vh] max-h-[96vh] max-w-7xl flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
@@ -114,7 +114,7 @@ export function MetricDetailDialog({
             <Badge variant="secondary">{transactions.length} élément(s)</Badge>
           </div>
 
-          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto pr-1">
+          <div className="flex min-h-[48vh] flex-1 flex-col gap-3 overflow-auto pr-1">
             {transactions.length > 0 ? (
               <TransactionList transactions={transactions} showDepartment={showDepartment} disablePagination displayMode="table" />
             ) : (
