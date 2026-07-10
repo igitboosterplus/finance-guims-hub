@@ -8,7 +8,7 @@ import logoDigitbooster from "@/assets/logo-digitbooster.png";
 import {
   departments, getTransactions, getGlobalStats, getDepartmentStats,
   getTransactionsByDepartment, getDepartment, formatCurrency,
-  getPaymentMethodLabel, getStatsByPaymentMethod, type DepartmentId, type PaymentMethod, type Transaction,
+  getPaymentMethodLabel, getStatsByPaymentMethod, normalizePaymentMethod, type DepartmentId, type PaymentMethod, type Transaction,
   isFormationRevenueCategory,
 } from "./data";
 import { getTransactionTimestamp, isOnOrAfterCalendarDate } from "./transactionDates";
@@ -90,7 +90,7 @@ function filterTransactions(txs: Transaction[], opts?: ReportOptions): Transacti
     result = result.filter(t => t.type === opts.transactionType);
   }
   if (opts?.paymentMethod) {
-    result = result.filter(t => t.paymentMethod === opts.paymentMethod);
+    result = result.filter((t) => normalizePaymentMethod(t.paymentMethod || 'especes', t.departmentId) === opts.paymentMethod);
   }
   return result;
 }

@@ -32,6 +32,8 @@ export default function Dashboard() {
   const [stats, setStats] = useState(getGlobalStats());
   const [transactions, setTransactions] = useState(getTransactions());
   const [paymentStats, setPaymentStats] = useState(getStatsByPaymentMethod());
+  const [selectedGlobalCashMethod, setSelectedGlobalCashMethod] = useState<string>("");
+  const [selectedMonthlyCashMethod, setSelectedMonthlyCashMethod] = useState<string>("");
   const [controlAlerts, setControlAlerts] = useState(getTreasuryControlAlerts());
   const [reportOpen, setReportOpen] = useState(false);
   const [dashboardView, setDashboardView] = useState<'global' | 'monthly'>('global');
@@ -123,6 +125,47 @@ export default function Dashboard() {
     refresh();
     void autoGenerateEndOfMonthReport();
   }, []);
+
+  useEffect(() => {
+    if (paymentStats.length === 0) {
+      setSelectedGlobalCashMethod("");
+      return;
+    }
+    if (!selectedGlobalCashMethod || !paymentStats.some((item) => item.method === selectedGlobalCashMethod)) {
+      setSelectedGlobalCashMethod(paymentStats[0].method);
+    }
+  }, [paymentStats, selectedGlobalCashMethod]);
+
+  useEffect(() => {
+    if (monthlyPaymentStats.length === 0) {
+      setSelectedMonthlyCashMethod("");
+      return;
+    }
+    if (!selectedMonthlyCashMethod || !monthlyPaymentStats.some((item) => item.method === selectedMonthlyCashMethod)) {
+      setSelectedMonthlyCashMethod(monthlyPaymentStats[0].method);
+    }
+  }, [monthlyPaymentStats, selectedMonthlyCashMethod]);
+
+  const downloadCashTransactionsPdf = async (scope: 'global' | 'monthly') => {
+    const selectedMethod = scope === 'global' ? selectedGlobalCashMethod : selectedMonthlyCashMethod;
+    const selectedStats = (scope === 'global' ? paymentStats : monthlyPaymentStats).find((item) => item.method === selectedMethod);
+    if (!selectedStats) {
+      toast.error("Veuillez sélectionner une caisse.");
+      return;
+    }
+
+    if (scope === 'monthly') {
+      const y = now.getFullYear();
+      const m = now.getMonth();
+      const startDate = new Date(y, m, 1).toISOString().slice(0, 10);
+      const endDate = new Date(y, m + 1, 0).toISOString().slice(0, 10);
+      await downloadTransactionsReport({ startDate, endDate, paymentMethod: selectedStats.method });
+    } else {
+      await downloadTransactionsReport({ paymentMethod: selectedStats.method });
+    }
+
+    toast.success(`Rapport PDF de la caisse ${selectedStats.label} téléchargé.`);
+  };
 
   return (
     <div className="space-y-6 sm:space-y-8">
@@ -342,6 +385,25 @@ export default function Dashboard() {
                   );
                 })}
               </div>
+              {hasPermission(getCurrentUser(), 'canExportData') && (
+                <div className="mt-4 flex flex-col sm:flex-row gap-2 sm:items-center">
+                  <select
+                    className="h-9 rounded-md border bg-background px-3 text-sm"
+                    aria-label="Choisir une caisse pour export PDF"
+                    title="Choisir une caisse pour export PDF"
+                    value={selectedGlobalCashMethod}
+                    onChange={(e) => setSelectedGlobalCashMethod(e.target.value)}
+                  >
+                    {paymentStats.map((item) => (
+                      <option key={`global-cash-${item.method}`} value={item.method}>{item.label}</option>
+                    ))}
+                  </select>
+                  <Button size="sm" variant="outline" className="gap-2" onClick={() => void downloadCashTransactionsPdf('global')}>
+                    <FileDown className="h-4 w-4" />
+                    Télécharger transactions PDF (caisse)
+                  </Button>
+                </div>
+              )}
             </div>
           )}
 
@@ -451,6 +513,25 @@ export default function Dashboard() {
                   );
                 })}
               </div>
+              {hasPermission(getCurrentUser(), 'canExportData') && (
+                <div className="mt-4 flex flex-col sm:flex-row gap-2 sm:items-center">
+                  <select
+                    className="h-9 rounded-md border bg-background px-3 text-sm"
+                    aria-label="Choisir une caisse mensuelle pour export PDF"
+                    title="Choisir une caisse mensuelle pour export PDF"
+                    value={selectedMonthlyCashMethod}
+                    onChange={(e) => setSelectedMonthlyCashMethod(e.target.value)}
+                  >
+                    {monthlyPaymentStats.map((item) => (
+                      <option key={`monthly-cash-${item.method}`} value={item.method}>{item.label}</option>
+                    ))}
+                  </select>
+                  <Button size="sm" variant="outline" className="gap-2" onClick={() => void downloadCashTransactionsPdf('monthly')}>
+                    <FileDown className="h-4 w-4" />
+                    Télécharger transactions PDF (caisse mois)
+                  </Button>
+                </div>
+              )}
             </div>
           )}
 

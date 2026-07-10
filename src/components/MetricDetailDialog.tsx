@@ -39,6 +39,7 @@ export function MetricDetailDialog({
   note,
 }: MetricDetailDialogProps) {
   const [showDerivedStats, setShowDerivedStats] = useState(false);
+  const isCashTransactionsDetail = title.toLowerCase().includes("transactions caisse");
   const totalAmount = transactions.reduce((sum, tx) => sum + tx.amount, 0);
   const averageAmount = transactions.length > 0 ? totalAmount / transactions.length : 0;
   const minAmount = transactions.length > 0 ? Math.min(...transactions.map((tx) => tx.amount)) : 0;
@@ -116,7 +117,13 @@ export function MetricDetailDialog({
 
           <div className="flex min-h-[48vh] flex-1 flex-col gap-3 overflow-auto pr-1">
             {transactions.length > 0 ? (
-              <TransactionList transactions={transactions} showDepartment={showDepartment} disablePagination displayMode="table" compactMode />
+              <TransactionList
+                transactions={transactions}
+                showDepartment={showDepartment}
+                disablePagination
+                displayMode="table"
+                compactMode={!isCashTransactionsDetail}
+              />
             ) : (
               <p className="py-8 text-sm text-muted-foreground">Aucun élément lié pour cet indicateur.</p>
             )}
