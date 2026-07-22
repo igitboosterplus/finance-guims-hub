@@ -35,12 +35,15 @@ const STATUS_CONFIG = {
   archive: { label: "Archivé", icon: Archive, color: "bg-slate-100 text-slate-600 dark:bg-slate-800/40 dark:text-slate-400" },
 };
 
+const PLAN_STATUS_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 export default function PaymentTrackingPage() {
   const [searchParams] = useSearchParams();
   const focus = searchParams.get('focus') || '';
   const currentUser = getCurrentUser();
   const canCreate = hasPermission(currentUser, 'canCreateTransaction');
   const canEdit = hasPermission(currentUser, 'canEditTransaction');
+  const canManagePaymentPlanStatusAfter24h = hasPermission(currentUser, 'canManagePaymentPlanStatusAfter24h');
 
   const [plans, setPlans] = useState<PaymentPlan[]>([]);
   const [filterDept, setFilterDept] = useState<string>("all");
@@ -422,13 +425,28 @@ export default function PaymentTrackingPage() {
     refresh();
   };
 
+  const isPlanStatusLockedByAge = (plan: PaymentPlan) => {
+    if (canManagePaymentPlanStatusAfter24h) return false;
+    return (Date.now() - new Date(plan.createdAt).getTime()) > PLAN_STATUS_WINDOW_MS;
+  };
+
   const handleArchive = (planId: string) => {
+    const plan = plans.find((item) => item.id === planId);
+    if (plan && isPlanStatusLockedByAge(plan)) {
+      toast.error("Archivage refusé: plan de plus de 24h. Demandez l'autorisation à l'administrateur.");
+      return;
+    }
     updatePaymentPlanStatus(planId, 'archive');
     toast.success("Plan archivé — vous pourrez le restaurer à tout moment");
     refresh();
   };
 
   const handleReopen = (planId: string) => {
+    const plan = plans.find((item) => item.id === planId);
+    if (plan && isPlanStatusLockedByAge(plan)) {
+      toast.error("Réouverture refusée: plan de plus de 24h. Demandez l'autorisation à l'administrateur.");
+      return;
+    }
     updatePaymentPlanStatus(planId, 'en_cours');
     toast.success("Plan réouvert");
     refresh();
@@ -896,12 +914,26 @@ export default function PaymentTrackingPage() {
                                         </Button>
                                       )}
                                       {plan.status === 'en_cours' && (
-                                        <Button size="sm" variant="ghost" onClick={() => handleArchive(plan.id)} className="gap-1 text-xs text-muted-foreground">
+                                        <Button
+                                          size="sm"
+                                          variant="ghost"
+                                          onClick={() => handleArchive(plan.id)}
+                                          className="gap-1 text-xs text-muted-foreground"
+                                          disabled={isPlanStatusLockedByAge(plan)}
+                                          title={isPlanStatusLockedByAge(plan) ? "Action bloquée après 24h (sauf droit spécial)" : "Archiver"}
+                                        >
                                           <Archive className="h-3.5 w-3.5" /> Archiver
                                         </Button>
                                       )}
                                       {(plan.status === 'termine' || plan.status === 'annule' || plan.status === 'archive') && (
-                                        <Button size="sm" variant="outline" onClick={() => handleReopen(plan.id)} className="gap-1 text-xs">
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          onClick={() => handleReopen(plan.id)}
+                                          className="gap-1 text-xs"
+                                          disabled={isPlanStatusLockedByAge(plan)}
+                                          title={isPlanStatusLockedByAge(plan) ? "Action bloquée après 24h (sauf droit spécial)" : "Restaurer"}
+                                        >
                                           <ArchiveRestore className="h-3.5 w-3.5" /> Restaurer
                                         </Button>
                                       )}

@@ -14,14 +14,16 @@ import { getAllUsers, approveUser, rejectUser, deleteUser, createUser, resetUser
 import { canDeletePaymentMethod, createPaymentMethod, deletePaymentMethod, departments, getAllPaymentMethods, STOCK_ENABLED_DEPARTMENT_IDS, type DepartmentId, type PaymentMethodOption } from "@/lib/data";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
-import { UserPlus, Users, Check, X, Trash2, KeyRound, Shield, ShieldCheck, Settings2, Building2, Plus, PenLine, Download, Upload, Package, LineChart, Sparkles, CreditCard, GraduationCap, FileText, RotateCcw } from "lucide-react";
+import { UserPlus, Users, Check, X, Trash2, KeyRound, Shield, ShieldCheck, Settings2, Building2, Plus, PenLine, Download, Upload, Package, LineChart, Sparkles, CreditCard, GraduationCap, FileText, RotateCcw, Archive } from "lucide-react";
 
 type ActionPermissionKey = keyof Omit<UserPermissions, 'departments' | 'stockDepartments'>;
 
 const ACTION_PERMISSION_KEYS: ActionPermissionKey[] = [
   'canCreateTransaction',
   'canEditTransaction',
+  'canEditTransactionAfter24h',
   'canDeleteTransaction',
+  'canDeleteTransactionAfter24h',
   'canRecordStockExitWithoutPrice',
   'canAccessFormations',
   'canAccessPaymentTracking',
@@ -31,8 +33,10 @@ const ACTION_PERMISSION_KEYS: ActionPermissionKey[] = [
   'canManageUsers',
   'canViewAudit',
   'canRestoreAuditEntries',
+  'canRestoreAuditEntriesAfter24h',
   'canViewBalanceDelta',
   'canViewSuperAudit',
+  'canManagePaymentPlanStatusAfter24h',
 ];
 
 export default function UserManagement() {
@@ -677,6 +681,16 @@ export default function UserManagement() {
                 </div>
                 <div className="flex items-center justify-between p-2.5 rounded-lg border">
                   <div className="flex items-center gap-2">
+                    <PenLine className="h-4 w-4 text-amber-600" />
+                    <div>
+                      <p className="text-sm font-medium">Modifier après 24h</p>
+                      <p className="text-[11px] text-muted-foreground">Autoriser la modification d'une transaction créée depuis plus de 24 heures</p>
+                    </div>
+                  </div>
+                  <Switch checked={permsEdit.canEditTransactionAfter24h} onCheckedChange={v => setPermsEdit(p => ({ ...p, canEditTransactionAfter24h: v }))} />
+                </div>
+                <div className="flex items-center justify-between p-2.5 rounded-lg border">
+                  <div className="flex items-center gap-2">
                     <Trash2 className="h-4 w-4 text-destructive" />
                     <div>
                       <p className="text-sm font-medium">Supprimer des transactions</p>
@@ -684,6 +698,16 @@ export default function UserManagement() {
                     </div>
                   </div>
                   <Switch checked={permsEdit.canDeleteTransaction} onCheckedChange={v => setPermsEdit(p => ({ ...p, canDeleteTransaction: v }))} />
+                </div>
+                <div className="flex items-center justify-between p-2.5 rounded-lg border">
+                  <div className="flex items-center gap-2">
+                    <Trash2 className="h-4 w-4 text-amber-600" />
+                    <div>
+                      <p className="text-sm font-medium">Supprimer après 24h</p>
+                      <p className="text-[11px] text-muted-foreground">Autoriser la suppression d'une transaction créée depuis plus de 24 heures</p>
+                    </div>
+                  </div>
+                  <Switch checked={permsEdit.canDeleteTransactionAfter24h} onCheckedChange={v => setPermsEdit(p => ({ ...p, canDeleteTransactionAfter24h: v }))} />
                 </div>
                 <div className="flex items-center justify-between p-2.5 rounded-lg border">
                   <div className="flex items-center gap-2">
@@ -784,6 +808,26 @@ export default function UserManagement() {
                     </div>
                   </div>
                   <Switch checked={permsEdit.canRestoreAuditEntries} onCheckedChange={v => setPermsEdit(p => ({ ...p, canRestoreAuditEntries: v }))} />
+                </div>
+                <div className="flex items-center justify-between p-2.5 rounded-lg border">
+                  <div className="flex items-center gap-2">
+                    <RotateCcw className="h-4 w-4 text-amber-600" />
+                    <div>
+                      <p className="text-sm font-medium">Restaurer audit après 24h</p>
+                      <p className="text-[11px] text-muted-foreground">Autoriser la restauration d'entrées d'audit datant de plus de 24 heures</p>
+                    </div>
+                  </div>
+                  <Switch checked={permsEdit.canRestoreAuditEntriesAfter24h} onCheckedChange={v => setPermsEdit(p => ({ ...p, canRestoreAuditEntriesAfter24h: v }))} />
+                </div>
+                <div className="flex items-center justify-between p-2.5 rounded-lg border">
+                  <div className="flex items-center gap-2">
+                    <Archive className="h-4 w-4 text-amber-600" />
+                    <div>
+                      <p className="text-sm font-medium">Archiver/restaurer plans après 24h</p>
+                      <p className="text-[11px] text-muted-foreground">Autoriser l'archivage et la réouverture de plans de paiement vieux de plus de 24 heures</p>
+                    </div>
+                  </div>
+                  <Switch checked={permsEdit.canManagePaymentPlanStatusAfter24h} onCheckedChange={v => setPermsEdit(p => ({ ...p, canManagePaymentPlanStatusAfter24h: v }))} />
                 </div>
                 <div className="flex items-center justify-between p-2.5 rounded-lg border">
                   <div className="flex items-center gap-2">

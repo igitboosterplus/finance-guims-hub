@@ -28,8 +28,15 @@ interface TransactionListProps {
 }
 
 const PAGE_SIZE = 15;
+const EDIT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 export function TransactionList({ transactions, onDelete, showDepartment = false, disablePagination = false, displayMode = 'table', compactMode = false }: TransactionListProps) {
+  const currentUser = getCurrentUser();
+  const canEditTransactions = hasPermission(currentUser, 'canEditTransaction');
+  const canDeleteTransactions = hasPermission(currentUser, 'canDeleteTransaction');
+  const canEditAfter24h = hasPermission(currentUser, 'canEditTransactionAfter24h');
+  const canDeleteAfter24h = hasPermission(currentUser, 'canDeleteTransactionAfter24h');
+
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
@@ -52,6 +59,20 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
   const [editPaymentMethod, setEditPaymentMethod] = useState<PaymentMethod>('especes');
   const [editJustification, setEditJustification] = useState("");
 
+  const getSafeDepartment = (departmentId: Transaction['departmentId']) => {
+    try {
+      const dept = getDepartment(departmentId);
+      if (dept && typeof dept.name === 'string') return dept;
+    } catch {
+      // Legacy transactions can reference a removed/unknown department.
+    }
+    return {
+      id: departmentId,
+      name: String(departmentId || 'Département inconnu'),
+      bgClass: 'bg-muted',
+    } as const;
+  };
+
   const filtered = [...transactions]
     .filter((tx) => {
       const q = search.toLowerCase();
@@ -61,7 +82,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
         (tx.phoneNumber || '').toLowerCase().includes(q) ||
         tx.description.toLowerCase().includes(q) ||
         (tx.saleTicketNumber || '').toLowerCase().includes(q) ||
-        getDepartment(tx.departmentId).name.toLowerCase().includes(q) ||
+        getSafeDepartment(tx.departmentId).name.toLowerCase().includes(q) ||
         getPaymentMethodLabel(tx.paymentMethod || 'especes', tx.departmentId).toLowerCase().includes(q) ||
         tx.amount.toString().includes(q);
       const matchType = typeFilter === "all" || tx.type === typeFilter;
@@ -87,6 +108,15 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
     : filtered.slice((currentPage - 1) * activePageSize, currentPage * activePageSize);
 
   const txToDelete = deleteId ? transactions.find(t => t.id === deleteId) : null;
+  const isEditLockedByAge = (tx: Transaction) => {
+    if (canEditAfter24h) return false;
+    return (Date.now() - getTransactionTimestamp(tx.date)) > EDIT_WINDOW_MS;
+  };
+  const isDeleteLockedByAge = (tx: Transaction) => {
+    if (canDeleteAfter24h) return false;
+    return (Date.now() - getTransactionTimestamp(tx.date)) > EDIT_WINDOW_MS;
+  };
+
   const isInscriptionLinkedTransaction = (tx: Transaction) => {
     const category = tx.category || "";
     const description = (tx.description || "").toLowerCase();
@@ -94,8 +124,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
   };
 
   const finalizeDelete = (targetId: string) => {
-    const currentUser = getCurrentUser();
-    if (!hasPermission(currentUser, 'canDeleteTransaction')) {
+    if (!canDeleteTransactions) {
       toast.error("Vous n'avez pas le droit de supprimer des transactions");
       setDeleteId(null);
       setDoubleConfirmOpen(false);
@@ -103,6 +132,13 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
       return;
     }
     const tx = transactions.find(t => t.id === targetId);
+    if (tx && isDeleteLockedByAge(tx)) {
+      toast.error("Suppression refusée: transaction de plus de 24h. Demandez l'autorisation à l'administrateur.");
+      setDeleteId(null);
+      setDoubleConfirmOpen(false);
+      setDoubleConfirmText("");
+      return;
+    }
     deleteTransaction(targetId);
     // Remove corresponding installment from payment plan (or reset inscription)
     if (tx?.personName) {
@@ -166,6 +202,10 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
   };
 
   const openEdit = (tx: Transaction) => {
+    if (isEditLockedByAge(tx)) {
+      toast.error("Modification refusée: transaction de plus de 24h. Demandez l'autorisation à l'administrateur.");
+      return;
+    }
     setEditTx(tx);
     setEditCategory(tx.category);
     setEditPersonName(tx.personName || '');
@@ -180,10 +220,13 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
 
   const handleEdit = () => {
     if (!editTx) return;
-    const currentUser = getCurrentUser();
-    if (!hasPermission(currentUser, 'canEditTransaction')) {
+    if (!canEditTransactions) {
       toast.error("Vous n'avez pas le droit de modifier les transactions");
       setEditTx(null);
+      return;
+    }
+    if (isEditLockedByAge(editTx)) {
+      toast.error("Modification refusée: cette transaction date de plus de 24h.");
       return;
     }
     const parsedAmount = parseInt(editAmount, 10);
@@ -443,7 +486,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
 
       {!compactMode && (
         <div className="flex flex-col sm:flex-row gap-2 mb-4">
-          {hasPermission(getCurrentUser(), 'canExportData') && (
+          {hasPermission(currentUser, 'canExportData') && (
             <>
             <Button variant="outline" size="sm" onClick={handleExportPDF} className="gap-2">
               <FileDown className="h-4 w-4" />
@@ -466,7 +509,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
       ) : (
         <>
           {displayMode === 'table' ? (
-          <div className="rounded-xl border bg-background/95 shadow-sm overflow-x-auto">
+          <div className={`rounded-xl border bg-background/95 shadow-sm overflow-x-auto ${disablePagination ? 'min-h-[320px] max-h-[52vh] overflow-y-auto' : ''}`}>
             <Table className="min-w-[700px] text-sm">
               <TableHeader>
                 <TableRow>
@@ -483,7 +526,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
               </TableHeader>
               <TableBody>
                 {paginated.map((tx) => {
-                  const dept = getDepartment(tx.departmentId);
+                  const dept = getSafeDepartment(tx.departmentId);
                   return (
                     <TableRow key={tx.id} className="border-b hover:bg-muted/60 data-[state=selected]:bg-muted/70">
                       <TableCell className={`${compactMode ? 'py-2' : 'py-4'} align-top text-sm`}>
@@ -529,13 +572,27 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
                       </TableCell>
                       <TableCell className={`${compactMode ? 'py-2' : 'py-4'} align-top`}>
                         <div className="flex gap-1">
-                          {hasPermission(getCurrentUser(), 'canEditTransaction') && (
-                            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary" onClick={() => openEdit(tx)}>
+                          {canEditTransactions && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-muted-foreground hover:text-primary disabled:opacity-50"
+                              onClick={() => openEdit(tx)}
+                              disabled={isEditLockedByAge(tx)}
+                              title={isEditLockedByAge(tx) ? "Modification bloquée après 24h (sauf droit spécial)" : "Modifier"}
+                            >
                               <Pencil className="h-4 w-4" />
                             </Button>
                           )}
-                          {hasPermission(getCurrentUser(), 'canDeleteTransaction') && (
-                            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive" onClick={() => setDeleteId(tx.id)}>
+                          {canDeleteTransactions && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-muted-foreground hover:text-destructive disabled:opacity-50"
+                              onClick={() => setDeleteId(tx.id)}
+                              disabled={isDeleteLockedByAge(tx)}
+                              title={isDeleteLockedByAge(tx) ? "Suppression bloquée après 24h (sauf droit spécial)" : "Supprimer"}
+                            >
                               <Trash2 className="h-4 w-4" />
                             </Button>
                           )}
@@ -550,7 +607,7 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
           ) : (
             <div className="space-y-3">
               {paginated.map((tx) => {
-                const dept = getDepartment(tx.departmentId);
+                const dept = getSafeDepartment(tx.departmentId);
                 return (
                   <div key={tx.id} className="rounded-xl border bg-background p-4 shadow-sm">
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -574,13 +631,27 @@ export function TransactionList({ transactions, onDelete, showDepartment = false
                       {tx.saleTicketNumber && <p><span className="font-medium text-muted-foreground">Ticket:</span> {tx.saleTicketNumber}</p>}
                     </div>
                     <div className="mt-3 flex gap-1">
-                      {hasPermission(getCurrentUser(), 'canEditTransaction') && (
-                        <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary" onClick={() => openEdit(tx)}>
+                      {canEditTransactions && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-muted-foreground hover:text-primary disabled:opacity-50"
+                          onClick={() => openEdit(tx)}
+                          disabled={isEditLockedByAge(tx)}
+                          title={isEditLockedByAge(tx) ? "Modification bloquée après 24h (sauf droit spécial)" : "Modifier"}
+                        >
                           <Pencil className="h-4 w-4" />
                         </Button>
                       )}
-                      {hasPermission(getCurrentUser(), 'canDeleteTransaction') && (
-                        <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive" onClick={() => setDeleteId(tx.id)}>
+                      {canDeleteTransactions && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-muted-foreground hover:text-destructive disabled:opacity-50"
+                          onClick={() => setDeleteId(tx.id)}
+                          disabled={isDeleteLockedByAge(tx)}
+                          title={isDeleteLockedByAge(tx) ? "Suppression bloquée après 24h (sauf droit spécial)" : "Supprimer"}
+                        >
                           <Trash2 className="h-4 w-4" />
                         </Button>
                       )}

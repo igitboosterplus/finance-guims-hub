@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { getGlobalStats, getTransactions, formatCurrency } from "@/lib/data";
-import { buildHumanDiff, getAuditLog, getCurrentSession, type AuditLogEntry } from "@/lib/auth";
+import { getCurrentSession } from "@/lib/auth";
 import { getTransactionTimestamp } from "@/lib/transactionDates";
 import { ArrowDownRight, ArrowUpRight, LineChart } from "lucide-react";
 
@@ -31,80 +31,6 @@ const parseLocalDate = (value: string, endOfDay = false): Date | null => {
   return Number.isNaN(date.getTime()) ? null : date;
 };
 
-const actionLabels: Record<string, string> = {
-  create: "Création",
-  update: "Modification",
-  delete: "Suppression",
-};
-
-function safeParseAuditPayload(value?: string): Record<string, unknown> {
-  if (!value) return {};
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : {};
-  } catch {
-    return {};
-  }
-}
-
-function getTransactionImpact(payload: Record<string, unknown>): number | null {
-  const amount = Number(payload.amount);
-  if (!Number.isFinite(amount) || amount <= 0) return null;
-  const type = payload.type === "expense" ? "expense" : "income";
-  return type === "income" ? amount : -amount;
-}
-
-function formatAuditAmount(value?: unknown): string {
-  const amount = Number(value);
-  return Number.isFinite(amount) ? formatCurrency(amount) : "—";
-}
-
-function getAuditUpdateImpact(entry: AuditLogEntry): number | null {
-  if (entry.action !== "update") return null;
-  const previousRaw = safeParseAuditPayload(entry.previousData);
-  const newRaw = safeParseAuditPayload(entry.newData);
-  const before = getTransactionImpact(previousRaw);
-  const after = getTransactionImpact(newRaw);
-  if (before === null || after === null) return null;
-  return after - before;
-}
-
-function getAuditEntryLabel(entry: AuditLogEntry): string {
-  const previousRaw = safeParseAuditPayload(entry.previousData);
-  const newRaw = safeParseAuditPayload(entry.newData);
-  const raw = Object.keys(newRaw).length > 0 ? newRaw : previousRaw;
-  const category = typeof raw.category === "string" && raw.category.trim() ? raw.category.trim() : "Transaction";
-  const personName = typeof raw.personName === "string" && raw.personName.trim() ? raw.personName.trim() : "Sans nom";
-  return `${category} — ${personName}`;
-}
-
-function getAuditUpdateSummary(entry: AuditLogEntry): string {
-  const previousRaw = safeParseAuditPayload(entry.previousData);
-  const newRaw = safeParseAuditPayload(entry.newData);
-  const previousAmount = formatAuditAmount(previousRaw.amount);
-  const newAmount = formatAuditAmount(newRaw.amount);
-  const previousCategory = typeof previousRaw.category === "string" && previousRaw.category.trim() ? previousRaw.category.trim() : "Catégorie inconnue";
-  const newCategory = typeof newRaw.category === "string" && newRaw.category.trim() ? newRaw.category.trim() : previousCategory;
-  const previousPerson = typeof previousRaw.personName === "string" && previousRaw.personName.trim() ? previousRaw.personName.trim() : "Sans nom";
-  const newPerson = typeof newRaw.personName === "string" && newRaw.personName.trim() ? newRaw.personName.trim() : previousPerson;
-  const readableDiff = buildHumanDiff(entry.previousData || "{}", entry.newData || "{}");
-
-  return `${previousPerson} / ${previousCategory} / ${previousAmount} -> ${newPerson} / ${newCategory} / ${newAmount}${readableDiff ? ` | ${readableDiff}` : ""}`;
-}
-
-type ModificationImpact = {
-  entry: AuditLogEntry;
-  impact: number;
-};
-
-type ModificationGroup = {
-  entityId: string;
-  label: string;
-  netImpact: number;
-  latestTimestamp: number;
-  entries: ModificationImpact[];
-};
-
 export default function BalanceDeltaPage() {
   const session = getCurrentSession();
   const sessionStartMs = session ? getTransactionTimestamp(session.loginAt) : Date.now();
@@ -115,7 +41,6 @@ export default function BalanceDeltaPage() {
   const [rangeEnd, setRangeEnd] = useState<string>(toDateInputValue(now));
 
   const allTransactions = useMemo(() => getTransactions(), []);
-  const allAuditEntries = useMemo(() => getAuditLog(), []);
 
   const { startMs, endMs, subtitle } = useMemo(() => {
     const nowMs = Date.now();
@@ -165,43 +90,7 @@ export default function BalanceDeltaPage() {
       }));
   }, [allTransactions, startMs, endMs]);
 
-  const auditCorrectionGroups = useMemo(() => {
-    const impacts = allAuditEntries
-      .filter((entry) => entry.entityType === "transaction")
-      .map((entry) => ({
-        entry,
-        impact: getAuditUpdateImpact(entry),
-      }))
-      .filter((item): item is ModificationImpact => item.impact !== null && item.impact !== 0)
-      .filter(({ entry }) => getTransactionTimestamp(entry.timestamp) >= startMs && getTransactionTimestamp(entry.timestamp) <= endMs)
-      .sort((a, b) => getTransactionTimestamp(b.entry.timestamp) - getTransactionTimestamp(a.entry.timestamp));
-
-    const grouped = new Map<string, ModificationGroup>();
-    for (const item of impacts) {
-      const key = item.entry.entityId || item.entry.id;
-      const existing = grouped.get(key);
-      const timestamp = getTransactionTimestamp(item.entry.timestamp);
-      if (existing) {
-        existing.entries.push(item);
-        existing.netImpact += item.impact;
-        existing.latestTimestamp = Math.max(existing.latestTimestamp, timestamp);
-      } else {
-        grouped.set(key, {
-          entityId: key,
-          label: getAuditEntryLabel(item.entry),
-          netImpact: item.impact,
-          latestTimestamp: timestamp,
-          entries: [item],
-        });
-      }
-    }
-
-    return [...grouped.values()].sort((a, b) => b.latestTimestamp - a.latestTimestamp);
-  }, [allAuditEntries, startMs, endMs]);
-
   const delta = operations.reduce((sum, op) => sum + op.impact, 0);
-  const auditDelta = auditCorrectionGroups.reduce((sum, item) => sum + item.netImpact, 0);
-  const unexplainedDelta = delta - auditDelta;
   const currentBalance = getGlobalStats().balance;
   const impactFromStartToNow = allTransactions
     .filter((tx) => getTransactionTimestamp(tx.createdAt || tx.date) >= startMs)
@@ -279,22 +168,6 @@ export default function BalanceDeltaPage() {
         </Card>
         <Card className="border-0 shadow-sm">
           <CardContent className="p-4">
-            <p className="text-xs text-muted-foreground">Impact des modifications</p>
-            <p className={`text-lg font-bold ${auditDelta >= 0 ? "text-success" : "text-destructive"}`}>
-              {auditDelta >= 0 ? "+" : ""}{formatCurrency(auditDelta)}
-            </p>
-          </CardContent>
-        </Card>
-        <Card className="border-0 shadow-sm">
-          <CardContent className="p-4">
-            <p className="text-xs text-muted-foreground">Ecart restant a expliquer</p>
-            <p className={`text-lg font-bold ${unexplainedDelta === 0 ? "text-foreground" : unexplainedDelta > 0 ? "text-success" : "text-destructive"}`}>
-              {unexplainedDelta >= 0 ? "+" : ""}{formatCurrency(unexplainedDelta)}
-            </p>
-          </CardContent>
-        </Card>
-        <Card className="border-0 shadow-sm">
-          <CardContent className="p-4">
             <p className="text-xs text-muted-foreground">Solde fin periode</p>
             <p className="text-lg font-bold">{formatCurrency(periodEndBalance)}</p>
           </CardContent>
@@ -325,61 +198,6 @@ export default function BalanceDeltaPage() {
                       {op.impact >= 0 ? <ArrowUpRight className="h-4 w-4" /> : <ArrowDownRight className="h-4 w-4" />}
                       {op.impact >= 0 ? "+" : ""}{formatCurrency(op.impact)}
                     </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      <Card className="border-0 shadow-md">
-        <CardHeader>
-          <CardTitle className="text-base">Corrections d'audit ayant impacte les chiffres</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {auditCorrectionGroups.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Aucune correction d'audit avec impact financier sur la plage choisie.</p>
-          ) : (
-            <div className="space-y-3">
-              {auditCorrectionGroups.map((group) => (
-                <div key={group.entityId} className="rounded-lg border p-3 space-y-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium truncate">{group.label}</p>
-                      <p className="text-xs text-muted-foreground">{group.entries.length} correction{group.entries.length > 1 ? "s" : ""} sur cette transaction</p>
-                    </div>
-                    <div className={`text-sm font-semibold shrink-0 ${group.netImpact >= 0 ? "text-success" : "text-destructive"}`}>
-                      <span className="inline-flex items-center gap-1">
-                        {group.netImpact >= 0 ? <ArrowUpRight className="h-4 w-4" /> : <ArrowDownRight className="h-4 w-4" />}
-                        {group.netImpact >= 0 ? "+" : ""}{formatCurrency(group.netImpact)}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    {group.entries.map(({ entry, impact }) => {
-                      const normalizedAction = String(entry.action ?? "").toLowerCase();
-                      const readableDetails = normalizedAction === "update" && entry.previousData && entry.newData
-                        ? getAuditUpdateSummary(entry)
-                        : entry.details;
-
-                      return (
-                        <div key={entry.id} className="rounded-md bg-muted/40 p-2 flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <Badge variant="outline" className="text-[10px]">{actionLabels[normalizedAction] || entry.action}</Badge>
-                              <span className="text-xs text-muted-foreground">{new Date(entry.timestamp).toLocaleString("fr-FR")}</span>
-                            </div>
-                            <p className="text-xs text-muted-foreground">{entry.username}</p>
-                            <p className="text-xs text-muted-foreground whitespace-pre-wrap break-words">{readableDetails || entry.details}</p>
-                          </div>
-                          <div className={`text-xs font-semibold shrink-0 ${impact >= 0 ? "text-success" : "text-destructive"}`}>
-                            {impact >= 0 ? "+" : ""}{formatCurrency(impact)}
-                          </div>
-                        </div>
-                      );
-                    })}
                   </div>
                 </div>
               ))}

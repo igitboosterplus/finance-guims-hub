@@ -9,7 +9,9 @@ export interface UserPermissions {
   stockDepartments: string[];  // IDs des départements dont le stock est accessible
   canCreateTransaction: boolean;
   canEditTransaction: boolean;
+  canEditTransactionAfter24h: boolean;
   canDeleteTransaction: boolean;
+  canDeleteTransactionAfter24h: boolean;
   canRecordStockExitWithoutPrice: boolean;
   canAccessFormations: boolean;
   canAccessPaymentTracking: boolean;
@@ -19,8 +21,10 @@ export interface UserPermissions {
   canManageUsers: boolean;
   canViewAudit: boolean;
   canRestoreAuditEntries: boolean;
+  canRestoreAuditEntriesAfter24h: boolean;
   canViewBalanceDelta: boolean;
   canViewSuperAudit: boolean;
+  canManagePaymentPlanStatusAfter24h: boolean;
 }
 
 export const DEFAULT_PERMISSIONS: UserPermissions = {
@@ -28,7 +32,9 @@ export const DEFAULT_PERMISSIONS: UserPermissions = {
   stockDepartments: [],
   canCreateTransaction: false,
   canEditTransaction: false,
+  canEditTransactionAfter24h: false,
   canDeleteTransaction: false,
+  canDeleteTransactionAfter24h: false,
   canRecordStockExitWithoutPrice: false,
   canAccessFormations: false,
   canAccessPaymentTracking: false,
@@ -38,8 +44,10 @@ export const DEFAULT_PERMISSIONS: UserPermissions = {
   canManageUsers: false,
   canViewAudit: false,
   canRestoreAuditEntries: false,
+  canRestoreAuditEntriesAfter24h: false,
   canViewBalanceDelta: false,
   canViewSuperAudit: false,
+  canManagePaymentPlanStatusAfter24h: false,
 };
 
 export const FULL_PERMISSIONS: UserPermissions = {
@@ -47,7 +55,9 @@ export const FULL_PERMISSIONS: UserPermissions = {
   stockDepartments: STOCK_ENABLED_DEPARTMENT_IDS,
   canCreateTransaction: true,
   canEditTransaction: true,
+  canEditTransactionAfter24h: true,
   canDeleteTransaction: true,
+  canDeleteTransactionAfter24h: true,
   canRecordStockExitWithoutPrice: true,
   canAccessFormations: true,
   canAccessPaymentTracking: true,
@@ -57,8 +67,10 @@ export const FULL_PERMISSIONS: UserPermissions = {
   canManageUsers: true,
   canViewAudit: true,
   canRestoreAuditEntries: true,
+  canRestoreAuditEntriesAfter24h: true,
   canViewBalanceDelta: true,
   canViewSuperAudit: true,
+  canManagePaymentPlanStatusAfter24h: true,
 };
 
 export interface User {
